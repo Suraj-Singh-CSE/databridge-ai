@@ -10,23 +10,70 @@ const TEST_DEFAULTS = {
   CORS_ORIGIN: 'http://localhost:5173',
 } as const;
 
+/** Secrets that must never keep a placeholder value in production. */
+const SECRET_KEYS = ['JWT_ACCESS_SECRET', 'JWT_REFRESH_SECRET', 'AI_SERVICE_TOKEN'] as const;
+const PLACEHOLDER_MARKER = 'change-me';
+
 const required = () => z.string({ error: 'is required' });
 const secret = required().min(32, 'must be at least 32 characters');
 
-const envSchema = z.object({
-  NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
-  PORT: z.coerce.number().int().min(1).max(65535).default(4000),
-  MONGODB_URI: required().regex(
-    /^mongodb(\+srv)?:\/\//,
-    'must be a mongodb:// or mongodb+srv:// URI',
-  ),
-  REDIS_URL: required().regex(/^rediss?:\/\//, 'must be a redis:// or rediss:// URL'),
-  JWT_ACCESS_SECRET: secret,
-  JWT_REFRESH_SECRET: secret,
-  AI_SERVICE_URL: z.url({ error: 'is required and must be a valid URL' }),
-  AI_SERVICE_TOKEN: required().min(16, 'must be at least 16 characters'),
-  CORS_ORIGIN: z.url({ error: 'is required and must be a valid URL' }),
-});
+/**
+ * Express "trust proxy" setting. "false" (default) trusts no proxy, so req.ip is the socket
+ * address. "true" trusts every hop (unsafe when the api port is reachable directly), a number
+ * trusts that many hops, anything else is passed through (e.g. "loopback" or a subnet list).
+ */
+const trustProxy = z
+  .string()
+  .trim()
+  .default('false')
+  .transform((value): boolean | number | string => {
+    if (value === 'false' || value === '') return false;
+    if (value === 'true') return true;
+    if (/^\d+$/.test(value)) return Number(value);
+    return value;
+  });
+
+const envSchema = z
+  .object({
+    NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
+    PORT: z.coerce.number().int().min(1).max(65535).default(4000),
+    MONGODB_URI: required().regex(
+      /^mongodb(\+srv)?:\/\//,
+      'must be a mongodb:// or mongodb+srv:// URI',
+    ),
+    REDIS_URL: required().regex(/^rediss?:\/\//, 'must be a redis:// or rediss:// URL'),
+    JWT_ACCESS_SECRET: secret,
+    JWT_REFRESH_SECRET: secret,
+    AI_SERVICE_URL: z.url({ error: 'is required and must be a valid URL' }),
+    AI_SERVICE_TOKEN: required().min(16, 'must be at least 16 characters'),
+    CORS_ORIGIN: z.url({ error: 'is required and must be a valid URL' }),
+    TRUST_PROXY: trustProxy,
+    AUTH_RATE_LIMIT_MAX: z.coerce.number().int().min(1).default(20),
+    AUTH_RATE_LIMIT_WINDOW_MS: z.coerce
+      .number()
+      .int()
+      .min(1000)
+      .default(15 * 60 * 1000),
+  })
+  .superRefine((env, ctx) => {
+    if (env.NODE_ENV !== 'production') return;
+    for (const key of SECRET_KEYS) {
+      if (env[key].toLowerCase().includes(PLACEHOLDER_MARKER)) {
+        ctx.addIssue({
+          code: 'custom',
+          path: [key],
+          message: `still contains the "${PLACEHOLDER_MARKER}" placeholder; set a real secret`,
+        });
+      }
+    }
+    if (env.JWT_ACCESS_SECRET === env.JWT_REFRESH_SECRET) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['JWT_REFRESH_SECRET'],
+        message: 'must be different from JWT_ACCESS_SECRET',
+      });
+    }
+  });
 
 export type Config = z.infer<typeof envSchema>;
 
@@ -38,6 +85,7 @@ export class ConfigError extends Error {
  * Validates environment variables once at startup. Throws a ConfigError naming every
  * invalid or missing variable (never their values) so the process fails fast.
  * When NODE_ENV=test, safe non-secret defaults fill anything not set.
+ * When NODE_ENV=production, placeholder secrets and a shared JWT secret are rejected.
  */
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const source = env.NODE_ENV === 'test' ? { ...TEST_DEFAULTS, ...env } : env;

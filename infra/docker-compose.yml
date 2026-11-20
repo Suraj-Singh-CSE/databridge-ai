@@ -71,6 +71,8 @@ services:
       AI_SERVICE_TOKEN: ${AI_SERVICE_TOKEN:?set AI_SERVICE_TOKEN in your env file}
       # The browser origin is the nginx web container, not the Vite dev server.
       CORS_ORIGIN: ${WEB_ORIGIN:-http://localhost:8080}
+      # Number of proxy hops to trust for the client IP (rate limiting). See .env.example.
+      TRUST_PROXY: ${TRUST_PROXY:-false}
     ports:
       - '4000:4000'
     depends_on:
