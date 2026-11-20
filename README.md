@@ -4,8 +4,11 @@ AI copilot that turns messy customer data from several systems into one clean, t
 profile → map columns → resolve duplicates → generate and test SQL → check quality.
 AI proposes, a human approves.
 
-**Status:** M1 in progress (monorepo scaffold, Docker setup and CI, API auth/projects/audit, web app
-shell with sign-in and projects).
+**Status:** M1 (foundation) complete: monorepo, Docker + CI, API auth/roles/projects/audit,
+AI service with LLM gateway and PII masking, web app shell with sign-in and projects. Next: M2
+(upload and profiling).
+
+Approved designs (Figma, shadcn/ui kit): [all screens](docs/design/all-screens.png).
 
 ## Repository layout
 
