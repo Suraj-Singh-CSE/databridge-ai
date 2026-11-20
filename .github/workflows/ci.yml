@@ -87,6 +87,8 @@ jobs:
             echo "AI_SERVICE_TOKEN=$(secret)"
             echo "LLM_PROVIDER=mock"
             echo "LOG_LEVEL=INFO"
+            # The e2e suite signs in and out several times from one IP (the nginx proxy).
+            echo "AUTH_RATE_LIMIT_MAX=200"
           } > .env.ci
 
       - name: Validate compose file
@@ -144,6 +146,40 @@ jobs:
             echo "$svc uid=$uid"
             test "$uid" != 0
           done
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install JS deps and Playwright Chromium
+        run: |
+          npm ci --no-audit --no-fund
+          cd apps/web && npx playwright install --with-deps chromium
+
+      - name: End-to-end tests (Playwright, against the compose stack)
+        run: npm run e2e --workspace apps/web
+        env:
+          E2E_BASE_URL: http://localhost:8080
+
+      - name: Upload Playwright report on failure
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: playwright-report
+          path: |
+            apps/web/playwright-report
+            apps/web/test-results
+          retention-days: 7
+
+      - name: Upload screenshots of the web app
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: web-screenshots
+          path: apps/web/test-results/screenshots
+          if-no-files-found: ignore
+          retention-days: 14
 
       - name: Logs on failure
         if: failure()
