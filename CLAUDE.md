@@ -29,7 +29,7 @@ with the `X-Service-Token` header. The AI service is never exposed publicly.
 | Lint / types / test (JS) | `npm run lint`, `npm run typecheck`, `npm test` |
 | Python setup | `cd apps/ai-service && python -m venv .venv && . .venv/bin/activate && pip install -e ".[dev]"` |
 | Lint / types / test (Py) | `cd apps/ai-service && ruff check . && ruff format --check . && mypy app && pytest` |
-| Full stack | `docker compose -f infra/docker-compose.yml up --build` |
+| Full stack | `docker compose --env-file .env -f infra/docker-compose.yml up --build` |
 
 ## Engineering rules (non-negotiable)
 
