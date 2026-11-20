@@ -73,7 +73,8 @@ let clients choose their own IP and skip the limit.
 - Testing: services depend on repository interfaces injected into `createApp`, so the same HTTP
   suite runs against in-memory repositories (anywhere) and real MongoDB (CI service container).
 - Two browser tabs refreshing with the same cookie at the same moment are treated as reuse and
-  signed out. Acceptable now; a short grace window is a possible refinement.
+  signed out. Acceptable now; a short grace window is a possible refinement. The web app avoids
+  it by serialising refreshes across tabs ([ADR 0007](0007-frontend-architecture-and-sessions.md)).
 
 ## Follow-ups
 

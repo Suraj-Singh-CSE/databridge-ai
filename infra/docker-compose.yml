@@ -74,6 +74,8 @@ services:
       CORS_ORIGIN: ${WEB_ORIGIN:-http://localhost:8080}
       # Number of proxy hops to trust for the client IP (rate limiting). See .env.example.
       TRUST_PROXY: ${TRUST_PROXY:-false}
+      AUTH_RATE_LIMIT_MAX: ${AUTH_RATE_LIMIT_MAX:-20}
+      AUTH_RATE_LIMIT_WINDOW_MS: ${AUTH_RATE_LIMIT_WINDOW_MS:-900000}
     ports:
       - '4000:4000'
     depends_on:

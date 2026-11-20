@@ -4,7 +4,8 @@ AI copilot that turns messy customer data from several systems into one clean, t
 profile → map columns → resolve duplicates → generate and test SQL → check quality.
 AI proposes, a human approves.
 
-**Status:** M1 in progress (monorepo scaffold, Docker setup and CI, API auth/projects/audit).
+**Status:** M1 in progress (monorepo scaffold, Docker setup and CI, API auth/projects/audit, web app
+shell with sign-in and projects).
 
 ## Repository layout
 
@@ -80,6 +81,44 @@ same suite also runs against MongoDB when `MONGODB_URI` (default `mongodb://loca
 is reachable; otherwise those tests are skipped with a message (in CI, `CI=true`, they never skip).
 `npm run test:coverage -w apps/api` prints coverage and enforces 80% of lines.
 
+## Web app
+
+React 18 + Vite + Tailwind with shadcn/ui components (`apps/web/src/components/ui`), React Router
+(data router), TanStack Query for server data and react-hook-form + Zod for forms. Design notes:
+[ADR 0007](docs/adr/0007-frontend-architecture-and-sessions.md).
+
+| Route                                       | What                                                         |
+| ------------------------------------------- | ------------------------------------------------------------ |
+| `/sign-in`, `/create-account`               | Sign in / register (signed-in users are sent to `/projects`) |
+| `/projects`                                 | Your projects; admins and data engineers can create one      |
+| `/projects/:id/{sources,profile,mapping}`   | Project steps (placeholders until M2/M3)                     |
+| `/projects/:id/{matching,pipeline,quality}` | Project steps (placeholders until M4/M5)                     |
+| `/projects/:id/{dashboard,assistant}`       | Dashboard and assistant (placeholders until M6)              |
+
+Every route except sign-in, create-account and the 404 page needs a session; others redirect to
+`/sign-in?next=<where you were going>`.
+
+**How auth works in the browser**
+
+- The access token lives only in memory (never `localStorage`); the refresh token is the httpOnly
+  `db_rt` cookie that JavaScript cannot read.
+- On page load the app calls `POST /auth/refresh` to restore the session; a 401 means signed out.
+- A 401 on any other call triggers one refresh and one retry. Concurrent 401s share one refresh, and
+  tabs take turns through a Web Lock so two tabs never spend the same refresh cookie.
+- Tabs share new tokens and sign-outs over a `BroadcastChannel`: signing out in one tab signs out all.
+
+**Run it in development** (Vite proxies `/api` to `http://localhost:4000`):
+
+```bash
+npm run dev -w apps/api      # needs MongoDB and a .env (see Quick start)
+npm run dev -w apps/web      # http://localhost:5173
+npm test -w apps/web         # Vitest + Testing Library + MSW
+npm run e2e -w apps/web      # Playwright against http://localhost:8080 (E2E_BASE_URL to change)
+```
+
+The e2e tests expect the full stack (`docker compose ... up`, see below) and Chromium
+(`npx playwright install chromium` in `apps/web`). CI runs them in the docker job.
+
 ## Run with Docker
 
 Requires Docker with Compose v2. Builds and starts the whole stack (web, api, ai-service, MongoDB, Redis).
@@ -112,7 +151,9 @@ GitHub Actions (`.github/workflows/ci.yml`) runs on every pull request and on pu
 - **docker**: builds every image, starts the full stack with throwaway secrets, and smoke-tests the
   web root, the api health route (direct and through the nginx proxy), register and `/auth/me`
   through the proxy, that the AI service is not
-  reachable from the host, and that containers run as non-root.
+  reachable from the host, and that containers run as non-root. Then it runs the Playwright e2e
+  tests against the stack and uploads screenshots (`web-screenshots`) and, on failure, the
+  Playwright report (`playwright-report`).
 
 Contributor rules: see [CLAUDE.md](CLAUDE.md). Design decisions: see [docs/adr](docs/adr).
 
