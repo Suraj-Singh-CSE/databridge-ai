@@ -3,8 +3,28 @@
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import Field, SecretStr
+from pydantic import BaseModel, Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+DEFAULT_GEMINI_MODEL = "gemini-3.8-flash"
+
+
+class ModelPrice(BaseModel):
+    """Price of one model in INR per 1 million tokens. An assumption to configure, not a fact."""
+
+    model_config = {"frozen": True}
+
+    input: float = Field(ge=0)
+    output: float = Field(ge=0)
+
+
+def _default_prices() -> dict[str, ModelPrice]:
+    # Free tier: nothing is billed, but every call is still logged with its token counts so the
+    # cost of moving to the paid tier can be estimated. Override with LLM_PRICES_INR_PER_1M.
+    return {
+        "mock": ModelPrice(input=0, output=0),
+        DEFAULT_GEMINI_MODEL: ModelPrice(input=0, output=0),
+    }
 
 
 class Settings(BaseSettings):
@@ -15,9 +35,23 @@ class Settings(BaseSettings):
     ai_service_token: SecretStr = Field(min_length=16)
     redis_url: str = Field(pattern=r"^rediss?://")
     mongodb_uri: str = Field(pattern=r"^mongodb(\+srv)?://")
-    gemini_api_key: SecretStr | None = None
-    llm_provider: Literal["mock", "gemini"] = "mock"
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
+
+    # ---- LLM gateway
+    llm_provider: Literal["mock", "gemini"] = "mock"
+    gemini_api_key: SecretStr | None = None
+    gemini_model: str = Field(default=DEFAULT_GEMINI_MODEL, min_length=1)
+    # Seconds a cached LLM response stays valid; 0 turns the cache off.
+    llm_cache_ttl_seconds: int = Field(default=86_400, ge=0)
+    # Total provider attempts per call for retryable errors (rate limit, timeout, unavailable).
+    llm_max_attempts: int = Field(default=3, ge=1, le=10)
+    # Exponential backoff: base * 2^(attempt-1), capped at max, then jittered.
+    llm_backoff_base_seconds: float = Field(default=1.0, gt=0)
+    llm_backoff_max_seconds: float = Field(default=16.0, gt=0)
+    # Hard limit for one provider attempt.
+    llm_timeout_seconds: float = Field(default=30.0, gt=0, le=600)
+    # JSON, e.g. {"gemini-3.8-flash": {"input": 66, "output": 330}}. Unknown models cost 0.
+    llm_prices_inr_per_1m: dict[str, ModelPrice] = Field(default_factory=_default_prices)
 
 
 @lru_cache(maxsize=1)
