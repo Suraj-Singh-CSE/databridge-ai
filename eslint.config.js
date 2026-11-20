@@ -40,6 +40,20 @@ export default tseslint.config(
     languageOptions: { globals: globals.node },
   },
   {
+    // Mongoose types schema options and NativeDate as classes, so every plain schema literal
+    // would be flagged. Limited to the files that define schemas or write documents.
+    files: ['apps/api/src/**/*.model.ts', 'apps/api/src/**/*.repository.ts'],
+    rules: { '@typescript-eslint/no-unsafe-class-instance-assignment': 'off' },
+  },
+  {
+    // Supertest types every response body as `any`; asserting on it is the point of API tests.
+    files: ['apps/api/test/**/*.ts'],
+    rules: {
+      '@typescript-eslint/no-unsafe-member-access': 'off',
+      '@typescript-eslint/no-unsafe-call': 'off',
+    },
+  },
+  {
     files: ['apps/web/**/*.{ts,tsx}'],
     languageOptions: { globals: globals.browser },
     plugins: {

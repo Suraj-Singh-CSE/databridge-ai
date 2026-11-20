@@ -4,13 +4,13 @@ AI copilot that turns messy customer data from several systems into one clean, t
 profile → map columns → resolve duplicates → generate and test SQL → check quality.
 AI proposes, a human approves.
 
-**Status:** M1 in progress (monorepo scaffold, Docker setup and CI).
+**Status:** M1 in progress (monorepo scaffold, Docker setup and CI, API auth/projects/audit).
 
 ## Repository layout
 
 ```
 apps/web/          React 18 + TypeScript + Vite + Tailwind + shadcn/ui (browser UI)
-apps/api/          Node 22 + Express + TypeScript + Zod (public API, /api/v1)
+apps/api/          Node 22 + Express + TypeScript + Mongoose + Zod (public API, /api/v1)
 apps/ai-service/   Python 3.12+ + FastAPI + Pydantic v2 (internal AI service, /internal/v1)
 eval/              ground-truth generator and evaluation scripts
 infra/             docker-compose, Dockerfiles, deployment config
@@ -36,6 +36,49 @@ python -m venv .venv && . .venv/bin/activate && pip install -e ".[dev]"
 ruff check . && ruff format --check . && mypy app && pytest
 uvicorn app.asgi:app --reload --port 8000   # http://localhost:8000/internal/v1/health
 ```
+
+## API
+
+All routes live under `/api/v1` and answer in one envelope: `{ "data": ..., "error": null }` or
+`{ "data": null, "error": { "code", "message", "details" } }`. Design notes: [ADR 0005](docs/adr/0005-auth-and-sessions.md).
+
+**Auth flow**
+
+- `register` or `login` returns `{ user, accessToken }` and sets the `db_rt` refresh cookie
+  (httpOnly, SameSite=Strict, path `/api/v1/auth`, 7 days). The very first user becomes `admin`;
+  everyone else starts as `data_engineer`.
+- Keep the access token in memory and send it as `Authorization: Bearer <token>`; it expires after
+  15 minutes.
+- When it expires (401), call `POST /auth/refresh` with the cookie: you get a new access token and
+  a new cookie; the old refresh token stops working.
+- Presenting an already-used refresh token revokes that whole session family (theft detection),
+  so the user must sign in again.
+- `POST /auth/logout` revokes the refresh token and clears the cookie.
+
+| Method | Path                             | Who                                  | Result                                           |
+| ------ | -------------------------------- | ------------------------------------ | ------------------------------------------------ |
+| POST   | `/auth/register`                 | anyone (rate-limited)                | 201 `{ user, accessToken }`                      |
+| POST   | `/auth/login`                    | anyone (rate-limited)                | 200 `{ user, accessToken }`                      |
+| POST   | `/auth/refresh`                  | refresh cookie                       | 200 `{ user, accessToken }`                      |
+| POST   | `/auth/logout`                   | anyone                               | 204                                              |
+| GET    | `/auth/me`                       | signed in                            | 200 `{ user }`                                   |
+| GET    | `/projects?page=1&limit=20`      | signed in (own/member; admin: all)   | 200 `{ items, page, limit, total }`              |
+| POST   | `/projects`                      | `admin`, `data_engineer`             | 201 `{ project }`                                |
+| GET    | `/projects/:id`                  | member, owner, admin                 | 200 `{ project }`                                |
+| PATCH  | `/projects/:id`                  | owner, admin, `data_engineer` member | 200 `{ project }`                                |
+| DELETE | `/projects/:id`                  | owner, admin                         | 204                                              |
+| POST   | `/projects/:id/members`          | owner, admin                         | 201 `{ project }`                                |
+| DELETE | `/projects/:id/members/:userId`  | owner, admin (not the owner)         | 200 `{ project }`                                |
+| GET    | `/projects/:id/audit?page&limit` | any member, owner, admin             | 200 `{ items, page, limit, total }` newest first |
+
+Errors: `VALIDATION_ERROR` 400 (with `details: [{ field, message }]`), `UNAUTHORIZED` 401,
+`FORBIDDEN` 403, `NOT_FOUND` 404 (also for projects you are not a member of), `CONFLICT` 409,
+`PAYLOAD_TOO_LARGE` 413, `RATE_LIMITED` 429.
+
+**Tests.** `npm test` runs unit tests and the full API suite against in-memory repositories. The
+same suite also runs against MongoDB when `MONGODB_URI` (default `mongodb://localhost:27017/databridge_test`)
+is reachable; otherwise those tests are skipped with a message (in CI, `CI=true`, they never skip).
+`npm run test:coverage -w apps/api` prints coverage and enforces 80% of lines.
 
 ## Run with Docker
 
@@ -63,10 +106,12 @@ repo-root `.env` on its own. Missing secrets make Compose stop with a message na
 
 GitHub Actions (`.github/workflows/ci.yml`) runs on every pull request and on pushes to `main`:
 
-- **js**: format check, lint, typecheck, tests, and build for web and api (Node 22).
+- **js**: format check, lint, typecheck, tests (api with coverage, against a MongoDB 7 service
+  container), and build for web and api (Node 22).
 - **python**: ruff lint and format check, mypy (strict), pytest for the ai-service (Python 3.12).
 - **docker**: builds every image, starts the full stack with throwaway secrets, and smoke-tests the
-  web root, the api health route (direct and through the nginx proxy), that the AI service is not
+  web root, the api health route (direct and through the nginx proxy), register and `/auth/me`
+  through the proxy, that the AI service is not
   reachable from the host, and that containers run as non-root.
 
 Contributor rules: see [CLAUDE.md](CLAUDE.md). Design decisions: see [docs/adr](docs/adr).

@@ -1,56 +1,78 @@
-import { randomUUID } from 'node:crypto';
-
-import express, { type ErrorRequestHandler, type Express } from 'express';
-import { pinoHttp } from 'pino-http';
+import cookieParser from 'cookie-parser';
+import cors from 'cors';
+import express, { type Express } from 'express';
+import { rateLimit } from 'express-rate-limit';
+import helmet from 'helmet';
 
 import type { Config } from './config.js';
+import { AppError } from './errors.js';
 import type { Logger } from './logger.js';
-
-const REQUEST_ID_HEADER = 'x-request-id';
-const REQUEST_ID_PATTERN = /^[\w-]{1,64}$/;
+import { errorHandler, notFoundHandler } from './middleware/error-handler.js';
+import { requestLogger } from './middleware/request-id.js';
+import { createAuditService } from './modules/audit/audit.service.js';
+import { AUTH_BASE_PATH } from './modules/auth/auth.cookie.js';
+import { createAuthRouter } from './modules/auth/auth.routes.js';
+import { createAuthService } from './modules/auth/auth.service.js';
+import { createPasswordHasher, type PasswordHasher } from './modules/auth/password.js';
+import { createTokenService } from './modules/auth/tokens.js';
+import { createProjectRouter } from './modules/projects/project.routes.js';
+import { createProjectService } from './modules/projects/project.service.js';
+import type { Repositories } from './repositories.js';
 
 export interface AppDeps {
   config: Config;
   logger: Logger;
+  repos: Repositories;
+  /** Defaults to bcrypt cost 12. Tests inject a cheaper cost to stay fast. */
+  passwords?: PasswordHasher;
 }
 
-export function createApp({ logger }: AppDeps): Express {
+export function createApp({ config, logger, repos, passwords }: AppDeps): Express {
+  const tokens = createTokenService(config);
+  const audit = createAuditService(repos.audit);
+  const auth = createAuthService({
+    repos,
+    tokens,
+    passwords: passwords ?? createPasswordHasher(),
+    audit,
+    logger,
+  });
+  const projectService = createProjectService(repos, audit);
+
   const app = express();
   app.disable('x-powered-by');
+  app.set('trust proxy', config.TRUST_PROXY);
+
+  app.use(requestLogger(logger));
+  app.use(helmet());
+  app.use(cors({ origin: config.CORS_ORIGIN, credentials: true }));
   app.use(express.json({ limit: '1mb' }));
-  app.use(
-    pinoHttp({
-      logger,
-      genReqId: (req, res) => {
-        const incoming = req.headers[REQUEST_ID_HEADER];
-        const id =
-          typeof incoming === 'string' && REQUEST_ID_PATTERN.test(incoming)
-            ? incoming
-            : randomUUID();
-        res.setHeader(REQUEST_ID_HEADER, id);
-        return id;
-      },
-    }),
-  );
+  app.use(cookieParser());
 
   app.get('/api/v1/health', (_req, res) => {
     res.json({ data: { status: 'ok', service: 'api' }, error: null });
   });
 
-  app.use((_req, res) => {
-    res.status(404).json({
-      data: null,
-      error: { code: 'NOT_FOUND', message: 'Route not found.', details: null },
-    });
+  const authLimiter = rateLimit({
+    windowMs: config.AUTH_RATE_LIMIT_WINDOW_MS,
+    limit: config.AUTH_RATE_LIMIT_MAX,
+    standardHeaders: 'draft-8',
+    legacyHeaders: false,
+    handler: (_req, _res, next) => {
+      next(new AppError(429, 'RATE_LIMITED', 'Too many attempts. Please wait and try again.'));
+    },
   });
+  app.use(
+    AUTH_BASE_PATH,
+    authLimiter,
+    createAuthRouter({ auth, tokens, secureCookies: config.NODE_ENV === 'production' }),
+  );
+  app.use(
+    '/api/v1/projects',
+    createProjectRouter({ projectService, projects: repos.projects, tokens }),
+  );
 
-  const errorHandler: ErrorRequestHandler = (err: unknown, req, res, _next) => {
-    req.log.error({ err }, 'unhandled error');
-    res.status(500).json({
-      data: null,
-      error: { code: 'INTERNAL_ERROR', message: 'Something went wrong.', details: null },
-    });
-  };
+  app.use(notFoundHandler);
   app.use(errorHandler);
 
   return app;
