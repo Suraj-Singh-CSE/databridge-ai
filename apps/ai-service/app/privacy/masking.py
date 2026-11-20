@@ -6,7 +6,7 @@ Pure functions, no I/O. Rules, applied in this order so a longer or more specifi
 2. PAN              ``ABCDE1234F``             -> ``[PAN]``
 3. Phone with +91   ``+91 98200 12345``        -> ``+91 98200xxxxx``  (also ``0091``)
 4. Card number      13-19 digits, plain or in 4-digit groups -> ``[CARD]``
-5. Aadhaar          12 digits, plain or ``1234 5678 9012`` -> ``[AADHAAR]``
+5. Aadhaar          12 digits starting 2-9, plain or ``2345 6789 0123`` -> ``[AADHAAR]``
 6. Indian mobile    10 digits starting 6-9, optional ``0`` / ``91`` prefix,
                     spaces or dashes inside    -> ``98200xxxxx`` (first 5 digits kept)
 
