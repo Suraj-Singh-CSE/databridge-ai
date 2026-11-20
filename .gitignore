@@ -1,0 +1,40 @@
+# Dependencies
+node_modules/
+.venv/
+venv/
+
+# Build output
+dist/
+build/
+*.tsbuildinfo
+*.egg-info/
+
+# Python caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Test output
+coverage/
+.coverage
+htmlcov/
+
+# Local data
+*.duckdb
+*.duckdb.wal
+uploads/
+
+# Env files (never commit secrets; .env.example is the template)
+.env
+.env.*
+!.env.example
+
+# Logs and OS/editor noise
+*.log
+npm-debug.log*
+.DS_Store
+.idea/
+.vscode/*
+!.vscode/extensions.json
