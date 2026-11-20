@@ -1,0 +1,127 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# A newer push to the same branch/PR cancels the run in progress.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  js:
+    name: JS (web + api)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - run: npm run format:check
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test
+      - name: Build api and web
+        run: npm run build --workspace apps/api --workspace apps/web
+
+  python:
+    name: Python (ai-service)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: apps/ai-service
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: apps/ai-service/pyproject.toml
+      - run: pip install -e ".[dev]"
+      - run: ruff check .
+      - run: ruff format --check .
+      - run: mypy app
+      - run: pytest
+
+  docker:
+    name: Docker (full stack smoke test)
+    needs: [js, python]
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      COMPOSE: docker compose --env-file .env.ci -f infra/docker-compose.yml
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Create CI env file with throwaway random secrets
+        run: |
+          secret() { openssl rand -base64 48 | tr -d '\n/+='; }
+          {
+            echo "JWT_ACCESS_SECRET=$(secret)"
+            echo "JWT_REFRESH_SECRET=$(secret)"
+            echo "AI_SERVICE_TOKEN=$(secret)"
+            echo "LLM_PROVIDER=mock"
+            echo "LOG_LEVEL=INFO"
+          } > .env.ci
+
+      - name: Validate compose file
+        run: $COMPOSE config --quiet
+
+      - name: Build images
+        run: $COMPOSE build
+
+      - name: Start stack and wait for health checks
+        run: $COMPOSE up -d --wait --wait-timeout 180
+
+      - name: Show image sizes and container status
+        run: |
+          docker image ls 'databridge-*'
+          $COMPOSE ps
+
+      - name: Smoke test
+        run: |
+          set -euo pipefail
+          check() {
+            local url=$1 code
+            code=$(curl -s -o /tmp/body -w '%{http_code}' --retry 5 --retry-all-errors --retry-delay 2 "$url")
+            echo "$url -> $code $(head -c 200 /tmp/body)"
+            test "$code" = 200
+          }
+          check http://localhost:8080/
+          check http://localhost:8080/some/client/route   # SPA fallback
+          check http://localhost:4000/api/v1/health
+          check http://localhost:8080/api/v1/health       # through the nginx proxy
+          grep -q '"service":"api"' /tmp/body
+
+      - name: AI service is not published to the host
+        run: |
+          if curl -s --max-time 3 http://localhost:8000/internal/v1/health; then
+            echo "ai-service must not be reachable from the host" >&2
+            exit 1
+          fi
+          echo "ok: port 8000 is not published"
+
+      - name: Containers run as non-root
+        run: |
+          for svc in api ai-service web; do
+            uid=$($COMPOSE exec -T "$svc" id -u)
+            echo "$svc uid=$uid"
+            test "$uid" != 0
+          done
+
+      - name: Logs on failure
+        if: failure()
+        run: $COMPOSE logs --no-color --timestamps
+
+      - name: Tear down
+        if: always()
+        run: $COMPOSE down -v --remove-orphans

@@ -1,0 +1,36 @@
+# Build context is the repo root for every image. Keep it small and secret-free.
+**/node_modules
+**/dist
+**/build
+**/coverage
+**/*.tsbuildinfo
+
+# Python
+**/.venv
+**/venv
+**/__pycache__
+**/*.py[cod]
+**/*.egg-info
+**/.pytest_cache
+**/.mypy_cache
+**/.ruff_cache
+**/.coverage
+**/htmlcov
+
+# Secrets and local data (never baked into an image)
+**/.env
+**/.env.*
+!.env.example
+**/*.duckdb
+**/*.duckdb.wal
+**/uploads
+
+# Repo noise not needed in any image
+.git
+.github
+docs
+eval
+**/*.log
+**/.DS_Store
+.idea
+.vscode
