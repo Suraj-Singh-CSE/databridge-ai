@@ -151,6 +151,7 @@ GitHub Actions (`.github/workflows/ci.yml`) runs on every pull request and on pu
 - **js**: format check, lint, typecheck, tests (api with coverage, against a MongoDB 7 service
   container), and build for web and api (Node 22).
 - **python**: ruff lint and format check, mypy (strict), pytest for the ai-service (Python 3.12).
+- **eval**: the same checks for the ground-truth data generator in `eval/` ([eval/README](eval/README.md)).
 - **docker**: builds every image, starts the full stack with throwaway secrets, and smoke-tests the
   web root, the api health route (direct and through the nginx proxy), register and `/auth/me`
   through the proxy, that the AI service is not
