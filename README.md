@@ -233,7 +233,9 @@ React 18 + Vite + Tailwind with shadcn/ui components (`apps/web/src/components/u
 | ------------------------------------------- | ------------------------------------------------------------ |
 | `/sign-in`, `/create-account`               | Sign in / register (signed-in users are sent to `/projects`) |
 | `/projects`                                 | Your projects; admins and data engineers can create one      |
-| `/projects/:id/{sources,profile,mapping}`   | Project steps (placeholders until M2/M3)                     |
+| `/projects/:id/sources`                     | Upload CSV/XLSX files, watch profiling live, preview, remove |
+| `/projects/:id/profile`                     | Column profile per file: types, empty %, patterns, flags     |
+| `/projects/:id/mapping`                     | Project step (placeholder until M3)                          |
 | `/projects/:id/{matching,pipeline,quality}` | Project steps (placeholders until M4/M5)                     |
 | `/projects/:id/{dashboard,assistant}`       | Dashboard and assistant (placeholders until M6)              |
 
@@ -248,6 +250,21 @@ Every route except sign-in, create-account and the 404 page needs a session; oth
 - A 401 on any other call triggers one refresh and one retry. Concurrent 401s share one refresh, and
   tabs take turns through a Web Lock so two tabs never spend the same refresh cookie.
 - Tabs share new tokens and sign-outs over a `BroadcastChannel`: signing out in one tab signs out all.
+
+**Sources and Profile (M2.5)**
+
+- Drag files onto the Sources page or press **Browse files** (CSV or .xlsx, up to 50 MB and 200,000
+  rows, 10 files per project). The browser checks type and size first; the api decides. Uploads
+  show real progress (XMLHttpRequest) and can be cancelled.
+- Each upload starts a `profile` job automatically; **Profile** / **Re-run profile** start one by
+  hand. Progress comes live over Server-Sent Events read with `fetch()` streaming (so the bearer
+  token is sent), with reconnect and a polling fallback. Running jobs can be cancelled.
+- The Profile page shows one row per column (type, % empty, % unique, patterns, quality flags);
+  a row expands to ranges, lengths, top values and samples. Values are shown exactly as the api
+  returns them: masked, and personal columns only as their shape.
+- Viewers and data stewards can see files, previews and profiles; upload, profile and remove are
+  for the project owner, admins and data engineers (the api enforces the same rule).
+- Pages are lazy-loaded (`React.lazy`), see ADR 0007.
 
 **Run it in development** (Vite proxies `/api` to `http://localhost:4000`):
 

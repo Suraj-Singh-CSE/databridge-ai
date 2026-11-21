@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { lazy, Suspense, useState } from 'react';
 
 import { EmptyState } from '@/components/EmptyState';
 import { PageHeader } from '@/components/PageHeader';
@@ -9,9 +9,13 @@ import { useAuth } from '@/features/auth/auth-context';
 import { useDocumentTitle } from '@/hooks/use-document-title';
 import { ApiError } from '@/lib/api';
 
-import { NewProjectDialog } from './NewProjectDialog';
 import { ProjectCard } from './ProjectCard';
 import { canCreateProjects, useProjects } from './queries';
+
+// Loaded on demand: it brings the form libraries (react-hook-form, Zod).
+const NewProjectDialog = lazy(() =>
+  import('./NewProjectDialog').then((m) => ({ default: m.NewProjectDialog })),
+);
 
 const gridClass = 'grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-5';
 
@@ -105,7 +109,11 @@ export function ProjectsPage() {
         actions={canCreate && <Button onClick={openDialog}>New project</Button>}
       />
       {content}
-      {canCreate && <NewProjectDialog open={dialogOpen} onOpenChange={setDialogOpen} />}
+      {canCreate && (
+        <Suspense fallback={null}>
+          <NewProjectDialog open={dialogOpen} onOpenChange={setDialogOpen} />
+        </Suspense>
+      )}
     </div>
   );
 }

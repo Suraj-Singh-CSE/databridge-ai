@@ -77,6 +77,34 @@ works the same way; review the diff because the CLI emits React 19 style compone
 components (`AppShell`, `Stepper`, `PageHeader`, `StatusPill`, `EmptyState`, `ProgressBar`) build
 on them. Inter is self-hosted via `@fontsource-variable/inter` (no third-party font requests).
 
+**Uploads and live job progress (M2.5).** Three transports, one session rule:
+
+- _Uploads_ use `XMLHttpRequest` (`src/lib/upload.ts`) because `fetch()` cannot report upload
+  progress. It sends the same bearer token and cookie, reads the same envelope, and shares
+  `withSessionRetry` with `api()`: a 401 triggers one (single-flight, Web-Locked) refresh and one
+  resend. Cancel aborts the request. The browser checks extension, size (50 MB) and the 10-file
+  limit first for a fast answer; the api checks everything again and its error codes
+  (`PAYLOAD_TOO_LARGE`, `TOO_MANY_ROWS`, `UNSUPPORTED_FILE`, `FILE_TOO_COMPLEX`, `CONFLICT`,
+  `LIMIT_REACHED`, `RATE_LIMITED`) are mapped to our own plain-language text.
+- _Job progress_ is Server-Sent Events read with `fetch()` streaming (`src/lib/job-events.ts`),
+  since `EventSource` cannot send an `Authorization` header. A small parser handles split chunks,
+  CRLF, comments and multi-line data. When a stream breaks, the watcher re-reads
+  `GET /jobs/:id` (so no change is missed) and reconnects; after 3 failures in a row it polls every
+  2 s. A 4xx ends the watch. Updates are written into the TanStack Query cache of the project's
+  job list, so every view of a job renders from one place; when a job ends, sources, profiles and
+  jobs are invalidated. Watchers are effects, so leaving the page aborts the stream.
+- _After an upload_ the web app starts a `profile` job itself (ADR 0011 keeps the upload route
+  free of queue work). Running jobs are found again after a reload from
+  `GET /projects/:id/jobs` (queued or running `profile` jobs by `payload.sourceId`).
+
+The UI mirrors the api's project access rule (owner, admin or `data_engineer` member may upload,
+profile, cancel and delete; viewers and data stewards see the files and a short note) but the api
+stays the authority.
+
+**Code splitting.** The sign-in and create-account pages, the new-project dialog (they carry
+react-hook-form and Zod) and the Sources and Profile pages are loaded with `React.lazy`. The first
+download went from one 589 kB chunk (184 kB gzip) to 460 kB (147 kB gzip).
+
 ## Consequences
 
 - A full page reload always costs one refresh call (no token survives a reload). That is the price
@@ -90,4 +118,5 @@ on them. Inter is self-hosted via `@fontsource-variable/inter` (no third-party f
 
 - Show source and record counts on project cards once M2 adds them to the api.
 - Add a "completed" project status (api) to drive the green "Done" pill from the design.
-- Code-split routes when the bundle grows (currently one ~590 kB chunk, ~185 kB gzip).
+- Split the shared vendor chunk further (react-dom, radix) if the first download grows again.
+- Let users set a system name per source (the api supports it; the Figma "System" column).

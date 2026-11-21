@@ -1,0 +1,16 @@
+import { lazy } from 'react';
+
+// Pages loaded on demand, so the first download holds only the shell and the projects list.
+// The auth pages carry the form libraries (react-hook-form, Zod); the step pages their features.
+export const SignInPage = lazy(() =>
+  import('@/features/auth/SignInPage').then((m) => ({ default: m.SignInPage })),
+);
+export const CreateAccountPage = lazy(() =>
+  import('@/features/auth/CreateAccountPage').then((m) => ({ default: m.CreateAccountPage })),
+);
+export const SourcesPage = lazy(() =>
+  import('@/features/sources/SourcesPage').then((m) => ({ default: m.SourcesPage })),
+);
+export const ProfilePage = lazy(() =>
+  import('@/features/profile/ProfilePage').then((m) => ({ default: m.ProfilePage })),
+);
