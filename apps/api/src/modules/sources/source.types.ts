@@ -1,7 +1,8 @@
 export const SOURCE_FORMATS = ['csv', 'xlsx'] as const;
 export type SourceFormat = (typeof SOURCE_FORMATS)[number];
 
-export const SOURCE_STATUSES = ['uploaded', 'profiling', 'ready', 'failed'] as const;
+/** `profiling` -> `profiled` | `failed` are set by the ai-service profiler (ADR 0011). */
+export const SOURCE_STATUSES = ['uploaded', 'profiling', 'profiled', 'ready', 'failed'] as const;
 export type SourceStatus = (typeof SOURCE_STATUSES)[number];
 
 export interface SourceError {
@@ -23,16 +24,21 @@ export interface Source {
   sizeBytes: number;
   sha256: string;
   status: SourceStatus;
-  /** Data rows (header excluded). Set at upload for CSV; for XLSX by the profiler (M2.4). */
+  /**
+   * Data rows (header excluded). Set at upload for CSV; set (or corrected: blank rows are not
+   * counted) by the profiler for both formats.
+   */
   rowCount: number | null;
   columnCount: number | null;
   error: SourceError | null;
+  /** When the last successful profile finished. */
+  profiledAt: Date | null;
   uploadedBy: string;
   createdAt: Date;
   updatedAt: Date;
 }
 
-export type NewSource = Omit<Source, 'status' | 'error' | 'createdAt' | 'updatedAt'>;
+export type NewSource = Omit<Source, 'status' | 'error' | 'profiledAt' | 'createdAt' | 'updatedAt'>;
 
 export interface SourcePatch {
   name?: string | undefined;

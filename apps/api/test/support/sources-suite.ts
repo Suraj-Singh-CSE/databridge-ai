@@ -16,6 +16,7 @@ import type { FileStorage } from '../../src/storage/storage.types.js';
 
 import type { Harness } from './api-suite.js';
 import { buildTestApp, fastPasswords, tempStorage } from './build-app.js';
+import { zipBomb } from './zip.js';
 
 const SAMPLES = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -737,6 +738,35 @@ export function defineSourcesSuite(label: string, harness: Harness): void {
         await request(app).get(`${url}?limit=0`).set(bearer(owner)).expect(400);
         const max = await request(app).get(`${url}?limit=50`).set(bearer(owner)).expect(200);
         expect(max.body.data.rows).toHaveLength(2);
+      });
+
+      it('refuses to preview a zip-bombed workbook with 422 FILE_TOO_COMPLEX', async () => {
+        const source = await uploaded(zipBomb(12 * 1024 * 1024), 'bomb.xlsx');
+
+        const res = await request(app)
+          .get(`${sourcesUrl()}/${source.id}/preview`)
+          .set(bearer(owner));
+
+        expect(res.status).toBe(422);
+        expect(res.body.error.code).toBe('FILE_TOO_COMPLEX');
+        expect(res.body.error.message).toMatch(/limit is 200 MB/);
+      });
+
+      it('applies XLSX_MAX_UNCOMPRESSED_BYTES and reports unreadable workbooks', async () => {
+        const small = appWith({ XLSX_MAX_UNCOMPRESSED_BYTES: String(1024 * 1024) });
+        const big = await uploaded(zipBomb(2 * 1024 * 1024), 'big.xlsx');
+        const broken = await uploaded(Buffer.from('PK\x03\x04 not a workbook'), 'broken.xlsx');
+
+        const capped = await request(small)
+          .get(`${sourcesUrl()}/${big.id}/preview`)
+          .set(bearer(owner));
+        expect(capped.status).toBe(422);
+        expect(capped.body.error.message).toMatch(/limit is 1 MB/);
+        const unreadable = await request(app)
+          .get(`${sourcesUrl()}/${broken.id}/preview`)
+          .set(bearer(owner));
+        expect(unreadable.status).toBe(400);
+        expect(unreadable.body.error.code).toBe('UNSUPPORTED_FILE');
       });
 
       it('answers 404 when the stored file is missing, and hides it from outsiders', async () => {

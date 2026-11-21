@@ -11,16 +11,25 @@ import type { Project } from '../projects/project.types.js';
 import type { Actor } from '../projects/project.service.js';
 
 import { defaultSourceName } from './filename.js';
-import { sourceLimitReached } from './limits.js';
+import type { ColumnProfile } from './column-profile.types.js';
+import { fileTooComplex, sourceLimitReached } from './limits.js';
 import { readPreview, type Preview } from './preview.js';
 import { uploadFields } from './source.schemas.js';
 import type { Source, SourcePatch } from './source.types.js';
 import { receiveUpload } from './upload.js';
+import { checkXlsx, XlsxTooComplexError, type XlsxLimits } from './xlsx-guard.js';
 
 export interface SourceLimits {
   maxUploadBytes: number;
   maxUploadRows: number;
   maxSourcesPerProject: number;
+  xlsx: XlsxLimits;
+}
+
+export interface SourceProfile {
+  source: Source;
+  /** In file order; empty until the source has been profiled. */
+  columns: ColumnProfile[];
 }
 
 export interface SourceService {
@@ -30,6 +39,7 @@ export interface SourceService {
   update(actor: Actor, project: Project, sourceId: string, patch: SourcePatch): Promise<Source>;
   remove(actor: Actor, project: Project, sourceId: string): Promise<void>;
   preview(project: Project, sourceId: string, limit: number): Promise<Preview>;
+  profile(project: Project, sourceId: string): Promise<SourceProfile>;
 }
 
 const SOURCE_GONE = 'Source not found.';
@@ -58,7 +68,7 @@ function parseUploadFields(fields: Record<string, string>) {
 }
 
 export function createSourceService(
-  repos: Pick<Repositories, 'sources'>,
+  repos: Pick<Repositories, 'sources' | 'columnProfiles'>,
   storage: FileStorage,
   audit: AuditService,
   limits: SourceLimits,
@@ -85,6 +95,32 @@ export function createSourceService(
     const source = await repos.sources.findById(project.id, sourceId);
     if (!source) throw AppError.notFound(SOURCE_GONE);
     return source;
+  }
+
+  async function open(source: Source) {
+    try {
+      return await storage.getStream(source.fileKey);
+    } catch (error) {
+      if (error instanceof StorageNotFoundError) {
+        throw AppError.notFound(
+          'The file for this source is missing. Delete the source and upload the file again.',
+        );
+      }
+      throw error;
+    }
+  }
+
+  /** A full pass over the workbook before exceljs reads it: no zip bomb reaches the parser. */
+  async function assertSafeXlsx(source: Source): Promise<void> {
+    try {
+      await checkXlsx(await open(source), source.sizeBytes, limits.xlsx);
+    } catch (error) {
+      if (error instanceof XlsxTooComplexError) {
+        throw fileTooComplex(limits.xlsx.maxUncompressedBytes);
+      }
+      if (error instanceof AppError) throw error;
+      throw AppError.unsupportedFile('This Excel file could not be read.');
+    }
   }
 
   async function assertRoomFor(project: Project): Promise<void> {
@@ -155,6 +191,7 @@ export function createSourceService(
       const source = await find(project, sourceId);
       // File first: if that fails the record remains and the delete can simply be retried.
       await storage.delete(source.fileKey);
+      await repos.columnProfiles.deleteBySource(project.id, sourceId);
       if (!(await repos.sources.delete(project.id, sourceId))) {
         throw AppError.notFound(SOURCE_GONE);
       }
@@ -163,18 +200,13 @@ export function createSourceService(
 
     async preview(project, sourceId, limit) {
       const source = await find(project, sourceId);
-      let stream;
-      try {
-        stream = await storage.getStream(source.fileKey);
-      } catch (error) {
-        if (error instanceof StorageNotFoundError) {
-          throw AppError.notFound(
-            'The file for this source is missing. Delete the source and upload the file again.',
-          );
-        }
-        throw error;
-      }
-      return readPreview(stream, source.format, limit);
+      if (source.format === 'xlsx') await assertSafeXlsx(source);
+      return readPreview(await open(source), source.format, limit);
+    },
+
+    async profile(project, sourceId) {
+      const source = await find(project, sourceId);
+      return { source, columns: await repos.columnProfiles.listBySource(project.id, sourceId) };
     },
   };
 }

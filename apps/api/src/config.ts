@@ -83,6 +83,13 @@ const envSchema = z
     MAX_UPLOAD_BYTES: positiveInt(50 * MIB),
     MAX_UPLOAD_ROWS: positiveInt(200_000),
     MAX_SOURCES_PER_PROJECT: positiveInt(10),
+    // Zip-bomb guard for XLSX previews; the profiler reads the same variables (ADR 0011).
+    XLSX_MAX_UNCOMPRESSED_BYTES: z.coerce
+      .number()
+      .int()
+      .min(MIB)
+      .default(200 * MIB),
+    XLSX_MAX_COMPRESSION_RATIO: z.coerce.number().min(10).default(100),
     UPLOAD_RATE_LIMIT_MAX: positiveInt(30),
     UPLOAD_RATE_LIMIT_WINDOW_MS: z.coerce
       .number()

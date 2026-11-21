@@ -103,6 +103,8 @@ describe('loadConfig', () => {
       UPLOAD_RATE_LIMIT_MAX: 30,
       UPLOAD_RATE_LIMIT_WINDOW_MS: 3_600_000,
       S3_FORCE_PATH_STYLE: false,
+      XLSX_MAX_UNCOMPRESSED_BYTES: 200 * 1024 * 1024,
+      XLSX_MAX_COMPRESSION_RATIO: 100,
     });
     expect(config.S3_BUCKET).toBeUndefined();
   });
@@ -132,11 +134,15 @@ describe('loadConfig', () => {
         MAX_UPLOAD_BYTES: '0',
         MAX_UPLOAD_ROWS: 'many',
         S3_ENDPOINT: 'not a url',
+        XLSX_MAX_UNCOMPRESSED_BYTES: '1000',
+        XLSX_MAX_COMPRESSION_RATIO: '2',
       });
 
     expect(run).toThrow(/STORAGE_DRIVER/);
     expect(run).toThrow(/MAX_UPLOAD_BYTES/);
     expect(run).toThrow(/MAX_UPLOAD_ROWS/);
     expect(run).toThrow(/S3_ENDPOINT: must be a valid URL/);
+    expect(run).toThrow(/XLSX_MAX_UNCOMPRESSED_BYTES/);
+    expect(run).toThrow(/XLSX_MAX_COMPRESSION_RATIO/);
   });
 });

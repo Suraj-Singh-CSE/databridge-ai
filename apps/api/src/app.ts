@@ -64,6 +64,10 @@ export function createApp({
     maxUploadBytes: config.MAX_UPLOAD_BYTES,
     maxUploadRows: config.MAX_UPLOAD_ROWS,
     maxSourcesPerProject: config.MAX_SOURCES_PER_PROJECT,
+    xlsx: {
+      maxUncompressedBytes: config.XLSX_MAX_UNCOMPRESSED_BYTES,
+      maxCompressionRatio: config.XLSX_MAX_COMPRESSION_RATIO,
+    },
   });
   const jobService = createJobService({
     repos,

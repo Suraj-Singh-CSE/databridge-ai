@@ -48,6 +48,12 @@ export function createMongoJobRepository(): JobRepository {
         .lean<StoredJob[]>();
       return docs.map(toJob);
     },
+    async listActive(projectId, type) {
+      const docs = await JobModel.find({ projectId, type, status: { $in: ACTIVE } }).lean<
+        StoredJob[]
+      >();
+      return docs.map(toJob);
+    },
     async finishIfActive(id, { status, message, error }, at) {
       const doc = await JobModel.findOneAndUpdate(
         { _id: id, status: { $in: ACTIVE } },

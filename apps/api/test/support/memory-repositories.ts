@@ -5,6 +5,10 @@ import type { AuditEntry } from '../../src/modules/audit/audit.types.js';
 import type { Job, JobRepository } from '../../src/modules/jobs/job.types.js';
 import type { RefreshTokenRecord } from '../../src/modules/auth/refresh-token.types.js';
 import type { Project } from '../../src/modules/projects/project.types.js';
+import type {
+  ColumnProfile,
+  ColumnProfileRepository,
+} from '../../src/modules/sources/column-profile.types.js';
 import type { Source } from '../../src/modules/sources/source.types.js';
 import type { User } from '../../src/modules/users/user.types.js';
 import type { Repositories } from '../../src/repositories.js';
@@ -21,8 +25,17 @@ export type WorkerPatch = Partial<
   Pick<Job, 'status' | 'progress' | 'message' | 'result' | 'error' | 'attempts'>
 > & { startedAt?: Date | null; heartbeatAt?: Date | null; finishedAt?: Date | null };
 
+/** What the Python profiler writes: column profiles plus the source summary. */
+export interface ProfileWrite {
+  projectId: string;
+  sourceId: string;
+  columns: ColumnProfile[];
+  source: Partial<Pick<Source, 'status' | 'rowCount' | 'columnCount' | 'profiledAt' | 'error'>>;
+}
+
 export interface MemoryRepositories extends Repositories {
   jobs: JobRepository & { workerUpdate(id: string, patch: WorkerPatch): void };
+  columnProfiles: ColumnProfileRepository & { workerSave(write: ProfileWrite): void };
 }
 
 /**
@@ -34,6 +47,8 @@ export function createMemoryRepositories(): MemoryRepositories {
   const tokens = new Map<string, RefreshTokenRecord>();
   const projects = new Map<string, Project>();
   const sources = new Map<string, Source>();
+  // key: `${projectId}/${sourceId}`
+  const profiles = new Map<string, ColumnProfile[]>();
   const jobs = new Map<string, Job>();
   const audit: AuditEntry[] = [];
   let firstAdminClaimed = false;
@@ -203,6 +218,7 @@ export function createMemoryRepositories(): MemoryRepositories {
           ...input,
           status: 'uploaded',
           error: null,
+          profiledAt: null,
           createdAt: at,
           updatedAt: at,
         };
@@ -258,6 +274,36 @@ export function createMemoryRepositories(): MemoryRepositories {
       },
     },
 
+    columnProfiles: {
+      async listBySource(projectId, sourceId) {
+        await Promise.resolve();
+        const columns = profiles.get(`${projectId}/${sourceId}`) ?? [];
+        return structuredClone(columns).sort((a, b) => a.position - b.position);
+      },
+      async deleteBySource(projectId, sourceId) {
+        await Promise.resolve();
+        const key = `${projectId}/${sourceId}`;
+        const count = profiles.get(key)?.length ?? 0;
+        profiles.delete(key);
+        return count;
+      },
+      async deleteByProject(projectId) {
+        await Promise.resolve();
+        let deleted = 0;
+        for (const [key, columns] of profiles) {
+          if (!key.startsWith(`${projectId}/`)) continue;
+          deleted += columns.length;
+          profiles.delete(key);
+        }
+        return deleted;
+      },
+      workerSave({ projectId, sourceId, columns, source }) {
+        profiles.set(`${projectId}/${sourceId}`, structuredClone(columns));
+        const stored = sources.get(sourceId);
+        if (stored) Object.assign(stored, structuredClone(source), { updatedAt: tick() });
+      },
+    },
+
     jobs: {
       async create(input) {
         await Promise.resolve();
@@ -292,6 +338,17 @@ export function createMemoryRepositories(): MemoryRepositories {
           .filter((j) => j.projectId === projectId)
           .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
           .slice(0, limit)
+          .map((j) => structuredClone(j));
+      },
+      async listActive(projectId, type) {
+        await Promise.resolve();
+        return [...jobs.values()]
+          .filter(
+            (j) =>
+              j.projectId === projectId &&
+              j.type === type &&
+              (j.status === 'queued' || j.status === 'running'),
+          )
           .map((j) => structuredClone(j));
       },
       async finishIfActive(id, { status, message, error }, at) {

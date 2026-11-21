@@ -1,4 +1,4 @@
-/** `profile` is reserved for M2.4; only types with a payload schema can be created. */
+/** Every type has a payload schema in job.schemas.ts and a handler in apps/ai-service. */
 export const JOB_TYPES = ['demo', 'profile'] as const;
 export type JobType = (typeof JOB_TYPES)[number];
 
@@ -62,6 +62,8 @@ export interface JobRepository {
   findById(id: string): Promise<Job | null>;
   /** Newest first. */
   listByProject(projectId: string, limit: number): Promise<Job[]>;
+  /** Queued or running jobs of one type in a project. */
+  listActive(projectId: string, type: JobType): Promise<Job[]>;
   /**
    * Ends the job only while it is queued or running (status never moves backwards).
    * Returns the updated job, or null when it had already ended (or does not exist).

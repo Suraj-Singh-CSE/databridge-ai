@@ -21,12 +21,18 @@ const demoPayload = z
     path: ['failAtStep'],
   });
 
+/** `profile`: profile one source of the job's project (apps/ai-service handlers/profile.py). */
+const profilePayload = z.strictObject({ sourceId: objectId });
+
 /**
  * One entry per job type that can be started. A new type adds its payload schema here and its
  * handler in apps/ai-service/app/worker/handlers (the ai-service validates the payload again).
  */
 export const createJobBody = z.discriminatedUnion(
   'type',
-  [z.strictObject({ type: z.literal('demo'), payload: demoPayload })],
+  [
+    z.strictObject({ type: z.literal('demo'), payload: demoPayload }),
+    z.strictObject({ type: z.literal('profile'), payload: profilePayload }),
+  ],
   { error: 'unknown job type' },
 );

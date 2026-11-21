@@ -31,6 +31,14 @@ export function tooManyRows(maxRows: number): AppError {
   );
 }
 
+export function fileTooComplex(maxUncompressedBytes: number): AppError {
+  return new AppError(
+    422,
+    'FILE_TOO_COMPLEX',
+    `This Excel file is too large once unpacked (the limit is ${formatBytes(maxUncompressedBytes)}) or is compressed unusually much. Save it as CSV or split it, then upload it again.`,
+  );
+}
+
 export function sourceLimitReached(max: number): AppError {
   return new AppError(
     409,

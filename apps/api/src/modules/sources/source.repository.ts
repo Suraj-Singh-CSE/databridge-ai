@@ -23,6 +23,7 @@ function toSource(doc: StoredSource): Source {
     rowCount: doc.rowCount ?? null,
     columnCount: doc.columnCount ?? null,
     error: doc.error ? { code: doc.error.code, message: doc.error.message } : null,
+    profiledAt: doc.profiledAt ?? null,
     uploadedBy: doc.uploadedBy.toHexString(),
     createdAt: doc.createdAt,
     updatedAt: doc.updatedAt,
