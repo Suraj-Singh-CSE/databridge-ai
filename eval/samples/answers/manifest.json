@@ -1,0 +1,155 @@
+{
+  "generator_version": "1.1.0",
+  "seed": 7,
+  "people": 300,
+  "records_per_source": {
+    "crm": 143,
+    "billing": 151,
+    "support": 91
+  },
+  "total_records": 385,
+  "duplicate_records": 85,
+  "duplicate_rate": 0.2208,
+  "duplicate_rate_definition": "(records - distinct people) / records: the share of records that are an extra copy of a person already present in some system",
+  "records_in_multi_record_clusters": 153,
+  "people_by_number_of_systems": {
+    "1": 238,
+    "2": 47,
+    "3": 15
+  },
+  "within_system_duplicates": 8,
+  "noise_config": {
+    "name_typo": 0.08,
+    "name_initial": 0.05,
+    "name_swapped": 0.06,
+    "name_case": 0.1,
+    "extra_spaces": 0.05,
+    "phone_format_variant": 0.15,
+    "phone_missing": 0.05,
+    "email_missing": 0.08,
+    "email_case": 0.1,
+    "dob_missing": 0.05,
+    "date_format_variant": 0.05,
+    "city_alias": 0.2,
+    "city_misspelling": 0.04,
+    "city_missing": 0.03,
+    "pin_missing": 0.05,
+    "address_abbreviation": 0.2,
+    "address_missing": 0.04,
+    "within_system_duplicate": 0.025
+  },
+  "overlap_config": {
+    "systems_per_person": [
+      0.83,
+      0.14,
+      0.03
+    ],
+    "system_weights": {
+      "crm": 0.45,
+      "billing": 0.33,
+      "support": 0.22
+    }
+  },
+  "noise_applied": {
+    "address_abbreviation": {
+      "opportunities": 84,
+      "applied": 13,
+      "rate": 0.1548
+    },
+    "address_missing": {
+      "opportunities": 143,
+      "applied": 7,
+      "rate": 0.049
+    },
+    "city_alias": {
+      "opportunities": 198,
+      "applied": 50,
+      "rate": 0.2525
+    },
+    "city_missing": {
+      "opportunities": 385,
+      "applied": 8,
+      "rate": 0.0208
+    },
+    "city_misspelling": {
+      "opportunities": 327,
+      "applied": 13,
+      "rate": 0.0398
+    },
+    "date_format_variant": {
+      "opportunities": 282,
+      "applied": 20,
+      "rate": 0.0709
+    },
+    "dob_missing": {
+      "opportunities": 294,
+      "applied": 12,
+      "rate": 0.0408
+    },
+    "email_case": {
+      "opportunities": 355,
+      "applied": 44,
+      "rate": 0.1239
+    },
+    "email_missing": {
+      "opportunities": 385,
+      "applied": 30,
+      "rate": 0.0779
+    },
+    "extra_spaces": {
+      "opportunities": 762,
+      "applied": 41,
+      "rate": 0.0538
+    },
+    "name_case": {
+      "opportunities": 385,
+      "applied": 30,
+      "rate": 0.0779
+    },
+    "name_initial": {
+      "opportunities": 385,
+      "applied": 17,
+      "rate": 0.0442
+    },
+    "name_swapped": {
+      "opportunities": 257,
+      "applied": 21,
+      "rate": 0.0817
+    },
+    "name_typo": {
+      "opportunities": 385,
+      "applied": 35,
+      "rate": 0.0909
+    },
+    "phone_format_variant": {
+      "opportunities": 361,
+      "applied": 48,
+      "rate": 0.133
+    },
+    "phone_missing": {
+      "opportunities": 385,
+      "applied": 24,
+      "rate": 0.0623
+    },
+    "pin_missing": {
+      "opportunities": 143,
+      "applied": 7,
+      "rate": 0.049
+    },
+    "within_system_duplicate": {
+      "opportunities": 377,
+      "applied": 8,
+      "rate": 0.0212
+    }
+  },
+  "files_hash": "sha256 of each file; for .xlsx of its uncompressed zip entries",
+  "files": {
+    "crm_customers.csv": "8794d2f7d015d46661805f52c563dae1ce71dedaa5ce9404af97b98ee304360e",
+    "billing_export.xlsx": "51a9656a4439a5d88e7bf3db80bfb702fb9a841355b3db4bcd5c81524cd68cca",
+    "support_contacts.csv": "26490e7f9a0a43012ec264709f244dfbf510c55507e782833cc971eafe14e1dd",
+    "answers/target_schema.json": "a2553535a3a8b83cd89c55f9e166124422eab5a351871a9887b9228e10fdb5f8",
+    "answers/column_mapping.json": "a9432619b5e41d315a3fc46e969d07b9a18d39bc2494d9944a6b4c49a7111f05",
+    "answers/clusters.csv": "a7009a05875588cefc62dfc0232cc9e0a6624f359b9ebfc16f14ee131ab36d65",
+    "answers/golden_records.csv": "0b86a6ca614dca8ec9b685cc1c904708692fd1748b4e0987efb20e6920351c8e"
+  }
+}
