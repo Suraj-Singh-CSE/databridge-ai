@@ -1,6 +1,6 @@
 import '@testing-library/jest-dom/vitest';
 import { cleanup } from '@testing-library/react';
-import { afterAll, afterEach, beforeAll } from 'vitest';
+import { afterAll, afterEach, beforeAll, vi } from 'vitest';
 
 import { resetSessionForTests } from '@/lib/session';
 import { server } from '@/test/server';
@@ -13,6 +13,7 @@ afterEach(() => {
   cleanup();
   server.resetHandlers();
   resetSessionForTests();
+  vi.unstubAllGlobals();
 });
 
 afterAll(() => {

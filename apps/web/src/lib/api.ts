@@ -31,6 +31,8 @@ export interface RequestOptions {
   method?: 'GET' | 'POST' | 'PATCH' | 'DELETE';
   body?: unknown;
   signal?: AbortSignal;
+  /** Accept header; JSON unless a stream is wanted. */
+  accept?: string;
 }
 
 const GENERIC_MESSAGE = 'Something went wrong. Please try again.';
@@ -45,7 +47,7 @@ function isAuthRoute(path: string): boolean {
 }
 
 async function send(path: string, options: RequestOptions): Promise<Response> {
-  const headers = new Headers({ Accept: 'application/json' });
+  const headers = new Headers({ Accept: options.accept ?? 'application/json' });
   const token = getAccessToken();
   if (token) headers.set('Authorization', `Bearer ${token}`);
   if (options.body !== undefined) headers.set('Content-Type', 'application/json');
@@ -70,6 +72,25 @@ async function send(path: string, options: RequestOptions): Promise<Response> {
   }
 }
 
+/**
+ * Reads a parsed envelope (`body` is null when the response was not JSON): returns `data` or
+ * throws ApiError. Shared with the XMLHttpRequest upload (lib/upload.ts).
+ */
+export function unwrapEnvelope(status: number, body: unknown): unknown {
+  const ok = status >= 200 && status < 300;
+  const error = isRecord(body) ? body.error : null;
+  if (!ok || isRecord(error)) {
+    if (isRecord(error) && typeof error.code === 'string' && typeof error.message === 'string') {
+      throw new ApiError(status, error.code as ApiErrorCode, error.message, error.details ?? null);
+    }
+    throw new ApiError(status, 'INTERNAL_ERROR', GENERIC_MESSAGE);
+  }
+  if (!isRecord(body) || !('data' in body)) {
+    throw new ApiError(status, 'INTERNAL_ERROR', GENERIC_MESSAGE);
+  }
+  return body.data;
+}
+
 /** Reads the envelope: returns `data` or throws ApiError. A 204 resolves to undefined. */
 async function unwrap<T>(response: Response): Promise<T> {
   if (response.status === 204) return undefined as T;
@@ -80,23 +101,7 @@ async function unwrap<T>(response: Response): Promise<T> {
   } catch {
     // Not JSON (e.g. a proxy error page): handled as a generic error below.
   }
-
-  const error = isRecord(body) ? body.error : null;
-  if (!response.ok || isRecord(error)) {
-    if (isRecord(error) && typeof error.code === 'string' && typeof error.message === 'string') {
-      throw new ApiError(
-        response.status,
-        error.code as ApiErrorCode,
-        error.message,
-        error.details ?? null,
-      );
-    }
-    throw new ApiError(response.status, 'INTERNAL_ERROR', GENERIC_MESSAGE);
-  }
-  if (!isRecord(body) || !('data' in body)) {
-    throw new ApiError(response.status, 'INTERNAL_ERROR', GENERIC_MESSAGE);
-  }
-  return body.data as T;
+  return unwrapEnvelope(response.status, body) as T;
 }
 
 async function withRefreshLock<T>(task: () => Promise<T>): Promise<T> {
@@ -136,22 +141,60 @@ export function refreshSession(): Promise<AuthSession> {
   return refreshInFlight;
 }
 
-/** Calls the api and returns the envelope's `data`. */
-export async function api<T>(path: string, options: RequestOptions = {}): Promise<T> {
+/**
+ * Runs `attempt` with the current access token; on a 401 refreshes the session once (unless the
+ * token already changed meanwhile, e.g. another request or tab refreshed) and runs it again.
+ * `isUnauthorized` tells whether an attempt's result is a 401. Used by api(), the upload
+ * (XMLHttpRequest) and the job event stream (fetch streaming), so all share one refresh rule.
+ */
+export async function withSessionRetry<R>(
+  attempt: () => Promise<R>,
+  isUnauthorized: (result: R) => boolean,
+): Promise<R> {
   const tokenUsed = getAccessToken();
-  const response = await send(path, options);
-  if (response.status !== 401 || isAuthRoute(path)) return unwrap<T>(response);
+  const result = await attempt();
+  if (!isUnauthorized(result)) return result;
 
-  // The token may already have been replaced (another request or tab refreshed meanwhile).
   const current = getAccessToken();
   if (!current || current === tokenUsed) {
     try {
       await refreshSession();
     } catch {
-      return unwrap<T>(response); // throws the original 401
+      return result; // the caller reports the original 401
     }
   }
-  return unwrap<T>(await send(path, options));
+  return attempt();
+}
+
+/** Calls the api and returns the envelope's `data`. */
+export async function api<T>(path: string, options: RequestOptions = {}): Promise<T> {
+  const response = await withSessionRetry(
+    () => send(path, options),
+    (res) => res.status === 401 && !isAuthRoute(path),
+  );
+  return unwrap<T>(response);
+}
+
+/**
+ * A raw authorised GET for streaming responses (job events): bearer token, refresh cookie,
+ * one refresh-and-retry on 401. The caller reads the body; error bodies go through
+ * `errorFromResponse`.
+ */
+export function authorizedGet(path: string, signal: AbortSignal): Promise<Response> {
+  return withSessionRetry(
+    () => send(path, { signal, accept: 'text/event-stream' }),
+    (res) => res.status === 401,
+  );
+}
+
+/** The ApiError described by a failed response (its JSON envelope, or a generic one). */
+export async function errorFromResponse(response: Response): Promise<ApiError> {
+  try {
+    await unwrap<unknown>(response);
+  } catch (error) {
+    if (error instanceof ApiError) return error;
+  }
+  return new ApiError(response.status, 'INTERNAL_ERROR', GENERIC_MESSAGE);
 }
 
 /** Validation details as `{ fieldName: message }`, e.g. "body.email" becomes "email". */
