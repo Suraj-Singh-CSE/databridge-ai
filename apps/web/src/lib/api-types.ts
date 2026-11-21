@@ -261,3 +261,10 @@ export interface SourceMappings {
   columns: ColumnMapping[];
   summary: { total: number; high: number; medium: number; low: number; decided: number };
 }
+
+/** Result of "accept all High" (apps/api mapping.service.ts). */
+export interface AcceptHighResult {
+  accepted: number;
+  alreadyDecided: number;
+  conflicts: number;
+}

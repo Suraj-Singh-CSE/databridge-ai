@@ -1,5 +1,5 @@
 import { ChevronDown, ChevronRight } from 'lucide-react';
-import { Fragment, useState } from 'react';
+import { Fragment, useState, type ReactNode } from 'react';
 
 import { StatusPill } from '@/components/StatusPill';
 import { Button } from '@/components/ui/button';
@@ -14,8 +14,6 @@ import {
   targetLabel,
   transformLabel,
 } from './mapping-labels';
-
-const COLUMN_COUNT = 6;
 
 function TargetCell({
   target,
@@ -81,10 +79,13 @@ function Alternatives({ mapping }: { mapping: ColumnMapping }) {
 interface MappingTableProps {
   columns: ColumnMapping[];
   fields: ReadonlyMap<string, TargetField>;
+  /** Decision buttons for a row; the Actions column is left out when not given. */
+  renderActions?: ((mapping: ColumnMapping) => ReactNode) | undefined;
 }
 
 /** One row per source column; a row expands to show the other fields that were considered. */
-export function MappingTable({ columns, fields }: MappingTableProps) {
+export function MappingTable({ columns, fields, renderActions }: MappingTableProps) {
+  const columnCount = renderActions ? 7 : 6;
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
 
   const toggle = (name: string) => {
@@ -120,6 +121,11 @@ export function MappingTable({ columns, fields }: MappingTableProps) {
             <th scope="col" className="px-3 py-2.5 font-medium">
               Status
             </th>
+            {renderActions && (
+              <th scope="col" className="px-3 py-2.5 font-medium">
+                Actions
+              </th>
+            )}
           </tr>
         </thead>
         <tbody>
@@ -163,10 +169,11 @@ export function MappingTable({ columns, fields }: MappingTableProps) {
                       {STATUS_LABELS[mapping.status]}
                     </StatusPill>
                   </td>
+                  {renderActions && <td className="px-3 py-2">{renderActions(mapping)}</td>}
                 </tr>
                 {open && (
                   <tr id={detailsId} className="bg-muted/30">
-                    <td colSpan={COLUMN_COUNT}>
+                    <td colSpan={columnCount}>
                       <Alternatives mapping={mapping} />
                     </td>
                   </tr>

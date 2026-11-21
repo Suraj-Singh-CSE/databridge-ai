@@ -7,8 +7,9 @@ AI proposes, a human approves.
 **Status:** M1 (foundation) complete: monorepo, Docker + CI, API auth/roles/projects/audit,
 AI service with LLM gateway and PII masking, web app shell with sign-in and projects. M2 (upload
 and profiling) done: uploads, background jobs with live progress and the column profiler. M3
-(mapping) in progress: target schema and the hybrid column-mapping engine (API) are done; the
-Mapping Review screen is next.
+(mapping) in progress: target schema, the hybrid column-mapping engine (API) and the Mapping
+Review screen (review, accept/reject/change, accept all High, run mapping with live progress) are
+done; end-to-end tests are next.
 
 Approved designs (Figma, shadcn/ui kit): [all screens](docs/design/all-screens.png).
 
@@ -198,6 +199,13 @@ curl -s http://localhost:8080/api/v1/projects/$PROJECT/sources/$SOURCE/mappings 
   `parse_date:DD/MM/YYYY`...) and up to two `alternatives`. `run.method` is `hybrid` (rules plus
   the LLM's ranking) or `rules` (the LLM failed or is off: the job still succeeds). `stale` is true
   when the schema changed after the run.
+- **Mapping Review screen** (web, step 3): only `profiled` files can be mapped. Owners, admins and
+  data engineers run or re-run mapping (re-run asks first, since decisions are kept but may go out
+  of date) and see live progress with Cancel. They and data stewards accept, reject or change each
+  column (any non-generated field, Record ID or Not mapped, plus a cleaning step) and can accept
+  every pending High suggestion at once; viewers get a read-only page. A clash with another
+  column's decision (`409`) is shown in plain words. When no column is pending the page says
+  "Mapping approved".
 - **Decisions** (`PATCH` body): `{ "decision": "accept" }`, `{ "decision": "reject" }` or
   `{ "decision": "override", "role", "target", "transform"? }`. The target must be a
   non-generated field of the current schema (`400`); two columns of one source cannot be mapped
