@@ -49,24 +49,24 @@ moves backwards; a stale attempt cannot overwrite a newer one) and is published 
 A job type is a payload model plus a handler, registered in `app/worker/handlers/__init__.py`:
 
 ```python
-class ProfilePayload(BaseModel):
+class CountPayload(BaseModel):
     source_ids: list[str] = Field(alias="sourceIds", min_length=1)
 
 
-def run_profile(ctx: JobContext, payload: ProfilePayload) -> JobResult:
+def run_count(ctx: JobContext, payload: CountPayload) -> JobResult:
     total = len(payload.source_ids)
     for index, source_id in enumerate(payload.source_ids, start=1):
         if ctx.is_cancelled():
             raise JobCancelledError(ctx.job_id)
         ...  # the work; call ctx.heartbeat() during long steps
-        ctx.report(index * 100 // total, f"Profiled {index} of {total} files")
-    return {"profiled": total}  # a small summary, at most 16 KiB of JSON
+        ctx.report(index * 100 // total, f"Counted {index} of {total} files")
+    return {"counted": total}  # a small summary, at most 16 KiB of JSON
 
 
-registry.register("profile", ProfilePayload, run_profile)
+registry.register("count", CountPayload, run_count)
 ```
 
-- `raise JobFailedError("SOURCE_MISSING", "The file for CRM is missing.")` fails the job at once
+- `raise JobFailedError("FILE_MISSING", "The file for CRM is missing.")` fails the job at once
   with that code and message (shown to the user; no retry).
 - Connection errors (`pymongo` `ConnectionFailure`, Redis `ConnectionError`/`TimeoutError`) are
   retried with backoff up to `JOB_MAX_ATTEMPTS` (3); any other exception fails the job with
@@ -79,6 +79,27 @@ Tests: `tests/test_worker_*.py` use mongomock and fakeredis; `test_worker_integr
 in-process Celery worker against Redis at `TEST_REDIS_URL` (default `redis://localhost:6379/15`,
 flushed; skipped locally when unreachable, required in CI) and MongoDB at `TEST_MONGODB_URI`
 (mongomock when unset).
+
+## Column profiler (`app/profiling/`, job type `profile`)
+
+`app/worker/handlers/profile.py` runs one `profile` job: find the source (`sources`, same project
+as the job), resolve its file on the read-only uploads volume (`UPLOAD_DIR`; the key must be the one
+the api builds from the ids, and the resolved path must stay inside the folder), read it, profile
+every column and save the result. Design notes: [ADR 0011](../../docs/adr/0011-column-profiling.md).
+
+| Module          | What it does                                                                     |
+| --------------- | -------------------------------------------------------------------------------- |
+| `zip_guard.py`  | Inflates every XLSX entry and counts real bytes: size cap, ratio cap, lying sizes |
+| `reader.py`     | CSV (Polars) or first XLSX sheet (fastexcel/calamine) into a frame of strings     |
+| `profiler.py`   | Type inference (95% rule), counts, ranges, patterns, quality flags                |
+| `patterns.py`   | Email, Indian mobile, PIN, PAN, Aadhaar-like and date regexes and formats         |
+| `display.py`    | Masks top values and samples (`mask_text`, plus shapes in personal columns)       |
+| `store.py`      | `column_profiles` upserts per run (`runId`) and source status updates             |
+
+Settings: `UPLOAD_DIR`, `MAX_UPLOAD_ROWS` (200,000), `XLSX_MAX_UNCOMPRESSED_BYTES` (200 MiB),
+`XLSX_MAX_COMPRESSION_RATIO` (100). Tests: `tests/test_profiling_*.py` (rules, reader, zip guard)
+and `tests/test_profile_handler.py` (the job end to end on mongomock, including the `eval/samples`
+CSV and XLSX).
 
 ## LLM gateway (`app/llm/`)
 

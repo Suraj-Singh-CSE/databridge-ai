@@ -408,7 +408,7 @@ def test_job_failed_error_needs_an_upper_snake_code() -> None:
 def test_registry_rejects_duplicates_and_lists_names() -> None:
     registry = build_registry()
 
-    assert registry.names() == ["demo"]
+    assert registry.names() == ["demo", "profile"]
     assert registry.get("nope") is None
     with pytest.raises(ValueError, match="already registered"):
         registry.register("demo", Empty, lambda _ctx, _p: {})

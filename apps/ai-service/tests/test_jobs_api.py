@@ -122,3 +122,16 @@ def test_cancel_returns_503_when_the_queue_is_down(
 
     assert response.status_code == 503
     assert response.json()["error"]["code"] == "QUEUE_UNAVAILABLE"
+
+
+def test_enqueue_accepts_a_profile_job_and_validates_its_source_id(
+    client: TestClient, job_queue: FakeJobQueue
+) -> None:
+    ok = client.post(JOBS, json=body(type="profile", payload={"sourceId": "a" * 24}), headers=AUTH)
+    bad = client.post(
+        JOBS, json=body(type="profile", payload={"sourceId": "../../etc"}), headers=AUTH
+    )
+
+    assert ok.status_code == 202
+    assert [q.payload for q in job_queue.enqueued] == [{"sourceId": "a" * 24}]
+    assert bad.status_code == 400
