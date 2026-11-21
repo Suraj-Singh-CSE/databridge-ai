@@ -2,6 +2,8 @@ import { AppError } from '../../errors.js';
 import type { Page } from '../../http.js';
 import { toPageRequest } from '../../http.js';
 import type { Repositories } from '../../repositories.js';
+import { projectPrefix } from '../../storage/keys.js';
+import type { FileStorage } from '../../storage/storage.types.js';
 import type { AuditService } from '../audit/audit.service.js';
 import type { AuditEntry } from '../audit/audit.types.js';
 import type { AccessClaims } from '../auth/tokens.js';
@@ -40,8 +42,9 @@ function snapshot(project: Project): Record<string, unknown> {
 const PROJECT_GONE = 'Project not found.';
 
 export function createProjectService(
-  repos: Pick<Repositories, 'projects' | 'users' | 'audit'>,
+  repos: Pick<Repositories, 'projects' | 'users' | 'sources' | 'audit'>,
   audit: AuditService,
+  storage: FileStorage,
 ): ProjectService {
   function record(
     actor: Actor,
@@ -96,6 +99,10 @@ export function createProjectService(
     },
 
     async remove(actor, project) {
+      // Files, then source records, then the project: each step is idempotent, so if one fails
+      // the project still exists and the owner can simply delete it again.
+      await storage.deletePrefix(projectPrefix(project.id));
+      await repos.sources.deleteByProject(project.id);
       const deleted = await repos.projects.delete(project.id);
       if (!deleted) throw AppError.notFound(PROJECT_GONE);
       await record(actor, project, 'project.delete', { before: snapshot(project) });

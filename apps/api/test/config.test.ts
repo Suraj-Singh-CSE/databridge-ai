@@ -76,4 +76,53 @@ describe('loadConfig', () => {
   ] as const)('parses TRUST_PROXY=%j', (value, expected) => {
     expect(loadConfig({ NODE_ENV: 'test', TRUST_PROXY: value }).TRUST_PROXY).toBe(expected);
   });
+
+  it('defaults the upload and storage settings', () => {
+    const config = loadConfig({ NODE_ENV: 'test' });
+
+    expect(config).toMatchObject({
+      STORAGE_DRIVER: 'local',
+      UPLOAD_DIR: './data/uploads',
+      MAX_UPLOAD_BYTES: 50 * 1024 * 1024,
+      MAX_UPLOAD_ROWS: 200_000,
+      MAX_SOURCES_PER_PROJECT: 10,
+      UPLOAD_RATE_LIMIT_MAX: 30,
+      UPLOAD_RATE_LIMIT_WINDOW_MS: 3_600_000,
+      S3_FORCE_PATH_STYLE: false,
+    });
+    expect(config.S3_BUCKET).toBeUndefined();
+  });
+
+  it('treats empty optional S3 variables (as compose passes them) as unset', () => {
+    const config = loadConfig({ NODE_ENV: 'test', S3_BUCKET: '', S3_ENDPOINT: '' });
+
+    expect(config.S3_BUCKET).toBeUndefined();
+    expect(config.S3_ENDPOINT).toBeUndefined();
+  });
+
+  it('requires a bucket and region for STORAGE_DRIVER=s3, and both keys or neither', () => {
+    const run = () =>
+      loadConfig({ NODE_ENV: 'test', STORAGE_DRIVER: 's3', S3_ACCESS_KEY_ID: 'only-the-id' });
+
+    expect(run).toThrow(/S3_BUCKET: is required when STORAGE_DRIVER=s3/);
+    expect(run).toThrow(/S3_REGION: is required when STORAGE_DRIVER=s3/);
+    expect(run).toThrow(/S3_SECRET_ACCESS_KEY: set both/);
+    expect(run).not.toThrow(/only-the-id/);
+  });
+
+  it('rejects invalid upload limits and storage settings', () => {
+    const run = () =>
+      loadConfig({
+        NODE_ENV: 'test',
+        STORAGE_DRIVER: 'ftp',
+        MAX_UPLOAD_BYTES: '0',
+        MAX_UPLOAD_ROWS: 'many',
+        S3_ENDPOINT: 'not a url',
+      });
+
+    expect(run).toThrow(/STORAGE_DRIVER/);
+    expect(run).toThrow(/MAX_UPLOAD_BYTES/);
+    expect(run).toThrow(/MAX_UPLOAD_ROWS/);
+    expect(run).toThrow(/S3_ENDPOINT: must be a valid URL/);
+  });
 });

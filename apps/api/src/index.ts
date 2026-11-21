@@ -3,6 +3,7 @@ import { ConfigError, loadConfig } from './config.js';
 import { connectDb, disconnectDb } from './db.js';
 import { createLogger } from './logger.js';
 import { createMongoRepositories } from './repositories.js';
+import { createStorage, prepareStorage } from './storage/index.js';
 
 async function main(): Promise<void> {
   let config;
@@ -20,7 +21,11 @@ async function main(): Promise<void> {
   await connectDb(config.MONGODB_URI);
   logger.info('connected to mongodb');
 
-  const app = createApp({ config, logger, repos: createMongoRepositories() });
+  const storage = createStorage(config);
+  await prepareStorage(storage);
+  logger.info({ driver: config.STORAGE_DRIVER }, 'file storage ready');
+
+  const app = createApp({ config, logger, repos: createMongoRepositories(), storage });
   const server = app.listen(config.PORT, () => {
     logger.info({ port: config.PORT, env: config.NODE_ENV }, 'api listening');
   });

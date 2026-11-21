@@ -75,9 +75,51 @@ All routes live under `/api/v1` and answer in one envelope: `{ "data": ..., "err
 | DELETE | `/projects/:id/members/:userId`  | owner, admin (not the owner)         | 200 `{ project }`                                |
 | GET    | `/projects/:id/audit?page&limit` | any member, owner, admin             | 200 `{ items, page, limit, total }` newest first |
 
+**Sources (uploaded files).** A source is one CSV or XLSX file in a project. Design notes:
+[ADR 0009](docs/adr/0009-file-uploads-and-storage.md). Paths below are under
+`/projects/:projectId/sources`. Reading is open to every project member (viewer and up); writing
+needs owner, admin or a `data_engineer` member.
+
+| Method | Path                       | Who                         | Result                                         |
+| ------ | -------------------------- | --------------------------- | ---------------------------------------------- |
+| POST   | `/`                        | owner, admin, data_engineer | 201 `{ source }` (multipart, see below)        |
+| GET    | `/`                        | any member, owner, admin    | 200 `{ items }` newest first (no pagination)   |
+| GET    | `/:sourceId`               | any member, owner, admin    | 200 `{ source }`                               |
+| PATCH  | `/:sourceId`               | owner, admin, data_engineer | 200 `{ source }` (`name`, `systemName`/`null`) |
+| DELETE | `/:sourceId`               | owner, admin, data_engineer | 204 (record and stored file)                   |
+| GET    | `/:sourceId/preview?limit` | any member, owner, admin    | 200 `{ columns, rows }` (limit 1-50, def. 20)  |
+
+- **Upload**: `multipart/form-data` with one file in field `file`, plus optional `name` (1-80
+  characters; defaults to the filename without extension) and `systemName` (1-40, e.g. `CRM`).
+  The file is streamed to storage, never held in memory.
+- **Accepted files**: `.csv` (UTF-8, BOM allowed) and `.xlsx` only, checked by content as well as
+  extension (an XLSX must be a ZIP file; a CSV must be UTF-8 text with a header line). Anything
+  else is `400 UNSUPPORTED_FILE`.
+- **Limits** (env-configurable): 50 MB per file (`413 PAYLOAD_TOO_LARGE`), 200,000 data rows per
+  CSV (`413 TOO_MANY_ROWS`; XLSX rows are checked by the profiler), 10 sources per project
+  (`409 LIMIT_REACHED`), 30 uploads per user per hour (`429 RATE_LIMITED`). The same file twice in
+  one project is `409 CONFLICT`.
+- **Source fields**: `id, projectId, name, systemName, originalFilename, format (csv|xlsx),
+sizeBytes, sha256, status (uploaded|profiling|ready|failed), rowCount, columnCount, error,
+uploadedBy, createdAt, updatedAt`. `rowCount`/`columnCount` are set at upload for CSV and stay
+  `null` for XLSX until profiling (M2.4).
+- **Preview**: header plus the first rows (first worksheet for XLSX), at most 50 columns and 200
+  characters per cell (longer values end with `…`). Shown only to project members; never sent
+  to an LLM.
+- Deleting a project also deletes its sources and stored files.
+
+Example:
+
+```bash
+curl -X POST http://localhost:8080/api/v1/projects/$PROJECT/sources \
+  -H "Authorization: Bearer $TOKEN" \
+  -F "file=@eval/samples/crm_customers.csv" -F name="CRM customers" -F systemName=CRM
+```
+
 Errors: `VALIDATION_ERROR` 400 (with `details: [{ field, message }]`), `UNAUTHORIZED` 401,
 `FORBIDDEN` 403, `NOT_FOUND` 404 (also for projects you are not a member of), `CONFLICT` 409,
-`PAYLOAD_TOO_LARGE` 413, `RATE_LIMITED` 429.
+`LIMIT_REACHED` 409, `UNSUPPORTED_FILE` 400, `PAYLOAD_TOO_LARGE` 413, `TOO_MANY_ROWS` 413,
+`RATE_LIMITED` 429.
 
 **Tests.** `npm test` runs unit tests and the full API suite against in-memory repositories. The
 same suite also runs against MongoDB when `MONGODB_URI` (default `mongodb://localhost:27017/databridge_test`)
@@ -138,7 +180,8 @@ docker compose --env-file .env -f infra/docker-compose.yml up --build
 | http://localhost:4000/api/v1/health | API health, direct                              |
 
 The AI service, MongoDB and Redis are not published to your machine; they are reachable only inside
-the compose network (the AI service is internal by design). Stop with `Ctrl+C`; remove containers
+the compose network (the AI service is internal by design). Uploaded files live in the `uploads`
+volume (written by the api, mounted read-only in the AI service). Stop with `Ctrl+C`; remove containers
 and data volumes with `docker compose --env-file .env -f infra/docker-compose.yml down -v`.
 
 `--env-file .env` is needed because the compose file lives in `infra/`, so Compose would not find the
@@ -154,7 +197,8 @@ GitHub Actions (`.github/workflows/ci.yml`) runs on every pull request and on pu
 - **eval**: the same checks for the ground-truth data generator in `eval/` ([eval/README](eval/README.md)).
 - **docker**: builds every image, starts the full stack with throwaway secrets, and smoke-tests the
   web root, the api health route (direct and through the nginx proxy), register and `/auth/me`
-  through the proxy, that the AI service is not
+  through the proxy, source uploads through the proxy (CSV and XLSX samples, list with row count,
+  preview, an `.exe` rejected, the file visible read-only to the AI service), that the AI service is not
   reachable from the host, and that containers run as non-root. Then it runs the Playwright e2e
   tests against the stack and uploads screenshots (`web-screenshots`) and, on failure, the
   Playwright report (`playwright-report`).

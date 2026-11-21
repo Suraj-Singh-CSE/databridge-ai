@@ -4,6 +4,7 @@ import { DuplicateKeyError } from '../../src/errors.js';
 import type { AuditEntry } from '../../src/modules/audit/audit.types.js';
 import type { RefreshTokenRecord } from '../../src/modules/auth/refresh-token.types.js';
 import type { Project } from '../../src/modules/projects/project.types.js';
+import type { Source } from '../../src/modules/sources/source.types.js';
 import type { User } from '../../src/modules/users/user.types.js';
 import type { Repositories } from '../../src/repositories.js';
 
@@ -22,6 +23,7 @@ export function createMemoryRepositories(): Repositories {
   const users = new Map<string, User & { passwordHash: string }>();
   const tokens = new Map<string, RefreshTokenRecord>();
   const projects = new Map<string, Project>();
+  const sources = new Map<string, Source>();
   const audit: AuditEntry[] = [];
   let firstAdminClaimed = false;
 
@@ -175,6 +177,73 @@ export function createMemoryRepositories(): Repositories {
         project.members = project.members.filter((m) => m.userId !== userId);
         project.updatedAt = tick();
         return clone(project);
+      },
+    },
+
+    sources: {
+      async create(input) {
+        await Promise.resolve();
+        const taken = [...sources.values()].some(
+          (s) => s.projectId === input.projectId && s.sha256 === input.sha256,
+        );
+        if (taken) throw new DuplicateKeyError('file already in project');
+        const at = tick();
+        const source: Source = {
+          ...input,
+          status: 'uploaded',
+          error: null,
+          createdAt: at,
+          updatedAt: at,
+        };
+        sources.set(source.id, source);
+        return structuredClone(source);
+      },
+      async findById(projectId, id) {
+        await Promise.resolve();
+        const source = sources.get(id);
+        return source?.projectId === projectId ? structuredClone(source) : null;
+      },
+      async findBySha256(projectId, sha256) {
+        await Promise.resolve();
+        const source = [...sources.values()].find(
+          (s) => s.projectId === projectId && s.sha256 === sha256,
+        );
+        return source ? structuredClone(source) : null;
+      },
+      async listByProject(projectId) {
+        await Promise.resolve();
+        return [...sources.values()]
+          .filter((s) => s.projectId === projectId)
+          .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
+          .map((s) => structuredClone(s));
+      },
+      async countByProject(projectId) {
+        await Promise.resolve();
+        return [...sources.values()].filter((s) => s.projectId === projectId).length;
+      },
+      async update(projectId, id, patch) {
+        await Promise.resolve();
+        const source = sources.get(id);
+        if (source?.projectId !== projectId) return null;
+        const defined = Object.entries(patch).filter(([, value]) => value !== undefined);
+        Object.assign(source, Object.fromEntries(defined) as Partial<Source>);
+        source.updatedAt = tick();
+        return structuredClone(source);
+      },
+      async delete(projectId, id) {
+        await Promise.resolve();
+        if (sources.get(id)?.projectId !== projectId) return false;
+        return sources.delete(id);
+      },
+      async deleteByProject(projectId) {
+        await Promise.resolve();
+        let deleted = 0;
+        for (const [id, source] of sources) {
+          if (source.projectId !== projectId) continue;
+          sources.delete(id);
+          deleted += 1;
+        }
+        return deleted;
       },
     },
 

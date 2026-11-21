@@ -15,6 +15,14 @@ const SECRET_KEYS = ['JWT_ACCESS_SECRET', 'JWT_REFRESH_SECRET', 'AI_SERVICE_TOKE
 const PLACEHOLDER_MARKER = 'change-me';
 
 const required = () => z.string({ error: 'is required' });
+
+/** Optional string where an empty value (e.g. `S3_ENDPOINT=` in compose) means "not set". */
+const optionalString = () =>
+  z.preprocess((value) => (value === '' ? undefined : value), z.string().trim().min(1).optional());
+
+const positiveInt = (fallback: number) => z.coerce.number().int().min(1).default(fallback);
+
+const MIB = 1024 * 1024;
 const secret = required().min(32, 'must be at least 32 characters');
 
 /**
@@ -54,8 +62,51 @@ const envSchema = z
       .int()
       .min(1000)
       .default(15 * 60 * 1000),
+
+    // File uploads and storage (ADR 0009).
+    STORAGE_DRIVER: z.enum(['local', 's3']).default('local'),
+    UPLOAD_DIR: z.string().trim().min(1).default('./data/uploads'),
+    S3_BUCKET: optionalString(),
+    S3_REGION: optionalString(),
+    S3_ENDPOINT: z.preprocess(
+      (value) => (value === '' ? undefined : value),
+      z.url({ error: 'must be a valid URL' }).optional(),
+    ),
+    S3_FORCE_PATH_STYLE: z
+      .enum(['true', 'false'])
+      .default('false')
+      .transform((value) => value === 'true'),
+    S3_ACCESS_KEY_ID: optionalString(),
+    S3_SECRET_ACCESS_KEY: optionalString(),
+    MAX_UPLOAD_BYTES: positiveInt(50 * MIB),
+    MAX_UPLOAD_ROWS: positiveInt(200_000),
+    MAX_SOURCES_PER_PROJECT: positiveInt(10),
+    UPLOAD_RATE_LIMIT_MAX: positiveInt(30),
+    UPLOAD_RATE_LIMIT_WINDOW_MS: z.coerce
+      .number()
+      .int()
+      .min(1000)
+      .default(60 * 60 * 1000),
   })
   .superRefine((env, ctx) => {
+    if (env.STORAGE_DRIVER === 's3') {
+      for (const key of ['S3_BUCKET', 'S3_REGION'] as const) {
+        if (!env[key]) {
+          ctx.addIssue({
+            code: 'custom',
+            path: [key],
+            message: 'is required when STORAGE_DRIVER=s3',
+          });
+        }
+      }
+      if (!env.S3_ACCESS_KEY_ID !== !env.S3_SECRET_ACCESS_KEY) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['S3_SECRET_ACCESS_KEY'],
+          message: 'set both S3_ACCESS_KEY_ID and S3_SECRET_ACCESS_KEY, or neither',
+        });
+      }
+    }
     if (env.NODE_ENV !== 'production') return;
     for (const key of SECRET_KEYS) {
       if (env[key].toLowerCase().includes(PLACEHOLDER_MARKER)) {

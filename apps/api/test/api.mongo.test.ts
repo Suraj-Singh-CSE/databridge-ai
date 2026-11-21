@@ -4,10 +4,12 @@ import { afterAll, describe, expect, it } from 'vitest';
 import { disconnectDb } from '../src/db.js';
 import { AuditLogModel } from '../src/modules/audit/audit.model.js';
 import { RefreshTokenModel } from '../src/modules/auth/refresh-token.model.js';
+import { SourceModel } from '../src/modules/sources/source.model.js';
 import { UserModel } from '../src/modules/users/user.model.js';
 import { createMongoRepositories } from '../src/repositories.js';
 
 import { defineApiSuite } from './support/api-suite.js';
+import { defineSourcesSuite } from './support/sources-suite.js';
 import { clearDb, connectTestDb } from './support/mongo.js';
 
 const available = await connectTestDb();
@@ -16,13 +18,16 @@ afterAll(async () => {
   if (available) await disconnectDb();
 });
 
+const mongoHarness = {
+  async setup() {
+    await clearDb();
+    return createMongoRepositories();
+  },
+};
+
 describe.skipIf(!available)('MongoDB', () => {
-  defineApiSuite('MongoDB repositories', {
-    async setup() {
-      await clearDb();
-      return createMongoRepositories();
-    },
-  });
+  defineApiSuite('MongoDB repositories', mongoHarness);
+  defineSourcesSuite('MongoDB repositories', mongoHarness);
 
   describe('schema guarantees', () => {
     it('enforces unique, lowercased emails at the index level', async () => {
@@ -78,6 +83,17 @@ describe.skipIf(!available)('MongoDB', () => {
       );
       await expect(AuditLogModel.deleteMany({})).rejects.toThrow('append-only');
       expect(await AuditLogModel.countDocuments()).toBe(1);
+    });
+
+    it('indexes sources by project and creation time, unique by sha256 per project', async () => {
+      const indexes = await SourceModel.collection.indexes();
+
+      expect(indexes).toContainEqual(
+        expect.objectContaining({ key: { projectId: 1, createdAt: -1 } }),
+      );
+      expect(indexes).toContainEqual(
+        expect.objectContaining({ key: { projectId: 1, sha256: 1 }, unique: true }),
+      );
     });
 
     it('lets only one caller claim the first admin slot', async () => {
