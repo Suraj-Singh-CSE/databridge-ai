@@ -158,8 +158,6 @@ GitHub Actions (`.github/workflows/ci.yml`) runs on every pull request and on pu
   tests against the stack and uploads screenshots (`web-screenshots`) and, on failure, the
   Playwright report (`playwright-report`).
 
-Contributor rules: see [CLAUDE.md](CLAUDE.md). Design decisions: see [docs/adr](docs/adr).
-
 ## License
 
 [MIT](LICENSE)
