@@ -56,6 +56,12 @@ with the `X-Service-Token` header. The AI service is never exposed publicly.
 
 - Branch per task: `feat/<area>-<short-name>`, `chore/...`, `fix/...`. Conventional commit messages.
 - Open a PR into `main`; CI must be green; the lead reviewer approves before merge. Never force-push `main`.
+- **Commit identity (required):** every commit's author AND committer is
+  `Suraj Singh <117113315+Suraj-Singh-CSE@users.noreply.github.com>`. Set both, e.g.
+  `GIT_AUTHOR_NAME`, `GIT_AUTHOR_EMAIL`, `GIT_COMMITTER_NAME`, `GIT_COMMITTER_EMAIL`. Never use any other
+  email (a placeholder like `noreply@example.com` attributes commits to a stranger's account).
+- **No tool attribution:** commit messages and PR descriptions contain only the change description —
+  no `Co-Authored-By`, session links, or "Generated with/by …" footers.
 
 ## Definition of done (checked by the lead reviewer for every task)
 
