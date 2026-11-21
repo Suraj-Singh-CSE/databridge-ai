@@ -151,6 +151,57 @@ jobs:
           curl -sf http://localhost:8080/api/v1/auth/me -H "Authorization: Bearer $token" \
             | jq -e '.data.user.email == "smoke@example.com"'
 
+      - name: Upload smoke test through the nginx proxy (sources)
+        run: |
+          set -euo pipefail
+          api=http://localhost:8080/api/v1
+          token=$(curl -sS --fail-with-body -X POST "$api/auth/login" \
+            -H 'Content-Type: application/json' \
+            -d '{"email":"smoke@example.com","password":"smoke-test-password"}' | jq -r '.data.accessToken')
+          auth="Authorization: Bearer $token"
+          project=$(curl -sS --fail-with-body -X POST "$api/projects" -H "$auth" \
+            -H 'Content-Type: application/json' -d '{"name":"Smoke uploads"}' | jq -r '.data.project.id')
+          sources="$api/projects/$project/sources"
+          echo "project $project"
+
+          csv=$(curl -sS --fail-with-body -X POST "$sources" -H "$auth" \
+            -F "file=@eval/samples/crm_customers.csv;type=text/csv" -F name=CRM -F systemName=CRM)
+          echo "upload crm_customers.csv -> $(echo "$csv" | jq -c '.data.source | {id, name, format, sizeBytes, rowCount, columnCount, status}')"
+          echo "$csv" | jq -e '.data.source.rowCount == 143 and .data.source.columnCount == 10' > /dev/null
+          csv_id=$(echo "$csv" | jq -r '.data.source.id')
+
+          xlsx=$(curl -sS --fail-with-body -X POST "$sources" -H "$auth" \
+            -F "file=@eval/samples/billing_export.xlsx" -F systemName=Billing)
+          echo "upload billing_export.xlsx -> $(echo "$xlsx" | jq -c '.data.source | {id, name, format, sizeBytes, rowCount}')"
+          xlsx_id=$(echo "$xlsx" | jq -r '.data.source.id')
+
+          list=$(curl -sS --fail-with-body "$sources" -H "$auth")
+          echo "list -> $(echo "$list" | jq -c '[.data.items[] | {name, format, rowCount}]')"
+          echo "$list" | jq -e --arg id "$csv_id" \
+            '.data.items | map(select(.id == $id and .rowCount == 143)) | length == 1' > /dev/null
+
+          preview=$(curl -sS --fail-with-body "$sources/$csv_id/preview?limit=3" -H "$auth")
+          echo "preview csv -> columns $(echo "$preview" | jq -c '.data.columns'), $(echo "$preview" | jq '.data.rows | length') rows"
+          echo "$preview" | jq -e '.data.columns[0] == "cust_id" and (.data.rows | length) == 3' > /dev/null
+          preview=$(curl -sS --fail-with-body "$sources/$xlsx_id/preview?limit=3" -H "$auth")
+          echo "preview xlsx -> columns $(echo "$preview" | jq -c '.data.columns'), $(echo "$preview" | jq '.data.rows | length') rows"
+          echo "$preview" | jq -e '.data.columns[0] == "CustomerID" and (.data.rows | length) == 3' > /dev/null
+
+          printf 'MZ not really a program' > /tmp/setup.exe
+          code=$(curl -sS -o /tmp/reject -w '%{http_code}' -X POST "$sources" -H "$auth" -F "file=@/tmp/setup.exe")
+          echo "upload setup.exe -> $code $(cat /tmp/reject)"
+          test "$code" = 400
+          jq -e '.error.code == "UNSUPPORTED_FILE"' /tmp/reject > /dev/null
+
+          # Stored on the shared "uploads" volume: written by api, readable (read-only) by ai-service.
+          $COMPOSE exec -T api ls -ln "/data/uploads/projects/$project/sources/$csv_id/"
+          echo "ai-service reads header: $($COMPOSE exec -T ai-service head -n 1 "/data/uploads/projects/$project/sources/$csv_id/original.csv")"
+          if $COMPOSE exec -T ai-service touch /data/uploads/should-fail 2> /dev/null; then
+            echo "ai-service must mount uploads read-only" >&2
+            exit 1
+          fi
+          echo "ok: uploads volume is read-only in ai-service"
+
       - name: AI service is not published to the host
         run: |
           if curl -s --max-time 3 http://localhost:8000/internal/v1/health; then

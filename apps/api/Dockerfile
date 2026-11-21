@@ -29,6 +29,10 @@ COPY --from=prod-deps --chown=node:node /app/package.json ./package.json
 COPY --from=build --chown=node:node /app/apps/api/package.json ./apps/api/package.json
 COPY --from=build --chown=node:node /app/apps/api/dist ./apps/api/dist
 WORKDIR /app/apps/api
+# Upload storage for STORAGE_DRIVER=local. Owned by the non-root user; a named volume mounted
+# here starts with this ownership (Docker copies it into an empty volume).
+ENV UPLOAD_DIR=/data/uploads
+RUN mkdir -p /data/uploads && chown node:node /data/uploads
 USER node
 EXPOSE 4000
 HEALTHCHECK --interval=10s --timeout=3s --start-period=10s --retries=5 \
