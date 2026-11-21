@@ -1,0 +1,127 @@
+[
+  {
+    "source": "crm",
+    "column": "cust_id",
+    "target": "customer_id"
+  },
+  {
+    "source": "crm",
+    "column": "cust_nm",
+    "target": "full_name"
+  },
+  {
+    "source": "crm",
+    "column": "ph",
+    "target": "phone"
+  },
+  {
+    "source": "crm",
+    "column": "email_id",
+    "target": "email"
+  },
+  {
+    "source": "crm",
+    "column": "dob",
+    "target": "date_of_birth"
+  },
+  {
+    "source": "crm",
+    "column": "gender",
+    "target": null
+  },
+  {
+    "source": "crm",
+    "column": "addr",
+    "target": "address"
+  },
+  {
+    "source": "crm",
+    "column": "city",
+    "target": "city"
+  },
+  {
+    "source": "crm",
+    "column": "pin",
+    "target": "pin_code"
+  },
+  {
+    "source": "crm",
+    "column": "created_on",
+    "target": null
+  },
+  {
+    "source": "billing",
+    "column": "CustomerID",
+    "target": "customer_id"
+  },
+  {
+    "source": "billing",
+    "column": "CustomerName",
+    "target": "full_name"
+  },
+  {
+    "source": "billing",
+    "column": "mobile_no",
+    "target": "phone"
+  },
+  {
+    "source": "billing",
+    "column": "EMAIL",
+    "target": "email"
+  },
+  {
+    "source": "billing",
+    "column": "birth_date",
+    "target": "date_of_birth"
+  },
+  {
+    "source": "billing",
+    "column": "BillingCity",
+    "target": "city"
+  },
+  {
+    "source": "billing",
+    "column": "PAN",
+    "target": null
+  },
+  {
+    "source": "billing",
+    "column": "plan",
+    "target": null
+  },
+  {
+    "source": "billing",
+    "column": "amount_due",
+    "target": null
+  },
+  {
+    "source": "support",
+    "column": "ticket_ref",
+    "target": null
+  },
+  {
+    "source": "support",
+    "column": "client_full_name",
+    "target": "full_name"
+  },
+  {
+    "source": "support",
+    "column": "contact",
+    "target": "phone"
+  },
+  {
+    "source": "support",
+    "column": "mail",
+    "target": "email"
+  },
+  {
+    "source": "support",
+    "column": "location",
+    "target": "city"
+  },
+  {
+    "source": "support",
+    "column": "last_contacted",
+    "target": null
+  }
+]
