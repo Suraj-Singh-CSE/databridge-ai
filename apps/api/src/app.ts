@@ -17,7 +17,10 @@ import { createPasswordHasher, type PasswordHasher } from './modules/auth/passwo
 import { createTokenService } from './modules/auth/tokens.js';
 import { createProjectRouter } from './modules/projects/project.routes.js';
 import { createProjectService } from './modules/projects/project.service.js';
+import { createSourceRouter } from './modules/sources/source.routes.js';
+import { createSourceService } from './modules/sources/source.service.js';
 import type { Repositories } from './repositories.js';
+import { createStorage, type FileStorage } from './storage/index.js';
 
 export interface AppDeps {
   config: Config;
@@ -25,9 +28,12 @@ export interface AppDeps {
   repos: Repositories;
   /** Defaults to bcrypt cost 12. Tests inject a cheaper cost to stay fast. */
   passwords?: PasswordHasher;
+  /** Defaults to the driver selected by STORAGE_DRIVER. Tests inject a temp-dir storage. */
+  storage?: FileStorage;
 }
 
-export function createApp({ config, logger, repos, passwords }: AppDeps): Express {
+export function createApp({ config, logger, repos, passwords, storage }: AppDeps): Express {
+  const files = storage ?? createStorage(config);
   const tokens = createTokenService(config);
   const audit = createAuditService(repos.audit);
   const auth = createAuthService({
@@ -37,7 +43,12 @@ export function createApp({ config, logger, repos, passwords }: AppDeps): Expres
     audit,
     logger,
   });
-  const projectService = createProjectService(repos, audit);
+  const projectService = createProjectService(repos, audit, files);
+  const sourceService = createSourceService(repos, files, audit, {
+    maxUploadBytes: config.MAX_UPLOAD_BYTES,
+    maxUploadRows: config.MAX_UPLOAD_ROWS,
+    maxSourcesPerProject: config.MAX_SOURCES_PER_PROJECT,
+  });
 
   const app = express();
   app.disable('x-powered-by');
@@ -66,6 +77,19 @@ export function createApp({ config, logger, repos, passwords }: AppDeps): Expres
     AUTH_BASE_PATH,
     authLimiter,
     createAuthRouter({ auth, tokens, secureCookies: config.NODE_ENV === 'production' }),
+  );
+  // Before the project router so its '/:id' routes and auth do not run for source paths first.
+  app.use(
+    '/api/v1/projects/:projectId/sources',
+    createSourceRouter({
+      sourceService,
+      projects: repos.projects,
+      tokens,
+      uploadRateLimit: {
+        max: config.UPLOAD_RATE_LIMIT_MAX,
+        windowMs: config.UPLOAD_RATE_LIMIT_WINDOW_MS,
+      },
+    }),
   );
   app.use(
     '/api/v1/projects',

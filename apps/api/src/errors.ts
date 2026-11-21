@@ -5,6 +5,9 @@ export type ErrorCode =
   | 'NOT_FOUND'
   | 'CONFLICT'
   | 'PAYLOAD_TOO_LARGE'
+  | 'TOO_MANY_ROWS'
+  | 'UNSUPPORTED_FILE'
+  | 'LIMIT_REACHED'
   | 'RATE_LIMITED'
   | 'INTERNAL_ERROR';
 
@@ -42,6 +45,10 @@ export class AppError extends Error {
 
   static conflict(message: string): AppError {
     return new AppError(409, 'CONFLICT', message);
+  }
+
+  static unsupportedFile(message: string): AppError {
+    return new AppError(400, 'UNSUPPORTED_FILE', message);
   }
 }
 

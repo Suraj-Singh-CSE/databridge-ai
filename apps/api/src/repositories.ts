@@ -4,6 +4,8 @@ import { createMongoRefreshTokenRepository } from './modules/auth/refresh-token.
 import type { RefreshTokenRepository } from './modules/auth/refresh-token.types.js';
 import { createMongoProjectRepository } from './modules/projects/project.repository.js';
 import type { ProjectRepository } from './modules/projects/project.types.js';
+import { createMongoSourceRepository } from './modules/sources/source.repository.js';
+import type { SourceRepository } from './modules/sources/source.types.js';
 import { createMongoUserRepository } from './modules/users/user.repository.js';
 import type { UserRepository } from './modules/users/user.types.js';
 
@@ -12,6 +14,7 @@ export interface Repositories {
   users: UserRepository;
   refreshTokens: RefreshTokenRepository;
   projects: ProjectRepository;
+  sources: SourceRepository;
   audit: AuditRepository;
 }
 
@@ -20,6 +23,7 @@ export function createMongoRepositories(): Repositories {
     users: createMongoUserRepository(),
     refreshTokens: createMongoRefreshTokenRepository(),
     projects: createMongoProjectRepository(),
+    sources: createMongoSourceRepository(),
     audit: createMongoAuditRepository(),
   };
 }

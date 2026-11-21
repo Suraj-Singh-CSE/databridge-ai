@@ -30,20 +30,21 @@ export function accessFor(
 }
 
 /**
- * Loads `:id` and checks the caller's access. Non-members get 404 (not 403) so project ids
+ * Loads the project named by route param `param` (default `:id`) and checks the caller's access. Non-members get 404 (not 403) so project ids
  * cannot be probed; members below `minimum` get 403. Sets `req.project` and `req.projectAccess`.
  */
 export function requireProjectAccess(
   projects: ProjectRepository,
   minimum: MinimumAccess,
+  param = 'id',
 ): RequestHandler {
   return async (req, _res, next) => {
     const user = currentUser(req);
-    const id = req.params.id;
+    const id = req.params[param];
     if (typeof id !== 'string' || !OBJECT_ID.test(id)) {
       next(
         AppError.validation('Some fields are invalid.', [
-          { field: 'params.id', message: 'must be a valid id' },
+          { field: `params.${param}`, message: 'must be a valid id' },
         ]),
       );
       return;
