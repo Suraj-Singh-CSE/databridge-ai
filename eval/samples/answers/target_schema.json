@@ -5,8 +5,9 @@
     {
       "name": "customer_id",
       "type": "string",
-      "description": "Identifier of the customer in a source system.",
-      "is_pii": false
+      "description": "One unique id per real person, created by DataBridge after duplicates are merged (not taken from any source).",
+      "is_pii": false,
+      "generated": true
     },
     {
       "name": "full_name",

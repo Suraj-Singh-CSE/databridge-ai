@@ -17,10 +17,15 @@ Value = str | float | None
 Row = dict[str, Value]
 
 
+SOURCE_RECORD_ID = "source_record_id"
+"""Role of a system's own id column: lineage back to the source row, never a target field."""
+
+
 @dataclass(frozen=True)
 class Column:
     name: str
     target: str | None
+    role: str | None = None
 
 
 @dataclass(frozen=True)
@@ -113,7 +118,7 @@ SOURCES: tuple[SourceSpec, ...] = (
         key_column="cust_id",
         key_format="C{i:06d}",
         columns=(
-            Column("cust_id", "customer_id"),
+            Column("cust_id", None, SOURCE_RECORD_ID),
             Column("cust_nm", "full_name"),
             Column("ph", "phone"),
             Column("email_id", "email"),
@@ -132,7 +137,7 @@ SOURCES: tuple[SourceSpec, ...] = (
         key_column="CustomerID",
         key_format="BL-{i:07d}",
         columns=(
-            Column("CustomerID", "customer_id"),
+            Column("CustomerID", None, SOURCE_RECORD_ID),
             Column("CustomerName", "full_name"),
             Column("mobile_no", "phone"),
             Column("EMAIL", "email"),
@@ -150,7 +155,7 @@ SOURCES: tuple[SourceSpec, ...] = (
         key_column="ticket_ref",
         key_format="TKT-{i:06d}",
         columns=(
-            Column("ticket_ref", None),
+            Column("ticket_ref", None, SOURCE_RECORD_ID),
             Column("client_full_name", "full_name"),
             Column("contact", "phone"),
             Column("mail", "email"),

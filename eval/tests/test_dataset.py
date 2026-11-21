@@ -8,12 +8,12 @@ from datetime import date, datetime
 import polars as pl
 import pytest
 
-from dbeval.answers import TARGET_FIELDS
+from dbeval.answers import GENERATED_FIELDS, TARGET_FIELDS
 from dbeval.cities import CITY_BY_NAME
 from dbeval.config import NoiseConfig
 from dbeval.loaders import read_csv, read_xlsx
 from dbeval.people import EMAIL_DOMAINS, REFERENCE_DATE
-from dbeval.sources import SOURCE_BY_NAME, SOURCES
+from dbeval.sources import SOURCE_BY_NAME, SOURCE_RECORD_ID, SOURCES
 from tests.conftest import Dataset
 
 PHONE_COLUMN = {"crm": "ph", "billing": "mobile_no", "support": "contact"}
@@ -71,6 +71,23 @@ def test_every_source_column_is_in_column_mapping(full_dataset: Dataset) -> None
         assert targets[not_mapped] is None
     assert targets[("crm", "cust_nm")] == "full_name"
     assert targets[("billing", "mobile_no")] == "phone"
+
+
+def test_no_source_column_maps_to_a_generated_field(full_dataset: Dataset) -> None:
+    schema = json.loads((full_dataset.answers / "target_schema.json").read_text())
+    generated = {f["name"] for f in schema["fields"] if f.get("generated")}
+    assert generated == GENERATED_FIELDS == {"customer_id"}
+    mapping = json.loads((full_dataset.answers / "column_mapping.json").read_text())
+    assert not [m for m in mapping if m["target"] in generated]
+
+
+def test_source_id_columns_are_lineage_only(full_dataset: Dataset) -> None:
+    mapping = json.loads((full_dataset.answers / "column_mapping.json").read_text())
+    with_role = {(m["source"], m["column"]): m for m in mapping if "role" in m}
+    assert set(with_role) == {(spec.name, spec.key_column) for spec in SOURCES}
+    for entry in with_role.values():
+        assert entry["target"] is None
+        assert entry["role"] == SOURCE_RECORD_ID
 
 
 def test_target_schema_matches_spec(full_dataset: Dataset) -> None:
@@ -153,6 +170,8 @@ def test_answer_keys_are_consistent(full_dataset: Dataset) -> None:
     keys = set(clusters(full_dataset)["person_id"])
     people = set(golden(full_dataset)["person_id"])
     assert keys == people  # every cluster person exists, and every person has a record
+    rows = golden(full_dataset)
+    assert rows["customer_id"].to_list() == rows["person_id"].to_list()
 
 
 def _digits(phone: str) -> str:

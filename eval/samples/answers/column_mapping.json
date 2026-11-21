@@ -2,7 +2,8 @@
   {
     "source": "crm",
     "column": "cust_id",
-    "target": "customer_id"
+    "target": null,
+    "role": "source_record_id"
   },
   {
     "source": "crm",
@@ -52,7 +53,8 @@
   {
     "source": "billing",
     "column": "CustomerID",
-    "target": "customer_id"
+    "target": null,
+    "role": "source_record_id"
   },
   {
     "source": "billing",
@@ -97,7 +99,8 @@
   {
     "source": "support",
     "column": "ticket_ref",
-    "target": null
+    "target": null,
+    "role": "source_record_id"
   },
   {
     "source": "support",

@@ -1,5 +1,5 @@
 {
-  "generator_version": "1.0.0",
+  "generator_version": "1.1.0",
   "seed": 7,
   "people": 300,
   "records_per_source": {
@@ -147,9 +147,9 @@
     "crm_customers.csv": "8794d2f7d015d46661805f52c563dae1ce71dedaa5ce9404af97b98ee304360e",
     "billing_export.xlsx": "51a9656a4439a5d88e7bf3db80bfb702fb9a841355b3db4bcd5c81524cd68cca",
     "support_contacts.csv": "26490e7f9a0a43012ec264709f244dfbf510c55507e782833cc971eafe14e1dd",
-    "answers/target_schema.json": "aadbabf3def4486c0b16cdd47f1f89e339c86e996b0f35ddaee26d0a7623e467",
-    "answers/column_mapping.json": "6771df2c763dd1cd6ccea0af6c5994b273076573bfb6db73b802d73957a5f259",
+    "answers/target_schema.json": "a2553535a3a8b83cd89c55f9e166124422eab5a351871a9887b9228e10fdb5f8",
+    "answers/column_mapping.json": "a9432619b5e41d315a3fc46e969d07b9a18d39bc2494d9944a6b4c49a7111f05",
     "answers/clusters.csv": "a7009a05875588cefc62dfc0232cc9e0a6624f359b9ebfc16f14ee131ab36d65",
-    "answers/golden_records.csv": "18545854f34c30730bc6b5cf2e5c8b269c9ca67c612cbd4783afb49da4b99828"
+    "answers/golden_records.csv": "0b86a6ca614dca8ec9b685cc1c904708692fd1748b4e0987efb20e6920351c8e"
   }
 }

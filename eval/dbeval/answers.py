@@ -11,8 +11,12 @@ TARGET_SCHEMA: dict[str, Any] = {
         {
             "name": "customer_id",
             "type": "string",
-            "description": "Identifier of the customer in a source system.",
+            "description": (
+                "One unique id per real person, created by DataBridge after duplicates are "
+                "merged (not taken from any source)."
+            ),
             "is_pii": False,
+            "generated": True,
         },
         {
             "name": "full_name",
@@ -64,12 +68,22 @@ TARGET_SCHEMA: dict[str, Any] = {
 }
 
 TARGET_FIELDS: frozenset[str] = frozenset(field["name"] for field in TARGET_SCHEMA["fields"])
+GENERATED_FIELDS: frozenset[str] = frozenset(
+    field["name"] for field in TARGET_SCHEMA["fields"] if field.get("generated", False)
+)
+"""Fields the pipeline creates itself; no source column may map to them."""
 
 
 def column_mapping() -> list[dict[str, str | None]]:
-    """One entry per source column; ``target`` is ``None`` when the column must not be mapped."""
-    return [
-        {"source": spec.name, "column": column.name, "target": column.target}
-        for spec in SOURCES
-        for column in spec.columns
-    ]
+    """One entry per source column; ``target`` is ``None`` when the column must not be mapped.
+
+    A system's own id column also carries ``"role": "source_record_id"`` (lineage only).
+    """
+    entries: list[dict[str, str | None]] = []
+    for spec in SOURCES:
+        for column in spec.columns:
+            entry = {"source": spec.name, "column": column.name, "target": column.target}
+            if column.role is not None:
+                entry["role"] = column.role
+            entries.append(entry)
+    return entries

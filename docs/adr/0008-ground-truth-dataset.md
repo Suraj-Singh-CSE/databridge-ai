@@ -22,6 +22,11 @@ must also be repeatable, so a change in a score comes from a change in our code,
   source record, and the true clean values per person. Noise only changes how a fact is written
   (format, case, typo, old city name, missing), never the fact, so the keys stay correct; tests check
   that every phone and email in the sources still matches its person.
+- **Source ids are lineage, not `customer_id`.** Source-system ids differ per system for the same
+  person, so they are null-mapped with `role: "source_record_id"`. The target `customer_id` is
+  marked `generated: true`: DataBridge creates one per real person after merging duplicates, and in
+  the answer keys it equals the `person_id` of the cluster. A mapper that maps a source id to it is
+  scored as wrong.
 - **Realistic noise, configurable.** All rates are in one documented `NoiseConfig`; the spread of
   people over systems is in `OverlapConfig`. The manifest reports how often each noise was tried and
   applied, and the duplicate rate, defined as `(records - people) / records`.

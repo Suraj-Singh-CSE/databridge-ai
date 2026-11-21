@@ -92,7 +92,9 @@ def _table(spec: SourceSpec, records: Sequence[SourceRecord]) -> list[list[Any]]
 
 
 def _golden_row(person: Person) -> list[str]:
+    """True clean values; ``customer_id`` is the one golden id per person (= person_id)."""
     return [
+        person.person_id,
         person.person_id,
         person.full_name,
         person.first_name,
@@ -111,6 +113,7 @@ def _golden_row(person: Person) -> list[str]:
 
 GOLDEN_HEADER = (
     "person_id",
+    "customer_id",
     "full_name",
     "first_name",
     "last_name",
