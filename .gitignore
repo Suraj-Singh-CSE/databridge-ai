@@ -25,6 +25,7 @@ htmlcov/
 
 # Local data
 eval/data/
+live-eval-report/
 *.duckdb
 *.duckdb.wal
 uploads/

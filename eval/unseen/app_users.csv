@@ -1,0 +1,41 @@
+user_uuid,displayName,msisdn,loginEmail,birthday,residence_city,sex,device_os,signup_ts
+ea19a67e-a032-60c3-8cd0-971808563de2,Chaaya Guha,918349404294,cguha471@inbox.test,"Feb 29, 1988",Chandigarh ,F,android,1714166692
+5c1056ee-70fd-4de9-5433-49ea0f4d64d3,darika dhawan,+919869227138,darika.dhawan900@inbox.test,"Aug 28, 1955",Kochi,F,android,1759435430
+8f3e11bf-8a0a-9043-3e59-47c1ceaa8ed5,Baleer Pandya,917822070169,balveer_p268@example.net,"Jun 04, 2000",Mumbai,M,android,1707891694
+49daef97-2b02-48ae-95a7-86ebdcbf22c1,Chasmum Karan,+916601696764,chasmum_k464@inbox.test,"Apr 15, 1985",Ahmedabad,F,android,1701788076
+67cd53f2-a9f4-e918-e129-973b21460334,Daniel Nagarajan,916399869879,daniel.nagarajan629@example.com,"Jul 13, 1966",Hyderabad,M,ios,1723546435
+a9e1c92f-2885-9ed0-02d7-6d3ca79d126a,Padmanabhan Adya,+918572234888,adya.padmanabhan153@mail.test,"Apr 29, 1949",Indore,F,android,1758790310
+0b026bfc-e73a-bb15-4333-9da498cad6f8,Qushi Kari,916838149574,,"Mar 21, 1971",Lucknow,F,android,1717722790
+c61b6a8e-d128-95c2-724b-21f4d31f563e,Aarnav Konda,919855756605,aarnav_k542@example.org,"Feb 27, 1971",Ahmedabad,M,ios,1729388488
+83e42ec3-f2e9-f597-46d0-979fa99af0b2, Waida Verma,918344796725,waida_v943@inbox.test,,Delhi,F,android,1723966866
+47b8cb23-d3a2-a399-fdeb-959c4df9d95e,Krish Deo,917269780438,KRISH.DEO477@MAIL.TEST,"Sep 11, 1993",Chandigarh,M,ios,1713488006
+697a7bab-3114-15ac-c94f-1666790c108a,Jack Sinha,919611463511,jack.sinha252@inbox.test,"Sep 02, 1961",Bhopal,M,android,1749039148
+07e05152-4afb-263e-979c-c8d66894fca7,Faraj Venkatesh,919718835795,faraj.venkatesh828@mail.test,"Mar 14, 1951",Hyderabad,M,web,1733614256
+e3176755-980d-cc71-cfc8-856ed003ee56,Nandini Kholsa,919134069563,nandini.khosla841@inbox.test,"Apr 09, 1969",New Delhi ,F,ios,1754296611
+5f3be17c-3325-0183-644a-eddd87c2ed9b,Unnati Srinivas,916659397615,usrinivas399@example.net,"Feb 19, 2006",Lucknow,F,android,1736365508
+061ecacb-8665-9864-7a19-3366aa002e2f,Eesha Nayak ,919844317367,,"Jan 22, 1953",Bombay,F,android,1741260761
+d024a287-fa57-a12d-da33-d43ac9df7c2b,Mugdha Merchant,917107617707,mugdha_m101@example.com,"Jul 17, 1976",Chandigarh,F,android,1711816785
+166529f4-bd1d-0dc9-d624-1862ba7d8ad4,Fitan Iyengar,918286594605,fitan_i524@example.org,"May 17, 1953",Mumbai,M,android,1748718488
+cdda3c13-224e-3177-797f-57416adbb173,Manan Raval,917317820540,,"Jun 15, 2002",Delhi,M,web,1706628625
+b4c9f624-6430-8daa-c681-f045437fd5d1,Chaman Chaudhuri,919530050297,cchaudhuri463@example.net,"Sep 20, 1985",Ahmedabad,F,web,1722910167
+dfbddf0e-a4ef-87c2-19ab-983859de7bfb,Qabil Chanda,917863787760,QCHANDA313@EXAMPLE.ORG,"Jan 28, 1946",Bengaluru,M,ios,1713859634
+13013a17-d97b-ce10-d41e-51eff3eba196,bhatt ridhi,918844419303,rbhatt714@example.net,"May 18, 1998",Bangalore,F,ios,1743289641
+416bf275-cc01-dfa6-f0d5-72f93f07bf52,Tnaish Balasubramanian,918317746643,tanish.balasubramanian116@mail.test,"May 07, 2001",Kolkata,M,ios,1732897828
+c3f3d416-e837-165e-e054-5358f945fd0a,Zashil Krishnmaurthy,918247357363,zkrishnamurthy43@mail.test,"Jan 18, 1973",Kochi,M,android,1711502056
+a5111c08-5a91-36f9-a2a5-1b85d5da840e,DARPAN NATT,918237336979,,"Aug 16, 1953",Chandigarh,M,ios,1736534020
+de3f8c3a-6861-535d-2d66-1c75537760ec,Omaja Venkataraman,919475407207,OVENKATARAMAN857@MAIL.TEST,"Nov 09, 1977",Lucknow,F,web,1714750061
+af126645-9187-90c2-60f3-55a2edaca3c6,Tripti Dube,918886457328,,"May 13, 1948",Chennai,F,ios,1757135395
+905394f0-103c-3c57-2ad7-d252694089aa,Ayushman Parekh,918945028316,ayushman.parekh854@example.org,"Nov 11, 1983",Dehli,M,web,1755472511
+54e068e5-68e5-a2de-a266-9fa6b6d03ad4,Veer Chaudhari ,918244106460,,"Aug 28, 1953",Calcutta,M,ios,1737147194
+807bd97e-fe93-59ec-3d71-32daa5abf47f,Yjauvani Devi,+917655062048,yauvani.devi343@inbox.test,"Aug 18, 1967",Bhopal,F,ios,1717871611
+5f3ba669-4ab0-22e5-5861-60db7435b55a,Ojasvi Tak,918789235240,otak396@example.com,"May 07, 1962",Chennai,F,android,1754325315
+1bb08ae7-654c-f53e-2df7-cca75763ffbf,Samuel Raju,918204265116,samuel_r348@inbox.test,"Apr 24, 1980",Bengaluru,M,android,1708398655
+dad42f2d-6ce0-daee-ec90-de98eac082d8,X. Om,917120666120,xom939@inbox.test,"Mar 31, 1974",Delhi,M,web,1759332591
+819228c1-f735-ff6c-10bf-09b94bf0781b,Ijaya Doshi,918343274655,ijaya.doshi890@example.net,"Nov 25, 1950",Lucknow,F,web,1719782667
+593e52a0-9891-a97d-027e-652e44dfb05b,sudiksha banis,919605538488,sudiksha_b881@example.com,"Feb 12, 1981",Bhopal,F,web,1743449557
+5d9f57b2-5dc0-3ec1-cfc7-ffe97ce85e5a,Bmala Ganesh,+916327440430,bganesh178@inbox.test,"Apr 24, 1982",Ahmedabad,F,ios,1743265387
+aa6a0db8-787b-613c-f343-bd84f441b13b,Ishanvi Garde,+917619568080,ishanvi.garde734@example.com,,Mumbai,F,web,1732509551
+63fcdf82-ff62-ef75-c04f-9477c5504278,Tamanna Mutti,916697978025,TAMANNA.MUTTI402@EXAMPLE.COM,"May 23, 1947",Lucknow,F,android,1759435097
+cf960256-eeca-3a52-2456-841682ed160a,Hora Onveer,916953918276,onveer.hora825@mail.test,"Dec 20, 1954",Jaipur,M,web,1717816740
+5f417f83-1554-6644-aee1-21b9fcddecc0,Gauri Wason,+916756896516,gauri_w60@mail.test,"Feb 07, 1972",Gurgaon ,F,ios,1725956877
+8c3298f5-8278-1d23-0705-0fafadde4763,Tripti Dhingra,+916465908538,tripti.dhingra634@example.com,"Feb 08, 1955",Kolkata,F,android,1756447171

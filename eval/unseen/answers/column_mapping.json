@@ -1,0 +1,227 @@
+[
+  {
+    "source": "shop",
+    "column": "CustRef",
+    "target": null,
+    "role": "source_record_id"
+  },
+  {
+    "source": "shop",
+    "column": "CustName",
+    "target": "full_name"
+  },
+  {
+    "source": "shop",
+    "column": "MOBILE_NO",
+    "target": "phone"
+  },
+  {
+    "source": "shop",
+    "column": "e_mail",
+    "target": "email"
+  },
+  {
+    "source": "shop",
+    "column": "Cust DOB",
+    "target": "date_of_birth"
+  },
+  {
+    "source": "shop",
+    "column": "Addr Line 1",
+    "target": "address"
+  },
+  {
+    "source": "shop",
+    "column": "TownCity",
+    "target": "city"
+  },
+  {
+    "source": "shop",
+    "column": "Postal Code",
+    "target": "pin_code"
+  },
+  {
+    "source": "shop",
+    "column": "loyalty_pts",
+    "target": null
+  },
+  {
+    "source": "shop",
+    "column": "Notes",
+    "target": null
+  },
+  {
+    "source": "kirana",
+    "column": "khata_no",
+    "target": null,
+    "role": "source_record_id"
+  },
+  {
+    "source": "kirana",
+    "column": "naam",
+    "target": "full_name"
+  },
+  {
+    "source": "kirana",
+    "column": "sampark_no",
+    "target": "phone"
+  },
+  {
+    "source": "kirana",
+    "column": "janam_tithi",
+    "target": "date_of_birth"
+  },
+  {
+    "source": "kirana",
+    "column": "pata",
+    "target": "address"
+  },
+  {
+    "source": "kirana",
+    "column": "shahar",
+    "target": "city"
+  },
+  {
+    "source": "kirana",
+    "column": "daak_pin",
+    "target": "pin_code"
+  },
+  {
+    "source": "kirana",
+    "column": "udhaar_rs",
+    "target": null
+  },
+  {
+    "source": "events",
+    "column": "RegID",
+    "target": null,
+    "role": "source_record_id"
+  },
+  {
+    "source": "events",
+    "column": "First Name",
+    "target": "full_name"
+  },
+  {
+    "source": "events",
+    "column": "Last Name",
+    "target": "full_name"
+  },
+  {
+    "source": "events",
+    "column": "contact",
+    "target": "email"
+  },
+  {
+    "source": "events",
+    "column": "Phone",
+    "target": "phone"
+  },
+  {
+    "source": "events",
+    "column": "ref_no",
+    "target": "pin_code"
+  },
+  {
+    "source": "events",
+    "column": "Session",
+    "target": null
+  },
+  {
+    "source": "events",
+    "column": "Signed Up At",
+    "target": null
+  },
+  {
+    "source": "legacy",
+    "column": "ID",
+    "target": null,
+    "role": "source_record_id"
+  },
+  {
+    "source": "legacy",
+    "column": "NAME_TXT",
+    "target": "full_name"
+  },
+  {
+    "source": "legacy",
+    "column": "TEL",
+    "target": "phone"
+  },
+  {
+    "source": "legacy",
+    "column": "MAIL_ADDR",
+    "target": "email"
+  },
+  {
+    "source": "legacy",
+    "column": "BDATE",
+    "target": "date_of_birth"
+  },
+  {
+    "source": "legacy",
+    "column": "LOC",
+    "target": "city"
+  },
+  {
+    "source": "legacy",
+    "column": "ZIP",
+    "target": "pin_code"
+  },
+  {
+    "source": "legacy",
+    "column": "STATUS_CD",
+    "target": null
+  },
+  {
+    "source": "legacy",
+    "column": "SRC_SYS",
+    "target": null
+  },
+  {
+    "source": "app",
+    "column": "user_uuid",
+    "target": null,
+    "role": "source_record_id"
+  },
+  {
+    "source": "app",
+    "column": "displayName",
+    "target": "full_name"
+  },
+  {
+    "source": "app",
+    "column": "msisdn",
+    "target": "phone"
+  },
+  {
+    "source": "app",
+    "column": "loginEmail",
+    "target": "email"
+  },
+  {
+    "source": "app",
+    "column": "birthday",
+    "target": "date_of_birth"
+  },
+  {
+    "source": "app",
+    "column": "residence_city",
+    "target": "city"
+  },
+  {
+    "source": "app",
+    "column": "sex",
+    "target": null
+  },
+  {
+    "source": "app",
+    "column": "device_os",
+    "target": null
+  },
+  {
+    "source": "app",
+    "column": "signup_ts",
+    "target": null
+  }
+]

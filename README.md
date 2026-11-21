@@ -362,6 +362,27 @@ and data volumes with `docker compose --env-file .env -f infra/docker-compose.ym
 `--env-file .env` is needed because the compose file lives in `infra/`, so Compose would not find the
 repo-root `.env` on its own. Missing secrets make Compose stop with a message naming the variable.
 
+## Evaluating mapping accuracy
+
+The mapping engine is scored against known answers on synthetic data
+([ADR 0013](docs/adr/0013-mapping-evaluation-and-holdout.md)):
+
+- **Offline (every CI run, no LLM):** `cd eval && python -m dbeval.evaluate_mapping` for the
+  committed samples and `python -m dbeval.evaluate_mapping --set unseen` for the
+  [unseen-header holdout](eval/unseen/README.md) (rules: 72.7%, 4 wrong at High confidence).
+- **Live with Gemini (manual, opt-in):**
+  1. Create an API key in Google AI Studio. Never paste it into code, chat or a commit.
+  2. On GitHub: **Settings → Secrets and variables → Actions → New repository secret**, name
+     `GEMINI_API_KEY`, paste the key, **Add secret**.
+  3. **Actions → "Live mapping eval" → Run workflow**. Keep or change `model` (default
+     `gemini-3.8-flash`) and `max_calls` (default 20; 8 calls cover every source once).
+  4. Read the results in the run's summary; the JSON and Markdown report are in the
+     `live-eval-report` artifact. The run fails if the model cannot be reached (see the error
+     types) or if any prompt still held a raw email or phone (such a prompt is never sent).
+
+Only synthetic files are sent, after the gateway's masking. Dry run without a key:
+`cd eval && python -m dbeval.live_mapping_eval --provider mock --out /tmp/live-report`.
+
 ## CI
 
 GitHub Actions (`.github/workflows/ci.yml`) runs on every pull request and on pushes to `main`:
@@ -371,6 +392,10 @@ GitHub Actions (`.github/workflows/ci.yml`) runs on every pull request and on pu
 - **python**: ruff lint and format check, mypy (strict), pytest for the ai-service (Python 3.12),
   including a real in-process Celery worker against Redis and MongoDB service containers.
 - **eval**: the same checks for the ground-truth data generator in `eval/` ([eval/README](eval/README.md)).
+
+The **Live mapping eval** workflow (`.github/workflows/live-eval.yml`) is separate: manual only,
+never on push or pull request (see "Evaluating mapping accuracy").
+
 - **docker**: builds every image, starts the full stack with throwaway secrets, and smoke-tests the
   web root, the api health route (direct and through the nginx proxy), register and `/auth/me`
   through the proxy, source uploads through the proxy (CSV and XLSX samples, list with row count,

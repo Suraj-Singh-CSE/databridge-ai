@@ -8,7 +8,8 @@ Pure functions, no I/O. Rules, applied in this order so a longer or more specifi
 4. Card number      13-19 digits, plain or in 4-digit groups -> ``[CARD]``
 5. Aadhaar          12 digits starting 2-9, plain or ``2345 6789 0123`` -> ``[AADHAAR]``
 6. Indian mobile    10 digits starting 6-9, optional ``0`` / ``91`` prefix,
-                    spaces or dashes inside    -> ``98200xxxxx`` (first 5 digits kept)
+                    spaces or dashes inside    -> ``98200xxxxx`` (first 5 digits kept);
+                    also ``(98200) 12345`` with the first 5 digits in parentheses
 
 Choices (see docs/adr/0006):
 
@@ -47,6 +48,9 @@ _CARD = re.compile(
 _AADHAAR = re.compile(_START + r"[2-9][0-9]{3}(?P<sep>[ -]?)[0-9]{4}(?P=sep)[0-9]{4}" + _END)
 _PHONE_LOCAL = re.compile(
     _START + r"(?P<prefix>0|91[ -])?(?P<number>" + _MOBILE_DIGITS + ")" + _END
+)
+_PHONE_PARENS = re.compile(
+    _START + r"(?P<prefix>)\((?P<number>[6-9][0-9]{4}\)[ -]?[0-9]{5})" + _END
 )
 
 
@@ -97,6 +101,7 @@ def mask_text(text: str) -> str:
     text = _PHONE_INTL.sub(_mask_phone, text)
     text = _CARD.sub(_mask_card, text)
     text = _AADHAAR.sub("[AADHAAR]", text)
+    text = _PHONE_PARENS.sub(_mask_phone, text)
     return _PHONE_LOCAL.sub(_mask_phone, text)
 
 

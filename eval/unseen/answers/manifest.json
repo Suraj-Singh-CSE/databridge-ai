@@ -1,0 +1,14 @@
+{
+  "seed": 2026,
+  "people": 150,
+  "rows_per_source": 40,
+  "files": {
+    "shop_customers.csv": "d03e25aef6e4fe3373b42e0ab7cfc125a469613e01f9776ae078f41eac76db6d",
+    "kirana_ledger.csv": "c20a7dda16f00925b84254578b10ea4f805292f8ea478e686efcc064adc1eee9",
+    "event_signups.xlsx": "002f7e3f6ad86d833c19c1cf381d9f52b93d508bb3cda74a7f9030b47ec9df90",
+    "legacy_dump.csv": "5f9df4706e3516d39e262b993ce9e56b0ca398da75f828de74516786334b6a85",
+    "app_users.csv": "b924c6ee43895d2f0fe14af92c214fcabd56520a7878552f1fe8298a59a963bf",
+    "answers/target_schema.json": "1e9bffe51771488f407b0596b9e761bb4c4993b4691111553355c7a4d30e819c",
+    "answers/column_mapping.json": "c5c1d7bab8546c152ef3baa88f65e3b5fc4edf9502fbc84087b0c621ca941762"
+  }
+}

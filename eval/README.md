@@ -30,6 +30,13 @@ accuracy at High confidence against `answers/column_mapping.json`. It needs the 
 package: `pip install -e ../apps/ai-service -e ".[dev]"`. `tests/test_evaluate_mapping.py`
 fails below 90% accuracy (95% at High confidence) on the samples and on the full dataset.
 
+Those numbers are optimistic: the rules were written with these files in view. The
+[unseen-header holdout](unseen/README.md) (`--set unseen`) measures files the rules were never
+tuned on; it has no threshold, and must never be used to tune the rules. The table also reports
+"High-confidence wrong" (wrong suggestions labelled High). `python -m dbeval.live_mapping_eval`
+runs the real model through the gateway on both sets (manual workflow only;
+[ADR 0013](../docs/adr/0013-mapping-evaluation-and-holdout.md)); `--provider mock` is a dry run.
+
 ## What it writes
 
 | File                          | What                                                                                                                                                |

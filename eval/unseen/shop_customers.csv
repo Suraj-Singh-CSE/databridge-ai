@@ -1,0 +1,41 @@
+CustRef,CustName,MOBILE_NO,e_mail,Cust DOB,Addr Line 1,TownCity,Postal Code,loyalty_pts,Notes
+SHP00001,Laksh Chandra ,+91 91884-79188,lchandra326@example.net,03.03.1974,"301, Narayanan Chowk",Indore,452369,4297,call after 6pm
+SHP00002,Nicholas Suresh,+91 83662-82909,nicholas.suresh541@example.org,07.08.1960,"H.No. 55, Brahmbhatt Street",Poona,411722,3742,moved
+SHP00003,Chasmum Karan,+91 66016-96764,chasmum_k464@inbox.test,15.04.1985,"H.No. 71, Mahal Marg",Ahmedabad ,380247,3753,prefers WhatsApp
+SHP00004,Manan Raval,+91 73178-20540,mraval590@example.com,,"521, Rajan Ganj",Delhi,110382,2120,VIP
+SHP00005,Yauvani Devi,+91 76550-62048,yauvani.devi343@inbox.test,18.08.1967,"264, Walia Marg",Bhopal,462660,4998,
+SHP00006,Hemal Murty,+91 99943-98286,hemal_m625@example.net,22.01.1948,"22/01, Agate Circle",Hyderabad,500540,4816,
+SHP00007,chandran saha,+91 60232-09306,csaha896@mail.test,08.01.1969,"540, Bhatti Zila",Bombay,400084,2842,moved
+SHP00008,Tara Abhiram,+91 67914-30747,atara200@inbox.test,17.10.1984,"608, Dey Chk",Chennai,600532,3269,
+SHP00009,Dugar Vritti,+91 66839-95681,vritti.dugar80@example.com,27.01.1984,"83, Balasubramanian Path",Bengaluru,560268,1523,VIP
+SHP00010,Jairaj Sinha,+91 92773-26445,jsinha997@example.org,14.04.1989,"987, Bir Zila",Jaipur,302432,2243,
+SHP00011,Ridhi Chad,+91 83162-44871,rchad534@example.org,15.08.1985,"# 20, D’Alia Ganj",Jaipur,302417,1756,prefers WhatsApp
+SHP00012,Krishna Parmer,+91 64216-31111,krishna.parmer141@mail.test,29.10.1979,"79/511, Talwar Zila",Delhi,110994,2577,
+SHP00013,Daniel Nagarajan,6399869879,daniel.nagarajan629@example.com,13.07.1966,"81/39, Salvi",Hyderabad,500114,311,VIP
+SHP00014,Indira Puri,+91 66688-28112,ipuri561@example.net,03.12.1979,"H.No. 161, Palan Nagar",Lucknow ,226318,1002,call after 6pm
+SHP00015,Karan Shetty,+91 74196-89821,kshetty46@example.org,22.04.1969,"64, Goel Chowk",Lucknow ,226564,3402,VIP
+SHP00016,Chaaya Guha,,cguha471@inbox.test,29.02.1988,"01/25, Sheth Ganj",Chandigarh ,160769,2161,call after 6pm
+SHP00017,Varsha Gulati ,+91 94284-35281,varsha_g470@mail.test,02.05.1971,"02, Kamdar Circle",Kolkata,700410,1235,moved
+SHP00018,Ishani Amble,+91 77873-66747,iamble201@example.org,14.07.1972,"H.No. 90, Lad Chowk",Lucknow,226230,1259,VIP
+SHP00019,Chavvi Sengupta,+91 99871-68976,csengupta578@mail.test,17.03.1968,"H.No. 753, Krishnamurthy Marg",New Delhi,110526,2512,prefers WhatsApp
+SHP00020,Chdman Chaudhuri,+91 95300-50297,cchaudhuri463@example.net,20.09.1985,"# 361, Palan Chowk",Ahmedabad ,380519,3462,call after 6pm
+SHP00021,Zinal Misra,+91 96351-67682,zinal_m475@example.org,28.05.1973,"91, Vig Circle",Mumabi,400261,4359,
+SHP00022,Sachi Yohannan,07683508111,sachi.yohannan469@inbox.test,01.09.1980,"28/11, Ramachandran St",Indore,452356,676,
+SHP00023,Bhavya Wable,+91 81481-01331,bwable44@example.net,16.06.1978,"91, Shan Marg",Cochin,682784,2855,call after 6pm
+SHP00024,Janaki Choudhary,07298222900,janaki.choudhary143@example.net,10.11.1971,"48/93, Menon",Jaipur,302987,1175,prefers WhatsApp
+SHP00025,Dev Goswami,+91 97130-06681,Dev_G183@Example.org,20.07.2005,"08/86, Divan Road",Jaipur,302243,2707,
+SHP00026,Raju Samuel,+91 82042-65116,samuel_r348@inbox.test,24.04.1980,"17/92, Khalsa Street",Bengaluru,560241,145,
+SHP00027,Jhalak Bajaj,+91 77105-12983,jhalak_b153@example.net,24.07.1987,"H.No. 487, Lalla Marg",Kolkata,700180,4825,prefers WhatsApp
+SHP00028,r. chanda,+91 71025-49092,rohan_c657@inbox.test,13.12.1950,"840, Bobal Nagar",Lucknow,226639,1091,
+SHP00029,Faqid Rastogi,+91 82607-91135,frastogi977@example.net,16.02.1951,"53/845, Prasad Ganj",Ahmedabad,380450,2446,VIP
+SHP00030,Balveer Pandya,+91 78220-70169,,04.06.2000,"92/123, Gulati Marg",Mumbai,400191,4991,
+SHP00031,Faas Sathe,+91 89753-32571,faras.sathe639@example.net,28.05.1998,"92/645, Nagarajan Zila",Poona,411818,4693,
+SHP00032,Jeet Samra,+91 87999-61953,jsamra371@example.org,11.09.1998,"H.No. 520, Mohanty Street",Bhopal,462121,237,call after 6pm
+SHP00033,Vedant Singh,+91 90320-80737,VEDANT.SINGH133@INBOX.TEST,20.11.2005,"84/864, Thaker Circle",Jaipur,302224,1341,prefers WhatsApp
+SHP00034,Upma Iyengar,+91 60996-44469,upma.iyengar471@example.org,09.01.1949,"337, Pradhan Ganj",Ahmedabad,380028,2528,moved
+SHP00035,Pranav Sagar,+91 64304-90741,pranav.sagar561@inbox.test,13.01.1994,"63, Kanda Mg",Bangalore ,560598,2201,call after 6pm
+SHP00036,Anamika Doctor,+91 63301-75682,anamika.doctor361@inbox.test,30.07.1976,"97/875, Lad Ganj",Indore ,452704,2672,call after 6pm
+SHP00037,Vyanjana Subramanian,+91 83581-34217,vyanjana_s793@example.org,18.10.1964,"H.No. 00, Dara Ganj",Calcutta,700953,1254,call after 6pm
+SHP00038,Sudiksha Bains,+91 96055-38488,,12.02.1981,"56/51, Varughese Chowk",Bhopal,462652,2639,moved
+SHP00039,Divya Chandra,+91 68541-77588,divya.chandra834@example.net,31.07.1992,"89/557, Barad",Puna,,3812,
+SHP00040,Lavanya Sachdeva,+91 90824-45607,lsachdeva861@example.net,16.04.1986,"H.No. 013, Mukherjee Nagar",Chennai,600500,3407,VIP
