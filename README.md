@@ -9,7 +9,7 @@ AI service with LLM gateway and PII masking, web app shell with sign-in and proj
 and profiling) done: uploads, background jobs with live progress and the column profiler. M3
 (mapping) in progress: target schema, the hybrid column-mapping engine (API) and the Mapping
 Review screen (review, accept/reject/change, accept all High, run mapping with live progress) are
-done; end-to-end tests are next.
+done, with an end-to-end test of the whole review flow.
 
 Approved designs (Figma, shadcn/ui kit): [all screens](docs/design/all-screens.png).
 
@@ -205,7 +205,10 @@ curl -s http://localhost:8080/api/v1/projects/$PROJECT/sources/$SOURCE/mappings 
   column (any non-generated field, Record ID or Not mapped, plus a cleaning step) and can accept
   every pending High suggestion at once; viewers get a read-only page. A clash with another
   column's decision (`409`) is shown in plain words. When no column is pending the page says
-  "Mapping approved".
+  "Mapping approved". The e2e test `apps/web/e2e/mapping-review.spec.ts` walks this flow on the
+  CRM sample (run, accept all High, change, reject the rest, approved), checks that no raw email
+  reaches the page, runs an axe (WCAG 2 A/AA) scan and a keyboard check of the Change dialog, and
+  saves `07-mapping-review.png` to the `web-screenshots` CI artifact.
 - **Decisions** (`PATCH` body): `{ "decision": "accept" }`, `{ "decision": "reject" }` or
   `{ "decision": "override", "role", "target", "transform"? }`. The target must be a
   non-generated field of the current schema (`400`); two columns of one source cannot be mapped
@@ -292,7 +295,7 @@ React 18 + Vite + Tailwind with shadcn/ui components (`apps/web/src/components/u
 | `/projects`                                 | Your projects; admins and data engineers can create one      |
 | `/projects/:id/sources`                     | Upload CSV/XLSX files, watch profiling live, preview, remove |
 | `/projects/:id/profile`                     | Column profile per file: types, empty %, patterns, flags     |
-| `/projects/:id/mapping`                     | Project step (placeholder until M3)                          |
+| `/projects/:id/mapping`                     | Mapping Review: run mapping, accept/reject/change per column |
 | `/projects/:id/{matching,pipeline,quality}` | Project steps (placeholders until M4/M5)                     |
 | `/projects/:id/{dashboard,assistant}`       | Dashboard and assistant (placeholders until M6)              |
 
