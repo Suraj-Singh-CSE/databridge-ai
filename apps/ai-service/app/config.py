@@ -1,9 +1,9 @@
 """Service settings, read from environment variables and validated at startup."""
 
 from functools import lru_cache
-from typing import Literal
+from typing import Literal, Self
 
-from pydantic import BaseModel, Field, SecretStr
+from pydantic import BaseModel, Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 DEFAULT_GEMINI_MODEL = "gemini-3.8-flash"
@@ -52,6 +52,22 @@ class Settings(BaseSettings):
     llm_timeout_seconds: float = Field(default=30.0, gt=0, le=600)
     # JSON, e.g. {"gemini-3.8-flash": {"input": 66, "output": 330}}. Unknown models cost 0.
     llm_prices_inr_per_1m: dict[str, ModelPrice] = Field(default_factory=_default_prices)
+
+    # ---- background jobs (ADR 0010)
+    # A job past the soft limit gets TIME_LIMIT_EXCEEDED; past the hard limit its process is killed.
+    job_soft_time_limit_seconds: int = Field(default=900, ge=1)
+    job_hard_time_limit_seconds: int = Field(default=960, ge=2)
+    # Total attempts per job for transient errors (database or Redis connection problems).
+    job_max_attempts: int = Field(default=3, ge=1, le=10)
+    # Backoff between attempts: base * 2^(retry-1) seconds, capped at max.
+    job_retry_backoff_seconds: float = Field(default=2.0, gt=0)
+    job_retry_backoff_max_seconds: float = Field(default=60.0, gt=0)
+
+    @model_validator(mode="after")
+    def _hard_limit_after_soft_limit(self) -> Self:
+        if self.job_hard_time_limit_seconds <= self.job_soft_time_limit_seconds:
+            raise ValueError("JOB_HARD_TIME_LIMIT_SECONDS must be greater than the soft limit")
+        return self
 
 
 @lru_cache(maxsize=1)
