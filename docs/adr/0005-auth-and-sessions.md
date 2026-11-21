@@ -80,8 +80,8 @@ let clients choose their own IP and skip the limit.
 
 - Move the rate-limit store to Redis so limits hold across api replicas and restarts; consider
   counting only failed logins per account as well as per IP.
-- Project deletion is a hard delete of the project document only. When sources, uploaded files and
-  DuckDB files exist (M2), deletion must also remove them (or move to soft delete with a purge job).
+- Project deletion is a hard delete. Since M2.2 it also removes the project's sources and stored
+  files ([ADR 0009](0009-file-uploads-and-storage.md)); DuckDB files (later in M2) must follow.
 - Admin endpoints to change user roles, plus "sign out everywhere" (revoke all families of a user).
 - Audit writes are not in a transaction with the change they describe; use MongoDB transactions
   (replica set) once deployment provides one.
