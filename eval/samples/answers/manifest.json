@@ -142,9 +142,10 @@
       "rate": 0.0212
     }
   },
+  "files_hash": "sha256 of each file; for .xlsx of its uncompressed zip entries",
   "files": {
     "crm_customers.csv": "8794d2f7d015d46661805f52c563dae1ce71dedaa5ce9404af97b98ee304360e",
-    "billing_export.xlsx": "d66345bbf8540efecbb220334da5e0b990fbdea665601ec7b2745649cd632b8a",
+    "billing_export.xlsx": "51a9656a4439a5d88e7bf3db80bfb702fb9a841355b3db4bcd5c81524cd68cca",
     "support_contacts.csv": "26490e7f9a0a43012ec264709f244dfbf510c55507e782833cc971eafe14e1dd",
     "answers/target_schema.json": "aadbabf3def4486c0b16cdd47f1f89e339c86e996b0f35ddaee26d0a7623e467",
     "answers/column_mapping.json": "6771df2c763dd1cd6ccea0af6c5994b273076573bfb6db73b802d73957a5f259",

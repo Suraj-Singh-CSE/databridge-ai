@@ -3,6 +3,7 @@
 import csv
 import hashlib
 import json
+import zipfile
 from collections.abc import Sequence
 from datetime import datetime
 from pathlib import Path
@@ -51,4 +52,19 @@ def write_json(path: Path, payload: Any) -> None:  # noqa: ANN401 - any JSON-ser
 
 
 def sha256(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+    """Hash of the file's content, the same on every machine.
+
+    For ``.xlsx`` it hashes the uncompressed zip entries (names and bytes, in order) instead of
+    the file: the generated XML is identical everywhere, but the deflate output differs between
+    zlib builds (e.g. zlib vs zlib-ng), so the compressed bytes are reproducible only on one
+    machine. Every other file is hashed byte for byte.
+    """
+    digest = hashlib.sha256()
+    if path.suffix == ".xlsx":
+        with zipfile.ZipFile(path) as package:
+            for info in package.infolist():
+                digest.update(info.filename.encode() + b"\0")
+                digest.update(package.read(info) + b"\0")
+    else:
+        digest.update(path.read_bytes())
+    return digest.hexdigest()

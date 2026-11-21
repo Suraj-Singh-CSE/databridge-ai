@@ -192,6 +192,7 @@ def _manifest(
         "noise_config": asdict(config.noise),
         "overlap_config": asdict(config.overlap),
         "noise_applied": noise.stats.summary(),
+        "files_hash": "sha256 of each file; for .xlsx of its uncompressed zip entries",
         "files": {path.relative_to(out).as_posix(): sha256(path) for path in written},
     }
 

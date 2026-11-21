@@ -1,4 +1,5 @@
 import json
+import zipfile
 from pathlib import Path
 
 from dbeval.config import GeneratorConfig
@@ -36,6 +37,17 @@ def test_manifest_hashes_match_files(tmp_path: Path) -> None:
     manifest = generate(GeneratorConfig(seed=5, people=50), tmp_path)
     for name, digest in manifest["files"].items():
         assert sha256(tmp_path / name) == digest
+
+
+def test_xlsx_hash_ignores_compression(tmp_path: Path) -> None:
+    generate(GeneratorConfig(seed=5, people=50), tmp_path)
+    original = tmp_path / "billing_export.xlsx"
+    stored = tmp_path / "stored.xlsx"
+    with zipfile.ZipFile(original) as source, zipfile.ZipFile(stored, "w") as target:
+        for info in source.infolist():
+            target.writestr(info, source.read(info), compress_type=zipfile.ZIP_STORED)
+    assert stored.read_bytes() != original.read_bytes()
+    assert sha256(stored) == sha256(original)
 
 
 def test_committed_sample_is_up_to_date(tmp_path: Path) -> None:

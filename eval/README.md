@@ -14,8 +14,8 @@ cd ..
 python -m dbeval.generate --seed 42 --people 5000 --out eval/data   # these are the defaults
 ```
 
-`eval/data/` is gitignored. Same seed and arguments give byte-identical files (including the Excel
-file); a different seed gives different data. Checks: `cd eval && ruff check . && ruff format --check . && mypy && pytest`.
+`eval/data/` is gitignored. Same seed and arguments give byte-identical files on the same machine (the Excel
+file's compressed bytes depend on the zlib build, so the manifest hashes its unzipped content); a different seed gives different data. Checks: `cd eval && ruff check . && ruff format --check . && mypy && pytest`.
 
 A small sample (`--seed 7 --people 300`) is committed in [`samples/`](samples) for UI demos and
 upload tests. A test fails if it no longer matches the generator; regenerate it with

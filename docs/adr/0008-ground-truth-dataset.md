@@ -31,8 +31,12 @@ must also be repeatable, so a change in a score comes from a change in our code,
 - **Deterministic.** One seed drives Python's `random` and Faker; ages use a fixed reference date,
   not today. CSVs are written with the `csv` module, JSON with fixed formatting, and the Excel file
   with xlsxwriter in memory mode with a fixed creation date, so zip entries carry a constant
-  timestamp. Same seed and arguments give byte-identical files (tested by hash, Excel included).
-  Faker and xlsxwriter are pinned exactly because a new release can change names or file bytes.
+  timestamp. Same seed and arguments give byte-identical files on one machine (tested, Excel
+  included). Across machines the CSV and JSON bytes are identical too, but the Excel file's
+  compressed bytes are not: deflate output differs between zlib builds (CI's zlib vs a local
+  zlib-ng). So the manifest hashes an `.xlsx` by its uncompressed zip entries, which are identical
+  everywhere, and every other file byte for byte. Faker and xlsxwriter are pinned exactly because a
+  new release can change names or file contents.
 - **Commit a small sample, not the full set.** `eval/samples/` (300 people, seed 7, about 110 KB)
   is committed for UI demos and upload e2e tests, and a test checks it still matches the generator.
   The full 5,000-person set (`eval/data/`, gitignored) is regenerated in about a second, so
