@@ -171,3 +171,93 @@ export interface SourceProfile {
   /** Empty until the source has been profiled. */
   columns: ColumnProfile[];
 }
+
+/** Target schema field (apps/api target-schema.types.ts). */
+export type TargetFieldType = 'string' | 'integer' | 'decimal' | 'boolean' | 'date' | 'datetime';
+
+export interface TargetField {
+  name: string;
+  type: TargetFieldType;
+  /** Expected format in plain words, e.g. "YYYY-MM-DD". */
+  format: string | null;
+  description: string;
+  isPii: boolean;
+  /** Created by DataBridge (e.g. customer_id); never mapped from a source column. */
+  generated: boolean;
+  required: boolean;
+  allowConcat: boolean;
+}
+
+export interface TargetSchema {
+  name: string;
+  version: number;
+  fields: TargetField[];
+  updatedBy: string | null;
+  updatedAt: string;
+}
+
+/** Column mapping (apps/api mappings module, ADR 0012). */
+export type MappingRole = 'field' | 'source_record_id' | 'ignore';
+export type ConfidenceLabel = 'High' | 'Medium' | 'Low';
+export type MappingMethod = 'hybrid' | 'rules';
+export type MappingDecisionKind = 'accept' | 'reject' | 'override';
+export type MappingStatus = 'pending' | 'accepted' | 'rejected' | 'overridden';
+
+export interface MappingAlternative {
+  target: string | null;
+  role: MappingRole;
+  confidence: number;
+}
+
+/** The engine's proposal for one column. `target` is null unless `role` is `field`. */
+export interface MappingSuggestion {
+  target: string | null;
+  role: MappingRole;
+  /** 0-1. */
+  confidence: number;
+  confidenceLabel: ConfidenceLabel;
+  reason: string;
+  /** Hint for the cleaning step, e.g. `to_e164_in`, `parse_date:DD/MM/YYYY`. */
+  transform: string | null;
+  alternatives: MappingAlternative[];
+}
+
+export interface MappingRun {
+  jobId: string;
+  runId: string;
+  schemaVersion: number;
+  /** `rules` when the AI step failed or was off. */
+  method: MappingMethod;
+  model: string | null;
+  createdAt: string;
+}
+
+export interface MappingDecision {
+  column: string;
+  decision: MappingDecisionKind;
+  target: string | null;
+  role: MappingRole;
+  transform: string | null;
+  schemaVersion: number;
+  decidedBy: string;
+  decidedAt: string;
+}
+
+export interface ColumnMapping {
+  column: string;
+  position: number;
+  suggestion: MappingSuggestion;
+  decision: MappingDecision | null;
+  status: MappingStatus;
+}
+
+export interface SourceMappings {
+  source: Pick<Source, 'id' | 'name' | 'status'>;
+  schemaVersion: number;
+  /** Null before the first mapping job. */
+  run: MappingRun | null;
+  /** True when the target schema changed after the suggestions were made. */
+  stale: boolean;
+  columns: ColumnMapping[];
+  summary: { total: number; high: number; medium: number; low: number; decided: number };
+}

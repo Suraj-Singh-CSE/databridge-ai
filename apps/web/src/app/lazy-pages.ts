@@ -14,3 +14,6 @@ export const SourcesPage = lazy(() =>
 export const ProfilePage = lazy(() =>
   import('@/features/profile/ProfilePage').then((m) => ({ default: m.ProfilePage })),
 );
+export const MappingPage = lazy(() =>
+  import('@/features/mapping/MappingPage').then((m) => ({ default: m.MappingPage })),
+);

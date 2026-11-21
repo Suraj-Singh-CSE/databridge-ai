@@ -24,6 +24,8 @@ function projectHandlers() {
   return [
     http.get(`${API}/projects`, () => ok(page([project]))),
     http.get(`${API}/projects/:id`, () => ok({ project })),
+    http.get(`${API}/projects/:id/sources`, () => ok({ items: [] })),
+    http.get(`${API}/projects/:id/target-schema`, () => fail(404, 'NOT_FOUND', 'Not found.')),
   ];
 }
 
