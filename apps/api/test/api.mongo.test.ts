@@ -5,13 +5,19 @@ import { disconnectDb } from '../src/db.js';
 import { AuditLogModel } from '../src/modules/audit/audit.model.js';
 import { JobModel } from '../src/modules/jobs/job.model.js';
 import { RefreshTokenModel } from '../src/modules/auth/refresh-token.model.js';
+import {
+  MappingDecisionModel,
+  MappingSuggestionModel,
+} from '../src/modules/mappings/mapping.model.js';
 import { ColumnProfileModel } from '../src/modules/sources/column-profile.model.js';
+import { TargetSchemaModel } from '../src/modules/target-schema/target-schema.model.js';
 import { SourceModel } from '../src/modules/sources/source.model.js';
 import { UserModel } from '../src/modules/users/user.model.js';
 import { createMongoRepositories } from '../src/repositories.js';
 
 import { defineApiSuite } from './support/api-suite.js';
 import { defineJobsSuite } from './support/jobs-suite.js';
+import { defineMappingsSuite, suggested } from './support/mappings-suite.js';
 import { columnProfile, defineProfilesSuite } from './support/profiles-suite.js';
 import { defineSourcesSuite } from './support/sources-suite.js';
 import { clearDb, connectTestDb } from './support/mongo.js';
@@ -48,6 +54,32 @@ describe.skipIf(!available)('MongoDB', () => {
     ...mongoHarness,
     async workerUpdate(_repos, jobId, patch) {
       await JobModel.updateOne({ _id: jobId }, { $set: patch });
+    },
+  });
+
+  defineMappingsSuite('MongoDB repositories', {
+    ...mongoHarness,
+    async markProfiled(_repos, _projectId, sourceId) {
+      await SourceModel.updateOne({ _id: sourceId }, { $set: { status: 'profiled' } });
+    },
+    async workerSuggest(_repos, { projectId, sourceId, suggestions }) {
+      // What apps/ai-service/app/mapping/store.py writes.
+      await MappingSuggestionModel.insertMany(
+        suggestions.map(({ column, position, suggestion, run }) => ({
+          projectId,
+          sourceId,
+          column,
+          position,
+          jobId: run.jobId,
+          runId: run.runId,
+          schemaVersion: run.schemaVersion,
+          mappingVersion: 1,
+          method: run.method,
+          model: run.model,
+          suggestion,
+          createdAt: run.createdAt,
+        })),
+      );
     },
   });
 
@@ -136,6 +168,60 @@ describe.skipIf(!available)('MongoDB', () => {
       expect(indexes).toContainEqual(
         expect.objectContaining({ key: { projectId: 1, sourceId: 1, column: 1 }, unique: true }),
       );
+    });
+
+    it('keeps one target schema per project and one suggestion and decision per column', async () => {
+      await clearDb();
+      await Promise.all(
+        [TargetSchemaModel, MappingSuggestionModel, MappingDecisionModel].map((m) =>
+          m.syncIndexes(),
+        ),
+      );
+      const projectId = new mongoose.Types.ObjectId();
+      const sourceId = new mongoose.Types.ObjectId();
+      await TargetSchemaModel.create({ projectId, name: 'A', version: 1, fields: [] });
+      await expect(
+        TargetSchemaModel.create({ projectId, name: 'B', version: 1, fields: [] }),
+      ).rejects.toThrow(/duplicate key/);
+
+      const { column, position, suggestion, run } = suggested('email', 0, 'email');
+      const doc = {
+        projectId,
+        sourceId,
+        column,
+        position,
+        jobId: run.jobId,
+        runId: run.runId,
+        schemaVersion: 1,
+        mappingVersion: 1,
+        method: run.method,
+        model: run.model,
+        suggestion,
+        createdAt: run.createdAt,
+      };
+      await MappingSuggestionModel.create(doc);
+      await expect(MappingSuggestionModel.create(doc)).rejects.toThrow(/duplicate key/);
+      for (const model of [MappingSuggestionModel, MappingDecisionModel]) {
+        expect(await model.collection.indexes()).toContainEqual(
+          expect.objectContaining({ key: { projectId: 1, sourceId: 1, column: 1 }, unique: true }),
+        );
+      }
+    });
+
+    it('creates the default target schema once even when asked twice at the same moment', async () => {
+      await clearDb();
+      await TargetSchemaModel.syncIndexes();
+      const repos = createMongoRepositories();
+      const projectId = new mongoose.Types.ObjectId().toHexString();
+      const input = { name: 'Customer 360', fields: [] };
+
+      const [a, b] = await Promise.all([
+        repos.targetSchemas.createIfMissing(projectId, input),
+        repos.targetSchemas.createIfMissing(projectId, input),
+      ]);
+
+      expect([a.version, b.version]).toEqual([1, 1]);
+      expect(await TargetSchemaModel.countDocuments({ projectId })).toBe(1);
     });
 
     it('indexes jobs by project and creation time', async () => {

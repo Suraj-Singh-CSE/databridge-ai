@@ -5,6 +5,7 @@ import type { Repositories } from '../../repositories.js';
 import type { AuditService } from '../audit/audit.service.js';
 import type { Actor } from '../projects/project.service.js';
 import type { Project } from '../projects/project.types.js';
+import type { TargetSchemaService } from '../target-schema/target-schema.service.js';
 
 import type { JobEventBus, JobUpdate } from './job.events.js';
 import { isTerminal, type Job, type JobType } from './job.types.js';
@@ -25,6 +26,8 @@ export interface JobService {
 
 export interface JobServiceDeps {
   repos: Pick<Repositories, 'jobs' | 'sources'>;
+  /** Mapping jobs need the project's target schema stored (the default is seeded here). */
+  targetSchemas: TargetSchemaService;
   audit: AuditService;
   events: JobEventBus;
   aiService: AiServiceClient;
@@ -40,8 +43,13 @@ const WORKER_LOST = {
   message: 'The worker running this job stopped responding. Please start the job again.',
 };
 
-const ALREADY_PROFILING =
-  'This source is already being profiled. Wait for that job to finish, or cancel it first.';
+const BUSY: Record<'profile' | 'mapping', string> = {
+  profile:
+    'This source is already being profiled. Wait for that job to finish, or cancel it first.',
+  mapping:
+    'Mapping suggestions for this source are already being made. Wait for that job to finish, or cancel it first.',
+};
+const NOT_PROFILED = 'Profile this source first: mapping suggestions are built from its profile.';
 
 export function toUpdate(job: Job): JobUpdate {
   return {
@@ -55,6 +63,7 @@ export function toUpdate(job: Job): JobUpdate {
 
 export function createJobService({
   repos,
+  targetSchemas,
   audit,
   events,
   aiService,
@@ -102,24 +111,32 @@ export function createJobService({
   }
 
   /**
-   * A profile job needs a source of this project (404 otherwise) that no other profile job is
-   * working on (409). The worker checks the source again when it runs.
+   * Profile and mapping jobs need a source of this project (404 otherwise) that no other job of
+   * the same type is working on (409); mapping also needs the source profiled (409) and the
+   * project's target schema stored. The worker checks the source again when it runs.
    */
-  async function checkProfile(project: Project, payload: Record<string, unknown>): Promise<void> {
+  async function checkSourceJob(
+    project: Project,
+    type: 'profile' | 'mapping',
+    payload: Record<string, unknown>,
+  ): Promise<void> {
     const sourceId = String(payload.sourceId);
-    if (!(await repos.sources.findById(project.id, sourceId))) {
-      throw AppError.notFound('Source not found.');
+    const source = await repos.sources.findById(project.id, sourceId);
+    if (!source) throw AppError.notFound('Source not found.');
+    if (type === 'mapping' && source.status !== 'profiled') {
+      throw AppError.conflict(NOT_PROFILED);
     }
-    const active = await repos.jobs.listActive(project.id, 'profile');
+    const active = await repos.jobs.listActive(project.id, type);
     const busy = await Promise.all(active.map(withStaleCheck));
     if (busy.some((job) => !isTerminal(job.status) && job.payload.sourceId === sourceId)) {
-      throw AppError.conflict(ALREADY_PROFILING);
+      throw AppError.conflict(BUSY[type]);
     }
+    if (type === 'mapping') await targetSchemas.current(project);
   }
 
   return {
     async create(actor, project, { type, payload }) {
-      if (type === 'profile') await checkProfile(project, payload);
+      if (type === 'profile' || type === 'mapping') await checkSourceJob(project, type, payload);
       const job = await repos.jobs.create({
         projectId: project.id,
         type,
