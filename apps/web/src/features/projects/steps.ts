@@ -7,14 +7,16 @@ export const PROJECT_PAGES = [
     label: 'Sources',
     milestone: 'M2',
     title: 'Add your source files',
-    summary: 'Upload the files from each system you want to combine.',
+    summary:
+      'Upload a file from each system you want to combine. Raw values never leave your workspace; the AI only sees column names and masked samples.',
   },
   {
     slug: 'profile',
     label: 'Profile',
     milestone: 'M2',
     title: "What's in your data",
-    summary: 'See the type, fill rate and patterns of every column.',
+    summary:
+      'We checked every column in every file. Columns with many empty values are flagged so you can decide what to keep.',
   },
   {
     slug: 'mapping',
@@ -62,6 +64,12 @@ export const PROJECT_PAGES = [
 
 export type ProjectPage = (typeof PROJECT_PAGES)[number];
 export type ProjectPageSlug = ProjectPage['slug'];
+
+export function projectPage<S extends ProjectPageSlug>(slug: S): Extract<ProjectPage, { slug: S }> {
+  const page = PROJECT_PAGES.find((item) => item.slug === slug);
+  if (!page) throw new Error(`Unknown project page ${slug}`);
+  return page as Extract<ProjectPage, { slug: S }>;
+}
 
 /** Labels used by the stepper and the project cards. */
 export const STEP_LABELS: Record<ProjectStep, string> = {

@@ -158,6 +158,8 @@ describe('new project dialog', () => {
         return ok({ project: created }, 201);
       }),
       http.get(`${API}/projects/:id`, () => ok({ project: created })),
+      http.get(`${API}/projects/:id/sources`, () => ok({ items: [] })),
+      http.get(`${API}/projects/:id/jobs`, () => ok({ items: [] })),
     );
     const { router } = renderApp('/projects');
     const { user, dialog } = await openDialog();
@@ -174,7 +176,7 @@ describe('new project dialog', () => {
     expect(
       await screen.findByRole('heading', { name: 'Add your source files' }),
     ).toBeInTheDocument();
-    expect(screen.getByText('Coming in milestone M2')).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'No files yet' })).toBeInTheDocument();
   });
 
   it('shows server validation errors next to the field', async () => {
