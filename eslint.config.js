@@ -16,6 +16,7 @@ export default tseslint.config(
       '**/test-results/**',
       '**/playwright-report/**',
       'apps/ai-service/**',
+      'eval/.venv/**',
     ],
   },
   js.configs.recommended,
