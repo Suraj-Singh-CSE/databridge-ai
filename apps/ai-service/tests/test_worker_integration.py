@@ -7,8 +7,10 @@ is unreachable; in CI (CI=true) an unreachable Redis is a failure.
 
 import json
 import os
+import shutil
 import time
 from collections.abc import Iterator
+from pathlib import Path
 from typing import Any
 
 import mongomock
@@ -23,10 +25,13 @@ from redis import Redis
 from redis.exceptions import RedisError
 
 from app.config import Settings
+from app.profiling.store import ProfileStore
+from app.profiling.zip_guard import ZipLimits
 from app.worker.celery_config import create_celery
 from app.worker.context import JobContext
 from app.worker.handlers import build_registry
 from app.worker.handlers.demo import DemoPayload
+from app.worker.handlers.profile import ProfileHandler, ProfilerSettings
 from app.worker.keys import events_channel
 from app.worker.models import TERMINAL_STATUSES, JobRequest
 from app.worker.queue import CeleryJobQueue
@@ -37,6 +42,7 @@ from app.worker.store import JobStore
 from app.worker.tasks import register_tasks
 from tests.conftest import SERVICE_TOKEN, insert_job
 
+SAMPLES = Path(__file__).parents[3] / "eval" / "samples"
 REDIS_URL = os.environ.get("TEST_REDIS_URL", "redis://localhost:6379/15")
 MONGODB_URI = os.environ.get("TEST_MONGODB_URI")
 
@@ -89,7 +95,12 @@ class Flaky:
 
 
 @pytest.fixture(scope="module")
-def celery(redis: Redis, collection: Any) -> Iterator[Celery]:  # noqa: ANN401
+def uploads(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    return tmp_path_factory.mktemp("uploads")
+
+
+@pytest.fixture(scope="module")
+def celery(redis: Redis, collection: Any, uploads: Path) -> Iterator[Celery]:  # noqa: ANN401
     settings = Settings(  # type: ignore[call-arg]
         _env_file=None,
         ai_service_token=SecretStr(SERVICE_TOKEN),
@@ -97,7 +108,15 @@ def celery(redis: Redis, collection: Any) -> Iterator[Celery]:  # noqa: ANN401
         mongodb_uri="mongodb://unused:27017/x",
     )
     app = create_celery(settings)
-    registry = build_registry()
+    profiler = ProfileHandler(
+        ProfileStore(collection.database),
+        ProfilerSettings(
+            upload_dir=uploads,
+            max_rows=200_000,
+            zip_limits=ZipLimits(max_uncompressed_bytes=200 * 1024 * 1024, max_ratio=100),
+        ),
+    )
+    registry = build_registry(profiler)
     registry.register("flaky", DemoPayload, Flaky())
     runner = JobRunner(
         JobStore(collection),
@@ -116,6 +135,7 @@ def run_and_collect(
     collection: Any,  # noqa: ANN401
     job_type: str,
     payload: dict[str, Any],
+    project_id: str | None = None,
 ) -> tuple[str, list[dict[str, Any]]]:
     job_id = str(ObjectId())
     # Subscribe before enqueueing so no event is missed.
@@ -123,7 +143,8 @@ def run_and_collect(
     pubsub.subscribe(events_channel(job_id))
     insert_job(collection, _id=ObjectId(job_id), type=job_type, payload=payload)
     assert collection.find_one({"_id": ObjectId(job_id)})["status"] == "queued"
-    request = JobRequest(job_id=job_id, project_id=str(ObjectId()), type=job_type, payload=payload)
+    project_id = project_id or str(ObjectId())
+    request = JobRequest(job_id=job_id, project_id=project_id, type=job_type, payload=payload)
     CeleryJobQueue(celery, JobSignals(redis)).enqueue(request)
     events: list[dict[str, Any]] = []
     deadline = time.monotonic() + 20
@@ -216,3 +237,41 @@ def test_cancel_stops_a_running_job(
     time.sleep(0.4)
     assert collection.find_one({"_id": ObjectId(job_id)})["progress"] == stopped_at
     pubsub.close()
+
+
+def test_profile_job_profiles_an_uploaded_source(
+    celery: Celery,
+    redis: Redis,
+    collection: Any,  # noqa: ANN401
+    uploads: Path,
+) -> None:
+    database = collection.database
+    project_id, source_id = str(ObjectId()), str(ObjectId())
+    key = f"projects/{project_id}/sources/{source_id}/original.xlsx"
+    (uploads / key).parent.mkdir(parents=True)
+    shutil.copyfile(SAMPLES / "billing_export.xlsx", uploads / key)
+    database.sources.insert_one(
+        {
+            "_id": ObjectId(source_id),
+            "projectId": ObjectId(project_id),
+            "fileKey": key,
+            "format": "xlsx",
+            "status": "uploaded",
+        }
+    )
+    try:
+        job_id, events = run_and_collect(
+            celery, redis, collection, "profile", {"sourceId": source_id}, project_id
+        )
+
+        assert events[-1]["status"] == "succeeded"
+        assert events[-1]["result"]["rowCount"] == 151
+        assert any(e["message"] == "Profiled column 9 of 9" for e in events)
+        source = database.sources.find_one({"_id": ObjectId(source_id)})
+        assert (source["status"], source["rowCount"], source["columnCount"]) == ("profiled", 151, 9)
+        profiles = list(database.column_profiles.find({"sourceId": ObjectId(source_id)}))
+        assert len(profiles) == 9
+        assert {p["runId"] for p in profiles} == {f"{job_id}:1"}
+    finally:
+        database.sources.delete_many({"projectId": ObjectId(project_id)})
+        database.column_profiles.delete_many({"projectId": ObjectId(project_id)})

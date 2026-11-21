@@ -1,3 +1,5 @@
+import { randomBytes } from 'node:crypto';
+
 import type { Express } from 'express';
 import request from 'supertest';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -191,7 +193,6 @@ export function defineJobsSuite(label: string, harness: JobsHarness): void {
         expect(unknown.body.error.details).toEqual([
           { field: 'body.type', message: 'unknown job type' },
         ]);
-        // Reserved for M2.4: not startable until its payload schema and handler exist.
         expect((await post({ type: 'profile', payload: {} })).status).toBe(400);
 
         const bad = await post({
@@ -245,6 +246,148 @@ export function defineJobsSuite(label: string, harness: JobsHarness): void {
           .send(DEMO)
           .expect(400);
         await request(app).post(`/api/v1/projects/${projectId}/jobs`).send(DEMO).expect(401);
+      });
+    });
+
+    describe('POST /projects/:projectId/jobs with type "profile"', () => {
+      async function addSource(project = projectId): Promise<string> {
+        const id = randomBytes(12).toString('hex');
+        await repos.sources.create({
+          id,
+          projectId: project,
+          name: 'CRM',
+          systemName: null,
+          originalFilename: 'crm.csv',
+          fileKey: `projects/${project}/sources/${id}/original.csv`,
+          format: 'csv',
+          sizeBytes: 100,
+          sha256: randomBytes(32).toString('hex'),
+          rowCount: 2,
+          columnCount: 3,
+          uploadedBy: owner.id,
+        });
+        return id;
+      }
+
+      const profile = (sourceId: string) => ({ type: 'profile', payload: { sourceId } });
+      const post = (body: object, session: Session = owner) =>
+        request(app).post(`/api/v1/projects/${projectId}/jobs`).set(bearer(session)).send(body);
+
+      it('queues a profile job for a source of the project', async () => {
+        const sourceId = await addSource();
+
+        const res = await post(profile(sourceId));
+
+        expect(res.status).toBe(202);
+        expect(res.body.data.job).toMatchObject({
+          type: 'profile',
+          status: 'queued',
+          payload: { sourceId },
+        });
+        const jobId = (res.body as { data: { job: { id: string } } }).data.job.id;
+        expect(ai.enqueued.map((e) => e.input)).toEqual([
+          { jobId, projectId, type: 'profile', payload: { sourceId } },
+        ]);
+      });
+
+      it('answers 404 for an unknown source or one of another project', async () => {
+        const outsider = await register('outsider@example.com');
+        const res = await request(app)
+          .post('/api/v1/projects')
+          .set(bearer(outsider))
+          .send({ name: 'Other' })
+          .expect(201);
+        const foreign = await addSource(
+          (res.body as { data: { project: { id: string } } }).data.project.id,
+        );
+
+        for (const sourceId of [randomBytes(12).toString('hex'), foreign]) {
+          const missing = await post(profile(sourceId));
+          expect(missing.status).toBe(404);
+          expect(missing.body.error).toMatchObject({
+            code: 'NOT_FOUND',
+            message: 'Source not found.',
+          });
+        }
+        expect(ai.enqueued).toEqual([]);
+      });
+
+      it('answers 409 while another profile job works on the same source', async () => {
+        const sourceId = await addSource();
+        const otherSource = await addSource();
+        const first = await startJob(profile(sourceId));
+        await startJob(DEMO); // other job types never block a profile
+
+        const busy = await post(profile(sourceId));
+        expect(busy.status).toBe(409);
+        expect(busy.body.error.code).toBe('CONFLICT');
+        expect(busy.body.error.message).toMatch(/already being profiled/);
+        await harness.workerUpdate(repos, first, { status: 'running', attempts: 1 });
+        expect((await post(profile(sourceId))).status).toBe(409);
+        expect((await post(profile(otherSource))).status).toBe(202);
+
+        await harness.workerUpdate(repos, first, { status: 'succeeded', progress: 100 });
+        expect((await post(profile(sourceId))).status).toBe(202);
+      });
+
+      it('does not let a stale job block a new profile', async () => {
+        const stale = appWith({ JOB_STALE_AFTER_SECONDS: '60' });
+        const sourceId = await addSource();
+        const first = await startJob(profile(sourceId));
+        const old = new Date(Date.now() - 61_000);
+        await harness.workerUpdate(repos, first, {
+          status: 'running',
+          attempts: 1,
+          startedAt: old,
+          heartbeatAt: old,
+        });
+
+        const res = await request(stale)
+          .post(`/api/v1/projects/${projectId}/jobs`)
+          .set(bearer(owner))
+          .send(profile(sourceId));
+
+        expect(res.status).toBe(202);
+        expect((await repos.jobs.findById(first))?.error?.code).toBe('WORKER_LOST');
+      });
+
+      it('validates the payload', async () => {
+        await addSource();
+        const cases = [
+          { payload: {}, field: 'body.payload.sourceId' },
+          { payload: { sourceId: '../../etc/passwd' }, field: 'body.payload.sourceId' },
+          {
+            payload: { sourceId: 'a'.repeat(24), projectId: 'b'.repeat(24) },
+            field: 'body.payload',
+          },
+        ];
+        for (const { payload, field } of cases) {
+          const res = await post({ type: 'profile', payload });
+          expect(res.status).toBe(400);
+          expect(res.body.error.code).toBe('VALIDATION_ERROR');
+          expect((res.body.error.details as { field: string }[]).map((d) => d.field)).toContain(
+            field,
+          );
+        }
+        expect(ai.enqueued).toEqual([]);
+      });
+
+      it('lets data_engineer members and admins start it; viewers 403, outsiders 404, anonymous 401', async () => {
+        const sourceId = await addSource();
+        const engineer = await memberWith('data_engineer');
+        const viewer = await memberWith('viewer');
+        const steward = await memberWith('data_steward');
+        const outsider = await register('outsider@example.com');
+
+        expect((await post(profile(sourceId), viewer)).status).toBe(403);
+        expect((await post(profile(sourceId), steward)).status).toBe(403);
+        expect((await post(profile(sourceId), outsider)).status).toBe(404);
+        await request(app)
+          .post(`/api/v1/projects/${projectId}/jobs`)
+          .send(profile(sourceId))
+          .expect(401);
+        expect((await post(profile(sourceId), engineer)).status).toBe(202);
+        expect(ai.enqueued).toHaveLength(1);
       });
     });
 

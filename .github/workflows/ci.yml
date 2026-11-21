@@ -299,6 +299,51 @@ jobs:
           grep -F "\"jobId\": \"$job\"" /tmp/worker.log | grep -qE 'job_(cancelled|no_longer_active)'
           echo "ok: cancelled job stopped in the worker"
 
+      - name: Profile smoke test through the nginx proxy (CSV and XLSX, masked values)
+        run: |
+          set -euo pipefail
+          api=http://localhost:8080/api/v1
+          token=$(curl -sS --fail-with-body -X POST "$api/auth/login" \
+            -H 'Content-Type: application/json' \
+            -d '{"email":"smoke@example.com","password":"smoke-test-password"}' | jq -r '.data.accessToken')
+          auth="Authorization: Bearer $token"
+          project=$(curl -sS --fail-with-body -X POST "$api/projects" -H "$auth" \
+            -H 'Content-Type: application/json' -d '{"name":"Smoke profiles"}' | jq -r '.data.project.id')
+          sources="$api/projects/$project/sources"
+
+          profile() {
+            local file=$1 source job
+            source=$(curl -sS --fail-with-body -X POST "$sources" -H "$auth" -F "file=@$file" | jq -r '.data.source.id')
+            job=$(curl -sS --fail-with-body -X POST "$api/projects/$project/jobs" -H "$auth" \
+              -H 'Content-Type: application/json' \
+              -d "{\"type\":\"profile\",\"payload\":{\"sourceId\":\"$source\"}}" | jq -r '.data.job.id')
+            curl -sSN --fail --max-time 90 "$api/jobs/$job/events" -H "$auth" | sed -n 's/^data: //p' > "/tmp/profile-$job"
+            echo "$file job $job: $(jq -r '"\(.status) \(.progress)% \(.message)"' "/tmp/profile-$job" | paste -sd ',' -)" >&2
+            jq -s -e 'last | .status == "succeeded"' "/tmp/profile-$job" > /dev/null
+            curl -sS --fail-with-body "$sources/$source/profile" -H "$auth" > "/tmp/profile-body-$source"
+            echo "$source"
+          }
+
+          csv=$(profile eval/samples/crm_customers.csv)
+          jq -c '.data.source | {status, rowCount, columnCount}' "/tmp/profile-body-$csv"
+          jq -c '[.data.columns[] | {column, inferredType}]' "/tmp/profile-body-$csv"
+          jq -e '.data.source.status == "profiled" and .data.source.rowCount == 143
+            and (.data.columns | length) == 10
+            and (.data.columns[] | select(.column == "ph") | .inferredType) == "phone"
+            and (.data.columns[] | select(.column == "email_id") | .samples[0]) == "[EMAIL]"' \
+            "/tmp/profile-body-$csv" > /dev/null
+          # No raw value of the first CRM row reaches the profile.
+          for value in "Rudra Shroff" 6376476497 rudra_s860@example.net 14/12/1975; do
+            if grep -qF "$value" "/tmp/profile-body-$csv"; then echo "raw value in profile" >&2; exit 1; fi
+          done
+
+          xlsx=$(profile eval/samples/billing_export.xlsx)
+          jq -c '.data.source | {status, rowCount, columnCount}' "/tmp/profile-body-$xlsx"
+          jq -e '.data.source.rowCount == 151 and .data.source.columnCount == 9
+            and (.data.columns[] | select(.column == "PAN") | .patterns[0].code) == "pan"' \
+            "/tmp/profile-body-$xlsx" > /dev/null
+          echo "ok: CSV and XLSX profiled by the worker from the shared volume"
+
       - name: AI service is not published to the host
         run: |
           if curl -s --max-time 3 http://localhost:8000/internal/v1/health; then

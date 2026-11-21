@@ -20,6 +20,10 @@ x-ai-environment: &ai-environment
   GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.8-flash}
   LOG_LEVEL: ${LOG_LEVEL:-INFO}
   UPLOAD_DIR: /data/uploads
+  # Column profiler limits (docs/adr/0011-column-profiling.md), shared with the api.
+  MAX_UPLOAD_ROWS: ${MAX_UPLOAD_ROWS:-200000}
+  XLSX_MAX_UNCOMPRESSED_BYTES: ${XLSX_MAX_UNCOMPRESSED_BYTES:-209715200}
+  XLSX_MAX_COMPRESSION_RATIO: ${XLSX_MAX_COMPRESSION_RATIO:-100}
   # Background jobs (docs/adr/0010-background-jobs.md).
   JOB_SOFT_TIME_LIMIT_SECONDS: ${JOB_SOFT_TIME_LIMIT_SECONDS:-900}
   JOB_HARD_TIME_LIMIT_SECONDS: ${JOB_HARD_TIME_LIMIT_SECONDS:-960}
@@ -58,7 +62,7 @@ services:
     restart: unless-stopped
     environment: *ai-environment
     volumes:
-      # Uploaded source files, written by the api. Read-only here: the profiler (M2.4) reads them.
+      # Uploaded source files, written by the api. Read-only here (the profiler runs in ai-worker).
       - uploads:/data/uploads:ro
     # No "ports": reachable only as http://ai-service:8000 inside the compose network.
     expose:
@@ -69,7 +73,7 @@ services:
       redis:
         condition: service_healthy
 
-  # Celery worker: runs background jobs (profiling from M2.4). Same image as ai-service.
+  # Celery worker: runs background jobs (column profiling, ...). Same image as ai-service.
   ai-worker:
     build:
       context: ..
@@ -141,6 +145,8 @@ services:
       S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-}
       MAX_UPLOAD_BYTES: ${MAX_UPLOAD_BYTES:-52428800}
       MAX_UPLOAD_ROWS: ${MAX_UPLOAD_ROWS:-200000}
+      XLSX_MAX_UNCOMPRESSED_BYTES: ${XLSX_MAX_UNCOMPRESSED_BYTES:-209715200}
+      XLSX_MAX_COMPRESSION_RATIO: ${XLSX_MAX_COMPRESSION_RATIO:-100}
       MAX_SOURCES_PER_PROJECT: ${MAX_SOURCES_PER_PROJECT:-10}
       UPLOAD_RATE_LIMIT_MAX: ${UPLOAD_RATE_LIMIT_MAX:-30}
       UPLOAD_RATE_LIMIT_WINDOW_MS: ${UPLOAD_RATE_LIMIT_WINDOW_MS:-3600000}

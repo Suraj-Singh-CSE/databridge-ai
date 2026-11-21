@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 DEFAULT_GEMINI_MODEL = "gemini-3.8-flash"
+MIB = 1024 * 1024
 
 
 class ModelPrice(BaseModel):
@@ -62,6 +63,15 @@ class Settings(BaseSettings):
     # Backoff between attempts: base * 2^(retry-1) seconds, capped at max.
     job_retry_backoff_seconds: float = Field(default=2.0, gt=0)
     job_retry_backoff_max_seconds: float = Field(default=60.0, gt=0)
+
+    # ---- column profiling (ADR 0011)
+    # Root of the uploads volume written by apps/api (read-only here). Same folder as the api's.
+    upload_dir: str = Field(default="./data/uploads", min_length=1)
+    # Most data rows profiled in one file; same variable and default as the api's upload limit.
+    max_upload_rows: int = Field(default=200_000, ge=1)
+    # Zip-bomb guard for XLSX files (also applied by the api's preview).
+    xlsx_max_uncompressed_bytes: int = Field(default=200 * MIB, ge=MIB)
+    xlsx_max_compression_ratio: float = Field(default=100.0, ge=10)
 
     @model_validator(mode="after")
     def _hard_limit_after_soft_limit(self) -> Self:

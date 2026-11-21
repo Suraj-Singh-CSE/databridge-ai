@@ -7,6 +7,7 @@ export type ErrorCode =
   | 'PAYLOAD_TOO_LARGE'
   | 'TOO_MANY_ROWS'
   | 'UNSUPPORTED_FILE'
+  | 'FILE_TOO_COMPLEX'
   | 'LIMIT_REACHED'
   | 'RATE_LIMITED'
   | 'QUEUE_UNAVAILABLE'

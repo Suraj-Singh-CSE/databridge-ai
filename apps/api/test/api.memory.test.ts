@@ -4,12 +4,20 @@ import {
   createMemoryRepositories,
   type MemoryRepositories,
 } from './support/memory-repositories.js';
+import { defineProfilesSuite } from './support/profiles-suite.js';
 import { defineSourcesSuite } from './support/sources-suite.js';
 
 const harness = { setup: () => Promise.resolve(createMemoryRepositories()) };
 
 defineApiSuite('in-memory repositories', harness);
 defineSourcesSuite('in-memory repositories', harness);
+defineProfilesSuite('in-memory repositories', {
+  ...harness,
+  async workerProfile(repos, write) {
+    await Promise.resolve();
+    (repos as MemoryRepositories).columnProfiles.workerSave(write);
+  },
+});
 defineJobsSuite('in-memory repositories', {
   ...harness,
   async workerUpdate(repos, jobId, patch) {

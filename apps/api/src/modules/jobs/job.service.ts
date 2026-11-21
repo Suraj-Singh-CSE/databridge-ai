@@ -24,7 +24,7 @@ export interface JobService {
 }
 
 export interface JobServiceDeps {
-  repos: Pick<Repositories, 'jobs'>;
+  repos: Pick<Repositories, 'jobs' | 'sources'>;
   audit: AuditService;
   events: JobEventBus;
   aiService: AiServiceClient;
@@ -39,6 +39,9 @@ const WORKER_LOST = {
   code: 'WORKER_LOST',
   message: 'The worker running this job stopped responding. Please start the job again.',
 };
+
+const ALREADY_PROFILING =
+  'This source is already being profiled. Wait for that job to finish, or cancel it first.';
 
 export function toUpdate(job: Job): JobUpdate {
   return {
@@ -98,8 +101,25 @@ export function createJobService({
     return failed;
   }
 
+  /**
+   * A profile job needs a source of this project (404 otherwise) that no other profile job is
+   * working on (409). The worker checks the source again when it runs.
+   */
+  async function checkProfile(project: Project, payload: Record<string, unknown>): Promise<void> {
+    const sourceId = String(payload.sourceId);
+    if (!(await repos.sources.findById(project.id, sourceId))) {
+      throw AppError.notFound('Source not found.');
+    }
+    const active = await repos.jobs.listActive(project.id, 'profile');
+    const busy = await Promise.all(active.map(withStaleCheck));
+    if (busy.some((job) => !isTerminal(job.status) && job.payload.sourceId === sourceId)) {
+      throw AppError.conflict(ALREADY_PROFILING);
+    }
+  }
+
   return {
     async create(actor, project, { type, payload }) {
+      if (type === 'profile') await checkProfile(project, payload);
       const job = await repos.jobs.create({
         projectId: project.id,
         type,

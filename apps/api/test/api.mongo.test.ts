@@ -5,12 +5,14 @@ import { disconnectDb } from '../src/db.js';
 import { AuditLogModel } from '../src/modules/audit/audit.model.js';
 import { JobModel } from '../src/modules/jobs/job.model.js';
 import { RefreshTokenModel } from '../src/modules/auth/refresh-token.model.js';
+import { ColumnProfileModel } from '../src/modules/sources/column-profile.model.js';
 import { SourceModel } from '../src/modules/sources/source.model.js';
 import { UserModel } from '../src/modules/users/user.model.js';
 import { createMongoRepositories } from '../src/repositories.js';
 
 import { defineApiSuite } from './support/api-suite.js';
 import { defineJobsSuite } from './support/jobs-suite.js';
+import { columnProfile, defineProfilesSuite } from './support/profiles-suite.js';
 import { defineSourcesSuite } from './support/sources-suite.js';
 import { clearDb, connectTestDb } from './support/mongo.js';
 
@@ -30,6 +32,18 @@ const mongoHarness = {
 describe.skipIf(!available)('MongoDB', () => {
   defineApiSuite('MongoDB repositories', mongoHarness);
   defineSourcesSuite('MongoDB repositories', mongoHarness);
+  defineProfilesSuite('MongoDB repositories', {
+    ...mongoHarness,
+    async workerProfile(_repos, { projectId, sourceId, columns, source }) {
+      // What apps/ai-service/app/profiling/store.py writes.
+      const jobId = new mongoose.Types.ObjectId();
+      const runId = `${jobId.toHexString()}:1`;
+      await ColumnProfileModel.insertMany(
+        columns.map((column) => ({ ...column, projectId, sourceId, jobId, runId })),
+      );
+      await SourceModel.updateOne({ _id: sourceId }, { $set: { ...source, profileRunId: runId } });
+    },
+  });
   defineJobsSuite('MongoDB repositories', {
     ...mongoHarness,
     async workerUpdate(_repos, jobId, patch) {
@@ -101,6 +115,26 @@ describe.skipIf(!available)('MongoDB', () => {
       );
       expect(indexes).toContainEqual(
         expect.objectContaining({ key: { projectId: 1, sha256: 1 }, unique: true }),
+      );
+    });
+
+    it('keeps one profile per column of a source', async () => {
+      await clearDb();
+      await ColumnProfileModel.syncIndexes();
+      const ids = {
+        projectId: new mongoose.Types.ObjectId(),
+        sourceId: new mongoose.Types.ObjectId(),
+        jobId: new mongoose.Types.ObjectId(),
+        runId: 'r:1',
+      };
+      await ColumnProfileModel.create({ ...columnProfile('email', 0), ...ids });
+
+      await expect(
+        ColumnProfileModel.create({ ...columnProfile('email', 3), ...ids }),
+      ).rejects.toThrow(/duplicate key/);
+      const indexes = await ColumnProfileModel.collection.indexes();
+      expect(indexes).toContainEqual(
+        expect.objectContaining({ key: { projectId: 1, sourceId: 1, column: 1 }, unique: true }),
       );
     });
 

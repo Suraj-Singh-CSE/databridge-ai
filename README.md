@@ -5,8 +5,9 @@ profile → map columns → resolve duplicates → generate and test SQL → che
 AI proposes, a human approves.
 
 **Status:** M1 (foundation) complete: monorepo, Docker + CI, API auth/roles/projects/audit,
-AI service with LLM gateway and PII masking, web app shell with sign-in and projects. Next: M2
-(upload and profiling): uploads and background jobs with live progress are done.
+AI service with LLM gateway and PII masking, web app shell with sign-in and projects. M2 (upload
+and profiling) in progress: uploads, background jobs with live progress and the column profiler
+are done.
 
 Approved designs (Figma, shadcn/ui kit): [all screens](docs/design/all-screens.png).
 
@@ -88,6 +89,7 @@ needs owner, admin or a `data_engineer` member.
 | PATCH  | `/:sourceId`               | owner, admin, data_engineer | 200 `{ source }` (`name`, `systemName`/`null`) |
 | DELETE | `/:sourceId`               | owner, admin, data_engineer | 204 (record and stored file)                   |
 | GET    | `/:sourceId/preview?limit` | any member, owner, admin    | 200 `{ columns, rows }` (limit 1-50, def. 20)  |
+| GET    | `/:sourceId/profile`       | any member, owner, admin    | 200 `{ source, columns }` (masked values)      |
 
 - **Upload**: `multipart/form-data` with one file in field `file`, plus optional `name` (1-80
   characters; defaults to the filename without extension) and `systemName` (1-40, e.g. `CRM`).
@@ -100,13 +102,16 @@ needs owner, admin or a `data_engineer` member.
   (`409 LIMIT_REACHED`), 30 uploads per user per hour (`429 RATE_LIMITED`). The same file twice in
   one project is `409 CONFLICT`.
 - **Source fields**: `id, projectId, name, systemName, originalFilename, format (csv|xlsx),
-sizeBytes, sha256, status (uploaded|profiling|ready|failed), rowCount, columnCount, error,
-uploadedBy, createdAt, updatedAt`. `rowCount`/`columnCount` are set at upload for CSV and stay
-  `null` for XLSX until profiling (M2.4).
+sizeBytes, sha256, status (uploaded|profiling|profiled|ready|failed), rowCount, columnCount,
+error, profiledAt, uploadedBy, createdAt, updatedAt`. `rowCount`/`columnCount` are set at upload
+  for CSV and by the profiler for XLSX (which also re-counts CSV rows, without blank rows).
 - **Preview**: header plus the first rows (first worksheet for XLSX), at most 50 columns and 200
   characters per cell (longer values end with `…`). Shown only to project members; never sent
-  to an LLM.
-- Deleting a project also deletes its sources and stored files.
+  to an LLM. An XLSX is first fully inflated and measured (zip-bomb guard, same limits as the
+  profiler): over `XLSX_MAX_UNCOMPRESSED_BYTES` (200 MiB) or `XLSX_MAX_COMPRESSION_RATIO` (100x,
+  checked past 10 MiB) it is `422 FILE_TOO_COMPLEX`.
+- Deleting a project also deletes its sources, column profiles and stored files; deleting a
+  source deletes its column profiles.
 
 Example:
 
@@ -119,9 +124,41 @@ curl -X POST http://localhost:8080/api/v1/projects/$PROJECT/sources \
 Errors: `VALIDATION_ERROR` 400 (with `details: [{ field, message }]`), `UNAUTHORIZED` 401,
 `FORBIDDEN` 403, `NOT_FOUND` 404 (also for projects you are not a member of), `CONFLICT` 409,
 `LIMIT_REACHED` 409, `UNSUPPORTED_FILE` 400, `PAYLOAD_TOO_LARGE` 413, `TOO_MANY_ROWS` 413,
-`RATE_LIMITED` 429.
+`FILE_TOO_COMPLEX` 422, `RATE_LIMITED` 429.
 
-**Background jobs.** Long work (profiling from M2.4; mapping, matching and pipelines later) runs
+**Column profiling.** Start a `profile` job for a source, watch it like any job, then read the
+profile. Profiling is an explicit step (not started by the upload), so a failed or cancelled profile
+never affects the upload itself. Design notes: [ADR 0011](docs/adr/0011-column-profiling.md).
+
+```bash
+JOB=$(curl -s -X POST http://localhost:8080/api/v1/projects/$PROJECT/jobs \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d "{\"type\":\"profile\",\"payload\":{\"sourceId\":\"$SOURCE\"}}" | jq -r .data.job.id)
+curl -N http://localhost:8080/api/v1/jobs/$JOB/events -H "Authorization: Bearer $TOKEN"
+curl -s http://localhost:8080/api/v1/projects/$PROJECT/sources/$SOURCE/profile \
+  -H "Authorization: Bearer $TOKEN" | jq '.data.columns[] | {column, inferredType, flags}'
+```
+
+- **Start**: `404 NOT_FOUND` if the source is not in the project, `409 CONFLICT` while another
+  profile job works on the same source. The source goes `profiling` -> `profiled` (with
+  `rowCount`, `columnCount`, `profiledAt`) or `failed` (with `error`); a cancelled run restores its
+  previous status. Running it again replaces the profile.
+- **Per column**: `inferredType` (string, integer, decimal, boolean, date, datetime, email, phone,
+  empty: the first that fits at least 95% of the non-empty values), `rowCount`, `emptyCount` and
+  `emptyPercent`, `distinctCount` and `uniquePercent`, `min`/`max` (numbers and dates),
+  `minLength`/`maxLength`/`avgLength`, `topValues` (5, with counts), `samples` (5), `patterns`
+  with `matchPercent` (email, Indian mobile, PIN code, PAN, Aadhaar-like, ISO / DD/MM/YYYY /
+  DD-MM-YYYY / DD-Mon-YYYY / YYYY/MM/DD dates), `flags` (`{ code, label, detail }`, e.g.
+  `HIGH_EMPTY_RATE` "High empty rate", `MIXED_FORMATS`, `TYPE_MISMATCH`, `POSSIBLE_ID`,
+  `CONSTANT`, `EXTRA_SPACES`, `EMPTY_COLUMN`, `PERSONAL_DATA`) and `personal`.
+- **No raw personal data**: top values and samples are masked (`[EMAIL]`, `98200xxxxx`, `[PAN]`);
+  in personal columns (names, addresses, birth dates, emails, phones, PAN, Aadhaar) they are shown
+  as shapes (`Xxxxx Xxxxxx`, `99/99/9999`) and `min`/`max` are left out.
+- **Job errors** (`error.code`): `SOURCE_NOT_FOUND`, `FILE_MISSING`, `INVALID_SOURCE`,
+  `UNSUPPORTED_FILE`, `FILE_TOO_COMPLEX` (XLSX zip-bomb guard), `TOO_MANY_ROWS` (over
+  `MAX_UPLOAD_ROWS`, mainly for XLSX), `TOO_MANY_COLUMNS` (over 500).
+
+**Background jobs.** Long work (profiling; mapping, matching and pipelines later) runs
 in a Celery worker, not in the request. The api owns the job record in MongoDB; the worker moves it
 forward and publishes every change to Redis; the browser watches it live over Server-Sent Events.
 Design notes: [ADR 0010](docs/adr/0010-background-jobs.md).
@@ -151,8 +188,9 @@ conditional write, so late or duplicate updates are ignored.
 | POST   | `/jobs/:jobId/cancel`              | owner, admin, data_engineer | 200 `{ job }` (finished jobs unchanged)  |
 | GET    | `/jobs/:jobId/events`              | any member of its project   | 200 `text/event-stream`                  |
 
-- **Start**: `{ "type": "demo", "payload": { "steps": 1-20, "stepMs": 10-2000, "failAtStep"?: n } }`.
-  `demo` sleeps through the steps and proves the system works; `profile` arrives in M2.4. An
+- **Start**: `{ "type": "demo", "payload": { "steps": 1-20, "stepMs": 10-2000, "failAtStep"?: n } }`
+  or `{ "type": "profile", "payload": { "sourceId": "<id>" } }` (see Column profiling above).
+  `demo` sleeps through the steps and proves the system works. An
   unknown type or a bad payload is `400 VALIDATION_ERROR`. If the queue cannot be reached the job
   is saved as `failed` with `QUEUE_UNAVAILABLE` and the answer is `503 QUEUE_UNAVAILABLE`.
 - **Job fields**: `id, projectId, type, status (queued|running|succeeded|failed|cancelled),

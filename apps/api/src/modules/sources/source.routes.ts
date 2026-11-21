@@ -136,5 +136,17 @@ export function createSourceRouter({
     },
   );
 
+  // Column profiles (masked values only) for any member; non-members get 404 from access().
+  router.get(
+    '/:sourceId/profile',
+    validate({ params: sourceParams }),
+    access('viewer'),
+    async (req, res) => {
+      const { sourceId } = validated(req, 'params', sourceParams);
+      const { source, columns } = await sourceService.profile(currentProject(req), sourceId);
+      sendData(res, { source: publicSource(source), columns });
+    },
+  );
+
   return router;
 }

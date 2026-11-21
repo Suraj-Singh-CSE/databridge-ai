@@ -6,6 +6,8 @@ import { createMongoJobRepository } from './modules/jobs/job.repository.js';
 import type { JobRepository } from './modules/jobs/job.types.js';
 import { createMongoProjectRepository } from './modules/projects/project.repository.js';
 import type { ProjectRepository } from './modules/projects/project.types.js';
+import { createMongoColumnProfileRepository } from './modules/sources/column-profile.repository.js';
+import type { ColumnProfileRepository } from './modules/sources/column-profile.types.js';
 import { createMongoSourceRepository } from './modules/sources/source.repository.js';
 import type { SourceRepository } from './modules/sources/source.types.js';
 import { createMongoUserRepository } from './modules/users/user.repository.js';
@@ -17,6 +19,7 @@ export interface Repositories {
   refreshTokens: RefreshTokenRepository;
   projects: ProjectRepository;
   sources: SourceRepository;
+  columnProfiles: ColumnProfileRepository;
   jobs: JobRepository;
   audit: AuditRepository;
 }
@@ -27,6 +30,7 @@ export function createMongoRepositories(): Repositories {
     refreshTokens: createMongoRefreshTokenRepository(),
     projects: createMongoProjectRepository(),
     sources: createMongoSourceRepository(),
+    columnProfiles: createMongoColumnProfileRepository(),
     jobs: createMongoJobRepository(),
     audit: createMongoAuditRepository(),
   };

@@ -24,6 +24,10 @@ const sourceSchema = new Schema(
     rowCount: { type: Number, default: null, min: 0 },
     columnCount: { type: Number, default: null, min: 0 },
     error: { type: sourceErrorSchema, default: null },
+    // Written by the profiler (apps/ai-service/app/profiling/store.py), with profileRunId, the
+    // `<jobId>:<attempt>` that owns the current status.
+    profiledAt: { type: Date, default: null },
+    profileRunId: { type: String, default: null },
     uploadedBy: { type: Schema.Types.ObjectId, ref: 'User', required: true },
   },
   { timestamps: true },
