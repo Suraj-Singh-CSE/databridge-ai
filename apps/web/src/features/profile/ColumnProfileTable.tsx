@@ -83,8 +83,8 @@ function ColumnDetails({ column }: { column: ColumnProfile }) {
             <p className="text-sm text-muted-foreground">None</p>
           ) : (
             <ul className="space-y-0.5 text-sm">
-              {column.topValues.map((top) => (
-                <li key={top.value} className="flex justify-between gap-3">
+              {column.topValues.map((top, index) => (
+                <li key={index} className="flex justify-between gap-3">
                   <span className="truncate font-mono">{top.value}</span>
                   <span className="shrink-0 text-muted-foreground tabular-nums">
                     {top.count.toLocaleString('en-US')} · {formatPercent(top.percent)}
@@ -103,8 +103,8 @@ function ColumnDetails({ column }: { column: ColumnProfile }) {
               aria-label={`Masked samples of ${column.column}`}
               className="flex flex-wrap gap-1.5"
             >
-              {column.samples.map((sample) => (
-                <li key={sample} className="rounded-md bg-muted px-2 py-0.5 font-mono text-xs">
+              {column.samples.map((sample, index) => (
+                <li key={index} className="rounded-md bg-muted px-2 py-0.5 font-mono text-xs">
                   {sample}
                 </li>
               ))}
@@ -122,7 +122,10 @@ interface ColumnProfileTableProps {
   onSortChange: (sort: EmptySort) => void;
 }
 
-/** One row per column; a row expands to show ranges, lengths, top values and masked samples. */
+/**
+ * One row per column; a row expands to show ranges, lengths, top values and masked samples.
+ * Masked values can repeat (two emails both become [EMAIL]), so lists are keyed by position.
+ */
 export function ColumnProfileTable({ columns, sort, onSortChange }: ColumnProfileTableProps) {
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
 
@@ -155,13 +158,13 @@ export function ColumnProfileTable({ columns, sort, onSortChange }: ColumnProfil
                 variant="ghost"
                 size="sm"
                 className="h-7 px-1.5 text-xs font-medium text-muted-foreground"
+                aria-label="Empty, sort by empty values"
                 onClick={() => {
                   onSortChange(NEXT_SORT[sort]);
                 }}
               >
                 Empty
                 <SortIcon aria-hidden="true" className="size-3.5" />
-                <span className="sr-only">, sort by empty values</span>
               </Button>
             </th>
             <th scope="col" className="px-3 py-2.5 font-medium">
@@ -189,6 +192,7 @@ export function ColumnProfileTable({ columns, sort, onSortChange }: ColumnProfil
                       variant="ghost"
                       size="sm"
                       className="h-auto px-1.5 py-1 font-mono font-normal"
+                      aria-label={`${column.column}, details`}
                       aria-expanded={open}
                       aria-controls={open ? detailsId : undefined}
                       onClick={() => {
@@ -197,7 +201,6 @@ export function ColumnProfileTable({ columns, sort, onSortChange }: ColumnProfil
                     >
                       <Chevron aria-hidden="true" className="size-3.5 text-muted-foreground" />
                       {column.column}
-                      <span className="sr-only">, details</span>
                     </Button>
                   </th>
                   <td className="px-3 py-2.5">{TYPE_LABELS[column.inferredType]}</td>

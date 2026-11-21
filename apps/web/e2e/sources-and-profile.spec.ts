@@ -8,6 +8,13 @@ const sample = (name: string) =>
 /** Raw values from the first row of crm_customers.csv: none may appear on the Profile screen. */
 const RAW_CRM_VALUES = ['rudra_s860@example.net', 'Rudra Shroff', '6376476497', '14/12/1975'];
 
+// On failure, print what the page showed (CI cannot always fetch the trace artifact).
+test.afterEach(async ({ page }, testInfo) => {
+  if (testInfo.status !== testInfo.expectedStatus) {
+    console.log(`Page text at failure:\n${await page.locator('main').innerText()}`);
+  }
+});
+
 async function snapshot(page: Page, name: string): Promise<void> {
   await page.screenshot({
     path: `test-results/screenshots/${name}.png`,
@@ -60,8 +67,8 @@ test('upload CSV and XLSX, watch them profile, then read the masked column profi
   await expect(page.getByRole('heading', { name: "What's in your data" })).toBeVisible();
   const picker = page.getByRole('group', { name: 'Choose a file' });
   await picker.getByRole('button', { name: /crm_customers\.csv/ }).click();
-  await expect(page.getByRole('rowheader', { name: 'cust_id, details' })).toBeVisible();
-  await expect(page.getByRole('rowheader', { name: 'ph, details' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'cust_id, details' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'ph, details' })).toBeVisible();
 
   await page.getByRole('button', { name: 'email_id, details' }).click();
   const samples = page.getByRole('list', { name: 'Masked samples of email_id' });
@@ -74,5 +81,5 @@ test('upload CSV and XLSX, watch them profile, then read the masked column profi
 
   // The Excel file has its own profile.
   await picker.getByRole('button', { name: /billing_export\.xlsx/ }).click();
-  await expect(page.getByRole('rowheader', { name: 'PAN, details' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'PAN, details' })).toBeVisible();
 });

@@ -98,7 +98,7 @@ function setup({
 }
 
 function columnNames(): string[] {
-  return screen.getAllByRole('rowheader').map((cell) => cell.textContent.replace(', details', ''));
+  return screen.getAllByRole('rowheader').map((cell) => cell.textContent);
 }
 
 describe('profile page', () => {
