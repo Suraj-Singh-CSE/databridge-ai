@@ -5,6 +5,8 @@ import { describe, expect, it } from 'vitest';
 
 import type {
   ColumnMapping,
+  Job,
+  ProjectRole,
   MappingSuggestion,
   Source,
   SourceMappings,
@@ -13,16 +15,19 @@ import type {
 import {
   API,
   fail,
+  jobFrame,
+  makeJob,
   makeProject,
   makeSession,
   makeSource,
   ok,
   signedInHandlers,
+  sseChannel,
 } from '@/test/fixtures';
 import { renderApp } from '@/test/render-app';
 import { server } from '@/test/server';
 
-import { transformLabel } from './mapping-labels';
+import { acceptHighSummary, isMappable, transformLabel } from './mapping-labels';
 
 const PROJECT_ID = '64b0000000000000000000a1';
 const CRM_ID = '64b0000000000000000000c1';
@@ -167,6 +172,16 @@ const SCHEMA: TargetSchema = {
       required: false,
       allowConcat: false,
     },
+    {
+      name: 'customer_id',
+      type: 'string',
+      format: null,
+      description: 'Golden record id',
+      isPii: false,
+      generated: true,
+      required: true,
+      allowConcat: false,
+    },
   ],
   updatedBy: null,
   updatedAt: '2026-11-01T10:00:00.000Z',
@@ -176,14 +191,32 @@ interface Setup {
   sources?: Source[];
   mappings?: Record<string, SourceMappings>;
   mappingsError?: boolean;
+  /** A project member with this role instead of the project owner. */
+  member?: ProjectRole;
+  jobs?: Job[];
 }
 
-function setup({ sources = [makeSource()], mappings, mappingsError = false }: Setup = {}) {
+const USER_ID = '64b000000000000000000001';
+
+function setup({
+  sources = [makeSource()],
+  mappings,
+  mappingsError = false,
+  member,
+  jobs = [],
+}: Setup = {}) {
   const byId = mappings ?? { [CRM_ID]: mappingsOf() };
+  const project = member
+    ? makeProject({
+        ownerId: '64b000000000000000000009',
+        members: [{ userId: USER_ID, role: member }],
+      })
+    : makeProject();
   server.use(
-    ...signedInHandlers(makeSession('data_steward')),
-    http.get(`${API}/projects/:id`, () => ok({ project: makeProject() })),
+    ...signedInHandlers(makeSession(member ?? 'data_steward')),
+    http.get(`${API}/projects/:id`, () => ok({ project })),
     http.get(`${API}/projects/:id/sources`, () => ok({ items: sources })),
+    http.get(`${API}/projects/:id/jobs`, () => ok({ items: jobs })),
     http.get(`${API}/projects/:id/target-schema`, () => ok({ schema: SCHEMA })),
     http.get(`${API}/projects/:id/sources/:sourceId/mappings`, async ({ params }) => {
       if (mappingsError) {
@@ -320,8 +353,13 @@ describe('mapping page', () => {
       originalFilename: 'support.csv',
       status: 'uploaded',
     });
+    const ready = makeSource({
+      id: '64b0000000000000000000c4',
+      originalFilename: 'legacy.csv',
+      status: 'ready',
+    });
     setup({
-      sources: [makeSource(), billing, pending],
+      sources: [makeSource(), billing, pending, ready],
       mappings: {
         [CRM_ID]: mappingsOf(),
         [BILLING_ID]: mappingsOf({
@@ -335,7 +373,8 @@ describe('mapping page', () => {
 
     const picker = await screen.findByRole('group', { name: 'Choose a file' });
     expect(within(picker).getByRole('button', { name: /support\.csv/ })).toBeDisabled();
-    expect(within(picker).getByText('· Profile this file first')).toBeInTheDocument();
+    expect(within(picker).getByRole('button', { name: /legacy\.csv/ })).toBeDisabled();
+    expect(within(picker).getAllByText('· Profile this file first')).toHaveLength(2);
     await screen.findByRole('table', { name: 'Column mapping suggestions' });
 
     await user.click(within(picker).getByRole('button', { name: /billing\.csv/ }));
@@ -362,6 +401,7 @@ describe('mapping page', () => {
 
   it('explains that suggestions come after mapping runs', async () => {
     setup({
+      member: 'data_steward',
       mappings: {
         [CRM_ID]: mappingsOf({
           run: null,
@@ -403,6 +443,350 @@ describe('mapping page', () => {
   });
 });
 
+const MAPPING_JOB = makeJob({
+  type: 'mapping',
+  status: 'queued',
+  progress: 0,
+  message: '',
+  payload: { sourceId: CRM_ID },
+});
+
+/** Records PATCH calls and answers with the column marked as decided. */
+function captureDecisions() {
+  const calls: { column: string; body: unknown }[] = [];
+  server.use(
+    http.patch(
+      `${API}/projects/:id/sources/:sourceId/mappings/:column`,
+      async ({ params, request }) => {
+        const body = (await request.json()) as { decision: string; target?: string; role?: string };
+        const column = String(params.column);
+        calls.push({ column, body });
+        const base = COLUMNS.find((c) => c.column === column) ?? COLUMNS[0];
+        const status =
+          body.decision === 'accept'
+            ? 'accepted'
+            : body.decision === 'reject'
+              ? 'rejected'
+              : 'overridden';
+        return ok({
+          column: {
+            ...base,
+            status,
+            decision: {
+              column,
+              decision: body.decision,
+              target: body.target ?? base?.suggestion.target ?? null,
+              role: body.role ?? base?.suggestion.role ?? 'field',
+              transform: null,
+              schemaVersion: 1,
+              decidedBy: USER_ID,
+              decidedAt: '2026-11-21T11:00:00.000Z',
+            },
+          },
+        });
+      },
+    ),
+  );
+  return calls;
+}
+
+describe('mapping decisions', () => {
+  it('accepts and rejects a column with the right request', async () => {
+    setup();
+    const calls = captureDecisions();
+    const user = userEvent.setup();
+
+    await user.click(await screen.findByRole('button', { name: 'Accept mobile_no' }));
+    expect(await screen.findByText('Accepted mobile_no.')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Reject dob' }));
+    expect(await screen.findByText('Rejected dob.')).toBeInTheDocument();
+
+    expect(calls).toEqual([
+      { column: 'mobile_no', body: { decision: 'accept' } },
+      { column: 'dob', body: { decision: 'reject' } },
+    ]);
+    expect(screen.getByRole('button', { name: 'Accept cust_nm' })).toBeDisabled();
+  });
+
+  it('changes a column with the keyboard, without generated fields, and returns focus', async () => {
+    setup();
+    const calls = captureDecisions();
+    const user = userEvent.setup();
+
+    const change = await screen.findByRole('button', { name: 'Change mobile_no' });
+    change.focus();
+    await user.keyboard('{Enter}');
+    const dialog = await screen.findByRole('dialog', { name: 'Change mapping' });
+
+    const target = within(dialog).getByRole('combobox', { name: 'Map to' });
+    const options = within(target)
+      .getAllByRole('option')
+      .map((o) => o.textContent);
+    expect(options).toEqual([
+      'full_name – Customer full name',
+      'phone – Mobile number in E.164',
+      'Record ID (keep to trace records back to this file)',
+      'Not mapped',
+    ]);
+    expect(target).toHaveValue('field:phone');
+
+    await user.selectOptions(target, 'field:full_name');
+    await user.selectOptions(within(dialog).getByRole('combobox', { name: 'Cleaning' }), 'trim');
+    await user.click(within(dialog).getByRole('button', { name: 'Save change' }));
+
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    });
+    expect(calls).toEqual([
+      {
+        column: 'mobile_no',
+        body: { decision: 'override', role: 'field', target: 'full_name', transform: 'trim' },
+      },
+    ]);
+    expect(screen.getByText('Changed mobile_no to full_name.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Change mobile_no' })).toHaveFocus();
+  });
+
+  it('closes the change dialog with Escape and maps to Record ID or nothing', async () => {
+    setup();
+    const calls = captureDecisions();
+    const user = userEvent.setup();
+
+    const change = await screen.findByRole('button', { name: 'Change ticket_ref' });
+    await user.click(change);
+    await screen.findByRole('dialog');
+    await user.keyboard('{Escape}');
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    });
+    expect(change).toHaveFocus();
+    expect(calls).toEqual([]);
+
+    await user.click(change);
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByRole('combobox', { name: 'Map to' })).toHaveValue('role:ignore');
+    expect(within(dialog).getByRole('combobox', { name: 'Cleaning' })).toBeDisabled();
+    await user.selectOptions(
+      within(dialog).getByRole('combobox', { name: 'Map to' }),
+      'role:source_record_id',
+    );
+    await user.click(within(dialog).getByRole('button', { name: 'Save change' }));
+    await waitFor(() => {
+      expect(calls).toEqual([
+        {
+          column: 'ticket_ref',
+          body: { decision: 'override', role: 'source_record_id', target: null, transform: null },
+        },
+      ]);
+    });
+  });
+
+  it('explains a conflict in plain language', async () => {
+    setup();
+    server.use(
+      http.patch(`${API}/projects/:id/sources/:sourceId/mappings/:column`, () =>
+        fail(409, 'CONFLICT', 'Taken.', { column: 'email_id', target: 'email' }),
+      ),
+    );
+    const user = userEvent.setup();
+
+    await user.click(await screen.findByRole('button', { name: 'Accept mobile_no' }));
+    expect(
+      await screen.findByText(
+        '‘email’ is already used by column ‘email_id’. Change that one first.',
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it('shows the conflict inside the change dialog and keeps it open', async () => {
+    setup();
+    server.use(
+      http.patch(`${API}/projects/:id/sources/:sourceId/mappings/:column`, () =>
+        fail(
+          409,
+          'CONFLICT',
+          'Column "cust_nm" is already mapped to "phone". Change that column first, or pick another field.',
+        ),
+      ),
+    );
+    const user = userEvent.setup();
+
+    await user.click(await screen.findByRole('button', { name: 'Change dob' }));
+    const dialog = await screen.findByRole('dialog');
+    await user.selectOptions(
+      within(dialog).getByRole('combobox', { name: 'Map to' }),
+      'field:phone',
+    );
+    await user.click(within(dialog).getByRole('button', { name: 'Save change' }));
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent(
+      'Column "cust_nm" is already mapped to "phone".',
+    );
+  });
+
+  it('accepts all High suggestions after a confirm and reports the counts', async () => {
+    setup();
+    let calls = 0;
+    server.use(
+      http.post(`${API}/projects/:id/sources/:sourceId/mappings/accept-high`, () => {
+        calls += 1;
+        return ok({ accepted: 1, alreadyDecided: 1, conflicts: 1 });
+      }),
+    );
+    const user = userEvent.setup();
+
+    await user.click(await screen.findByRole('button', { name: 'Accept all High' }));
+    const dialog = await screen.findByRole('dialog', {
+      name: 'Accept 1 High-confidence suggestion?',
+    });
+    await user.click(within(dialog).getByRole('button', { name: 'Accept 1' }));
+
+    expect(
+      await screen.findByText(
+        'Accepted 1 column. 1 was already decided. 1 could not be accepted because the field is already used or no longer exists.',
+      ),
+    ).toBeInTheDocument();
+    expect(calls).toBe(1);
+  });
+
+  it('says the mapping is approved when nothing is pending', async () => {
+    const decided = COLUMNS.map((c) => ({ ...c, status: 'rejected' as const }));
+    setup({ mappings: { [CRM_ID]: mappingsOf({ columns: decided }) } });
+
+    expect(await screen.findByText('Mapping approved')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Accept all High' })).toBeDisabled();
+  });
+});
+
+describe('running mapping', () => {
+  it('starts a mapping job, shows live progress and loads the suggestions when done', async () => {
+    const events = sseChannel();
+    let started: unknown = null;
+    let finished = false;
+    setup({
+      member: 'data_engineer',
+      mappings: {
+        [CRM_ID]: mappingsOf({
+          run: null,
+          columns: [],
+          summary: { total: 0, high: 0, medium: 0, low: 0, decided: 0 },
+        }),
+      },
+    });
+    server.use(
+      http.post(`${API}/projects/:id/jobs`, async ({ request }) => {
+        started = await request.json();
+        return ok({ job: MAPPING_JOB }, 202);
+      }),
+      http.get(`${API}/jobs/:id/events`, () => events.response()),
+      http.get(`${API}/projects/:id/sources/:sourceId/mappings`, () =>
+        ok(
+          finished
+            ? mappingsOf()
+            : mappingsOf({
+                run: null,
+                columns: [],
+                summary: { total: 0, high: 0, medium: 0, low: 0, decided: 0 },
+              }),
+        ),
+      ),
+    );
+    const user = userEvent.setup();
+
+    await user.click(await screen.findByRole('button', { name: 'Run mapping' }));
+    await waitFor(() => {
+      expect(started).toEqual({ type: 'mapping', payload: { sourceId: CRM_ID } });
+    });
+    expect(await screen.findByText('Waiting to map crm_customers.csv')).toBeInTheDocument();
+    events.send(jobFrame({ status: 'running', progress: 30, message: 'Matched 3 of 9 columns' }));
+    expect(await screen.findByText('Mapping crm_customers.csv: 30%')).toBeInTheDocument();
+    expect(screen.getByRole('progressbar', { name: 'Mapping crm_customers.csv' })).toHaveAttribute(
+      'aria-valuenow',
+      '30',
+    );
+    expect(screen.getByRole('button', { name: 'Cancel mapping' })).toBeEnabled();
+
+    finished = true;
+    events.send(jobFrame({ status: 'succeeded', progress: 100, message: 'Done' }));
+    events.close();
+    expect(
+      await screen.findByRole('table', { name: 'Column mapping suggestions' }),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole('progressbar')).not.toBeInTheDocument();
+  });
+
+  it('cancels a running mapping job', async () => {
+    let cancelled = '';
+    const running = { ...MAPPING_JOB, status: 'running' as const, progress: 50 };
+    setup({ member: 'data_engineer', jobs: [running] });
+    server.use(
+      http.get(`${API}/jobs/:id/events`, () => sseChannel().response()),
+      http.post(`${API}/jobs/:id/cancel`, ({ params }) => {
+        cancelled = String(params.id);
+        return ok({ job: { ...running, status: 'cancelled' } });
+      }),
+    );
+    const user = userEvent.setup();
+
+    await user.click(await screen.findByRole('button', { name: 'Cancel mapping' }));
+    await waitFor(() => {
+      expect(cancelled).toBe(MAPPING_JOB.id);
+    });
+  });
+
+  it('asks before re-running and warns that decisions may go out of date', async () => {
+    let started = 0;
+    setup({ member: 'data_engineer' });
+    server.use(
+      http.post(`${API}/projects/:id/jobs`, () => {
+        started += 1;
+        return fail(
+          409,
+          'CONFLICT',
+          'Profile this source first: mapping suggestions are built from its profile.',
+        );
+      }),
+    );
+    const user = userEvent.setup();
+
+    await user.click(await screen.findByRole('button', { name: 'Re-run mapping' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Re-run mapping?' });
+    expect(within(dialog).getByText(/may become out of date/)).toBeInTheDocument();
+    await user.click(within(dialog).getByRole('button', { name: 'Re-run mapping' }));
+
+    expect(await screen.findByText(/Profile this source first/)).toBeInTheDocument();
+    expect(started).toBe(1);
+  });
+});
+
+describe('mapping roles', () => {
+  it('shows viewers a read-only page', async () => {
+    setup({ member: 'viewer' });
+
+    await screen.findByRole('table', { name: 'Column mapping suggestions' });
+    expect(screen.getByText(/You can view these suggestions/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^Accept/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^Change/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /run mapping/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('columnheader', { name: 'Actions' })).not.toBeInTheDocument();
+  });
+
+  it('lets data stewards decide but not run mapping', async () => {
+    setup({ member: 'data_steward' });
+
+    expect(await screen.findByRole('button', { name: 'Accept mobile_no' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Accept all High' })).toBeEnabled();
+    expect(screen.queryByRole('button', { name: /run mapping/i })).not.toBeInTheDocument();
+    expect(screen.queryByText(/You can view these suggestions/)).not.toBeInTheDocument();
+  });
+
+  it('lets data engineers decide and re-run mapping', async () => {
+    setup({ member: 'data_engineer' });
+
+    expect(await screen.findByRole('button', { name: 'Re-run mapping' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Change cust_id' })).toBeEnabled();
+  });
+});
+
 describe('transformLabel', () => {
   it.each([
     [null, 'None'],
@@ -416,5 +800,22 @@ describe('transformLabel', () => {
     ['something_new', 'something_new'],
   ])('%s -> %s', (code, label) => {
     expect(transformLabel(code)).toBe(label);
+  });
+});
+
+describe('mapping helpers', () => {
+  it('only treats profiled files as mappable', () => {
+    expect(isMappable(makeSource({ status: 'profiled' }))).toBe(true);
+    expect(isMappable(makeSource({ status: 'ready' }))).toBe(false);
+    expect(isMappable(makeSource({ status: 'uploaded' }))).toBe(false);
+  });
+
+  it('summarises accept-all-High results', () => {
+    expect(acceptHighSummary({ accepted: 3, alreadyDecided: 0, conflicts: 0 })).toBe(
+      'Accepted 3 columns.',
+    );
+    expect(acceptHighSummary({ accepted: 0, alreadyDecided: 2, conflicts: 0 })).toBe(
+      'Accepted 0 columns. 2 were already decided.',
+    );
   });
 });

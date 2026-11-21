@@ -20,3 +20,14 @@ export function canManageSources(access: ProjectAccess | null): boolean {
 /** Short reason shown to members who can look but not change sources. */
 export const READ_ONLY_SOURCES_NOTE =
   'You can view these files. Only the project owner, an admin or a data engineer can upload, profile or remove them.';
+
+/** Start or re-run the mapping job: the same people who manage sources. */
+export const canRunMapping = canManageSources;
+
+/** Accept, reject or change a mapping suggestion: those above, plus data_steward members. */
+export function canReviewMappings(access: ProjectAccess | null): boolean {
+  return canManageSources(access) || access === 'data_steward';
+}
+
+export const READ_ONLY_MAPPING_NOTE =
+  'You can view these suggestions. Only the project owner, an admin, a data engineer or a data steward can accept or change them.';

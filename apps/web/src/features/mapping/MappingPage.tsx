@@ -1,5 +1,5 @@
-import { CircleAlert, Search } from 'lucide-react';
-import { useMemo, useState } from 'react';
+import { CircleAlert, CircleCheck, Info, Search } from 'lucide-react';
+import { useMemo, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router';
 
 import { EmptyState } from '@/components/EmptyState';
@@ -8,21 +8,47 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Skeleton } from '@/components/ui/skeleton';
+import { useAuth } from '@/features/auth/auth-context';
+import {
+  canReviewMappings,
+  canRunMapping,
+  projectAccessOf,
+  READ_ONLY_MAPPING_NOTE,
+} from '@/features/projects/access';
 import { ProjectPageFrame } from '@/features/projects/ProjectPageFrame';
 import { projectPage } from '@/features/projects/steps';
-import { useSources } from '@/features/sources/queries';
+import { LiveJobs } from '@/features/sources/LiveJobs';
+import { useCancelJob, useProjectJobs, useSources } from '@/features/sources/queries';
 import type {
+  ColumnMapping,
   ConfidenceLabel,
   Project,
   Source,
   SourceMappings,
   TargetField,
 } from '@/lib/api-types';
+import { isTerminalStatus } from '@/lib/job-events';
 import { cn } from '@/lib/utils';
 
-import { isMappable, METHOD_LABELS } from './mapping-labels';
+import { ChangeMappingDialog } from './ChangeMappingDialog';
+import { AcceptHighButton, MappingProgress, RunMappingButton } from './MappingActions';
+import {
+  acceptHighSummary,
+  isMappable,
+  mappingErrorMessage,
+  METHOD_LABELS,
+  targetLabel,
+} from './mapping-labels';
 import { MappingTable } from './MappingTable';
-import { useSourceMappings, useTargetSchema } from './queries';
+import {
+  latestMappingJob,
+  useAcceptHigh,
+  useDecideMapping,
+  useSourceMappings,
+  useStartMapping,
+  useTargetSchema,
+  type MappingDecisionInput,
+} from './queries';
 
 const PAGE = projectPage('mapping');
 
@@ -118,18 +144,125 @@ function SourcePicker({
   );
 }
 
-function SuggestionsView({
-  mappings,
-  fields,
-}: {
+interface Notice {
+  text: string;
+  error: boolean;
+}
+
+/** Result of the last action, read out by screen readers. */
+function NoticeRegion({ notice }: { notice: Notice | null }) {
+  return (
+    <div aria-live="polite" aria-atomic="true">
+      {notice && (
+        <Alert>
+          {notice.error ? <CircleAlert aria-hidden="true" /> : <CircleCheck aria-hidden="true" />}
+          <AlertDescription>{notice.text}</AlertDescription>
+        </Alert>
+      )}
+    </div>
+  );
+}
+
+function decidedText(column: string, updated: ColumnMapping): string {
+  if (updated.status === 'accepted') return `Accepted ${column}.`;
+  if (updated.status === 'rejected') return `Rejected ${column}.`;
+  const choice = updated.decision ?? updated.suggestion;
+  return `Changed ${column} to ${targetLabel(choice.target, choice.role)}.`;
+}
+
+interface SuggestionsViewProps {
+  projectId: string;
+  sourceId: string;
   mappings: SourceMappings;
   fields: ReadonlyMap<string, TargetField>;
-}) {
+  canReview: boolean;
+}
+
+function SuggestionsView({
+  projectId,
+  sourceId,
+  mappings,
+  fields,
+  canReview,
+}: SuggestionsViewProps) {
   const [query, setQuery] = useState('');
   const [confidence, setConfidence] = useState<ConfidenceFilter>('all');
   const [status, setStatus] = useState<StatusFilter>('all');
+  const [changing, setChanging] = useState<ColumnMapping | null>(null);
+  const [notice, setNotice] = useState<Notice | null>(null);
+  const changeButton = useRef<HTMLButtonElement | null>(null);
+  const decide = useDecideMapping(projectId, sourceId);
+  const acceptHigh = useAcceptHigh(projectId, sourceId);
 
   const { columns, summary, run } = mappings;
+  const decided = columns.filter((c) => c.status !== 'pending').length;
+  const pendingHigh = columns.filter(
+    (c) => c.status === 'pending' && c.suggestion.confidenceLabel === 'High',
+  ).length;
+  const busyColumn = decide.isPending ? decide.variables.column : null;
+
+  const submit = (column: string, input: MappingDecisionInput, inDialog = false) => {
+    setNotice(null);
+    decide.mutate(
+      { column, input },
+      {
+        onSuccess: (updated) => {
+          setNotice({ text: decidedText(column, updated), error: false });
+          if (inDialog) setChanging(null);
+        },
+        onError: (error) => {
+          // The change dialog shows its own error next to the form.
+          if (!inDialog) setNotice({ text: mappingErrorMessage(error), error: true });
+        },
+      },
+    );
+  };
+
+  const renderActions = (mapping: ColumnMapping) => {
+    const busy = busyColumn === mapping.column || acceptHigh.isPending;
+    return (
+      <div className="flex gap-1">
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          aria-label={`Accept ${mapping.column}`}
+          disabled={busy || mapping.status === 'accepted'}
+          onClick={() => {
+            submit(mapping.column, { decision: 'accept' });
+          }}
+        >
+          Accept
+        </Button>
+        <Button
+          type="button"
+          size="sm"
+          variant="ghost"
+          aria-label={`Reject ${mapping.column}`}
+          disabled={busy || mapping.status === 'rejected'}
+          onClick={() => {
+            submit(mapping.column, { decision: 'reject' });
+          }}
+        >
+          Reject
+        </Button>
+        <Button
+          type="button"
+          size="sm"
+          variant="ghost"
+          aria-label={`Change ${mapping.column}`}
+          disabled={busy}
+          onClick={(event) => {
+            changeButton.current = event.currentTarget;
+            decide.reset();
+            setChanging(mapping);
+          }}
+        >
+          Change
+        </Button>
+      </div>
+    );
+  };
   const needle = query.trim().toLowerCase();
   const shown = columns
     .filter((c) => !needle || c.column.toLowerCase().includes(needle))
@@ -153,8 +286,15 @@ function SuggestionsView({
         <SummaryCard label="Medium confidence" value={summary.medium} />
         <SummaryCard label="Low confidence" value={summary.low} />
       </div>
+      {decided === columns.length && (
+        <Alert>
+          <CircleCheck aria-hidden="true" />
+          <AlertTitle>Mapping approved</AlertTitle>
+          <AlertDescription>Every column of this file has a decision.</AlertDescription>
+        </Alert>
+      )}
       <p className="text-sm text-muted-foreground">
-        {summary.decided} decided · {summary.total - summary.decided} pending
+        {decided} decided · {columns.length - decided} pending
         {run && (
           <>
             {' · '}Suggested by:{' '}
@@ -194,7 +334,27 @@ function SuggestionsView({
         <p className="text-sm text-muted-foreground" aria-live="polite">
           Showing {shown.length} of {columns.length} columns
         </p>
+        {canReview && (
+          <div className="ml-auto">
+            <AcceptHighButton
+              count={pendingHigh}
+              pending={acceptHigh.isPending}
+              onConfirm={() => {
+                setNotice(null);
+                acceptHigh.mutate(undefined, {
+                  onSuccess: (result) => {
+                    setNotice({ text: acceptHighSummary(result), error: false });
+                  },
+                  onError: (error) => {
+                    setNotice({ text: mappingErrorMessage(error), error: true });
+                  },
+                });
+              }}
+            />
+          </div>
+        )}
       </div>
+      <NoticeRegion notice={notice} />
 
       {shown.length === 0 ? (
         <EmptyState
@@ -203,8 +363,98 @@ function SuggestionsView({
           className="py-10"
         />
       ) : (
-        <MappingTable columns={shown} fields={fields} />
+        <MappingTable
+          columns={shown}
+          fields={fields}
+          renderActions={canReview ? renderActions : undefined}
+        />
       )}
+      {canReview && (
+        <ChangeMappingDialog
+          mapping={changing}
+          fields={Array.from(fields.values())}
+          pending={decide.isPending}
+          error={changing && decide.isError ? decide.error : null}
+          onSubmit={(input) => {
+            if (changing) submit(changing.column, input, true);
+          }}
+          onClose={() => {
+            setChanging(null);
+          }}
+          returnFocus={() => {
+            changeButton.current?.focus();
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+function RunMappingControl({
+  project,
+  source,
+  hasRun,
+  canRun,
+}: {
+  project: Project;
+  source: Source;
+  hasRun: boolean;
+  canRun: boolean;
+}) {
+  const jobs = useProjectJobs(project.id);
+  const start = useStartMapping(project.id);
+  const cancel = useCancelJob();
+  const [notice, setNotice] = useState<Notice | null>(null);
+  const job = latestMappingJob(jobs.data, source.id);
+  const running = job !== null && !isTerminalStatus(job.status);
+
+  if (running) {
+    return (
+      <>
+        <LiveJobs jobs={[job]} />
+        <MappingProgress
+          filename={source.originalFilename}
+          job={job}
+          canCancel={canRun}
+          cancelling={cancel.isPending}
+          onCancel={() => {
+            cancel.mutate(job.id, {
+              onError: (error) => {
+                setNotice({ text: mappingErrorMessage(error), error: true });
+              },
+            });
+          }}
+        />
+        <NoticeRegion notice={notice} />
+      </>
+    );
+  }
+  const failed = job?.status === 'failed' && job.error ? job.error.message : null;
+  if (!canRun && !failed) return null;
+  return (
+    <div className="space-y-3">
+      {failed && (
+        <Alert>
+          <CircleAlert aria-hidden="true" />
+          <AlertTitle>The last mapping run failed</AlertTitle>
+          <AlertDescription>{failed}</AlertDescription>
+        </Alert>
+      )}
+      {canRun && (
+        <RunMappingButton
+          rerun={hasRun}
+          pending={start.isPending}
+          onConfirm={() => {
+            setNotice(null);
+            start.mutate(source.id, {
+              onError: (error) => {
+                setNotice({ text: mappingErrorMessage(error), error: true });
+              },
+            });
+          }}
+        />
+      )}
+      <NoticeRegion notice={notice} />
     </div>
   );
 }
@@ -225,6 +475,8 @@ function LoadError({ what, message, retry }: { what: string; message: string; re
 }
 
 function MappingContent({ project }: { project: Project }) {
+  const { user } = useAuth();
+  const access = user ? projectAccessOf(project, user) : null;
   const sources = useSources(project.id);
   const schema = useTargetSchema(project.id);
   const [params, setParams] = useSearchParams();
@@ -314,7 +566,16 @@ function MappingContent({ project }: { project: Project }) {
       />
     );
   } else {
-    body = <SuggestionsView key={selected.id} mappings={mappings.data} fields={fields} />;
+    body = (
+      <SuggestionsView
+        key={selected.id}
+        projectId={project.id}
+        sourceId={selected.id}
+        mappings={mappings.data}
+        fields={fields}
+        canReview={canReviewMappings(access)}
+      />
+    );
   }
 
   return (
@@ -333,12 +594,27 @@ function MappingContent({ project }: { project: Project }) {
           <span className="font-mono">{selected.originalFilename}</span>
         </p>
       )}
+      {!canReviewMappings(access) && (
+        <Alert>
+          <Info aria-hidden="true" />
+          <AlertDescription>{READ_ONLY_MAPPING_NOTE}</AlertDescription>
+        </Alert>
+      )}
+      {mappable && mappings.isSuccess && (
+        <RunMappingControl
+          key={selected.id}
+          project={project}
+          source={selected}
+          hasRun={mappings.data.run !== null}
+          canRun={canRunMapping(access)}
+        />
+      )}
       {body}
     </div>
   );
 }
 
-/** Step 3: how each source column maps to the target schema (read-only review). */
+/** Step 3: review how each source column maps to the target schema, and decide. */
 export function MappingPage() {
   return (
     <ProjectPageFrame page={PAGE}>
