@@ -1,7 +1,13 @@
 import { Suspense, type ComponentType } from 'react';
 import { Navigate, type RouteObject } from 'react-router';
 
-import { CreateAccountPage, ProfilePage, SignInPage, SourcesPage } from '@/app/lazy-pages';
+import {
+  CreateAccountPage,
+  MappingPage,
+  ProfilePage,
+  SignInPage,
+  SourcesPage,
+} from '@/app/lazy-pages';
 import { AppShell } from '@/components/AppShell';
 import { FullPageStatus } from '@/components/FullPageStatus';
 import { GuestOnly, RequireAuth } from '@/features/auth/routes';
@@ -15,6 +21,7 @@ import { NotFoundPage } from '@/pages/NotFoundPage';
 const STEP_PAGES: Partial<Record<ProjectPage['slug'], ComponentType>> = {
   sources: SourcesPage,
   profile: ProfilePage,
+  mapping: MappingPage,
 };
 
 function stepElement(page: ProjectPage) {
