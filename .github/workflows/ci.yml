@@ -18,7 +18,8 @@ jobs:
     name: JS (web + api)
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    # Real MongoDB for the api's DB-backed tests. With CI=true they fail instead of skipping.
+    # Real MongoDB and Redis for the api's DB-backed and job event tests. With CI=true they
+    # fail instead of skipping.
     services:
       mongo:
         image: mongo:7
@@ -29,8 +30,18 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 20
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
     env:
       MONGODB_URI: mongodb://localhost:27017/databridge_test
+      TEST_REDIS_URL: redis://localhost:6379/15
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -52,6 +63,29 @@ jobs:
     name: Python (ai-service)
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    # Real Redis (broker + pub/sub) and MongoDB for the in-process Celery worker test.
+    services:
+      mongo:
+        image: mongo:7
+        ports:
+          - 27017:27017
+        options: >-
+          --health-cmd "mongosh --quiet --eval 'db.adminCommand({ ping: 1 }).ok'"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+    env:
+      TEST_REDIS_URL: redis://localhost:6379/15
+      TEST_MONGODB_URI: mongodb://localhost:27017/databridge_test
     defaults:
       run:
         working-directory: apps/ai-service
@@ -202,6 +236,69 @@ jobs:
           fi
           echo "ok: uploads volume is read-only in ai-service"
 
+      - name: Jobs smoke test through the nginx proxy (demo job, live progress, fail, cancel)
+        run: |
+          set -euo pipefail
+          api=http://localhost:8080/api/v1
+          token=$(curl -sS --fail-with-body -X POST "$api/auth/login" \
+            -H 'Content-Type: application/json' \
+            -d '{"email":"smoke@example.com","password":"smoke-test-password"}' | jq -r '.data.accessToken')
+          auth="Authorization: Bearer $token"
+          project=$(curl -sS --fail-with-body -X POST "$api/projects" -H "$auth" \
+            -H 'Content-Type: application/json' -d '{"name":"Smoke jobs"}' | jq -r '.data.project.id')
+
+          start_job() {
+            curl -sS --fail-with-body -X POST "$api/projects/$project/jobs" -H "$auth" \
+              -H 'Content-Type: application/json' -d "$1" | jq -r '.data.job.id'
+          }
+          # Reads the SSE stream until the api ends it (after a terminal status); 60 s at most.
+          watch_job() {
+            curl -sSN --fail --max-time 60 "$api/jobs/$1/events" -H "$auth" > "/tmp/sse-$1"
+            sed -n 's/^data: //p' "/tmp/sse-$1" > "/tmp/frames-$1"
+          }
+          summary() { jq -r '"\(.status) \(.progress)%"' "/tmp/frames-$1" | paste -sd ',' -; }
+
+          job=$(start_job '{"type":"demo","payload":{"steps":5,"stepMs":200}}')
+          watch_job "$job"
+          echo "demo $job events: $(summary "$job")"
+          grep -q '^event: job$' "/tmp/sse-$job"
+          jq -s -e '
+            (last | .status == "succeeded" and .progress == 100 and .result.steps == 5)
+            and ([.[].progress] as $p | $p == ($p | sort))
+            and ([.[] | select(.status == "running") | .progress] | unique | length) >= 2
+          ' "/tmp/frames-$job" > /dev/null
+          echo "ok: demo job succeeded with increasing progress"
+
+          job=$(start_job '{"type":"demo","payload":{"steps":3,"stepMs":100,"failAtStep":2}}')
+          watch_job "$job"
+          echo "failing demo $job events: $(summary "$job"), error $(jq -c 'select(.error) | .error' "/tmp/frames-$job")"
+          jq -s -e 'last | .status == "failed" and .error.code == "DEMO_STEP_FAILED"' "/tmp/frames-$job" > /dev/null
+          echo "ok: failAtStep job failed with the handler's code"
+
+          job=$(start_job '{"type":"demo","payload":{"steps":20,"stepMs":500}}')
+          watch_job "$job" &
+          watcher=$!
+          for _ in $(seq 1 50); do
+            progress=$(curl -sS --fail-with-body "$api/jobs/$job" -H "$auth" | jq -r '.data.job.progress')
+            [ "$progress" -gt 0 ] && break
+            sleep 0.2
+          done
+          cancel=$(curl -sS --fail-with-body -X POST "$api/jobs/$job/cancel" -H "$auth")
+          echo "cancel $job at ${progress}% -> $(echo "$cancel" | jq -c '.data.job | {status, progress}')"
+          wait "$watcher"
+          echo "cancelled demo $job events: $(summary "$job")"
+          jq -s -e 'last.status == "cancelled"' "/tmp/frames-$job" > /dev/null
+          sleep 2   # the worker stops at its next step and must not move the job any more
+          after=$(curl -sS --fail-with-body "$api/jobs/$job" -H "$auth" | jq -c '.data.job | {status, progress}')
+          echo "after 2 s: $after"
+          echo "$after" | jq -e --argjson p "$(echo "$cancel" | jq '.data.job.progress')" \
+            '.status == "cancelled" and .progress == $p' > /dev/null
+          # The worker stops either at its cancel check or when its next progress write is refused.
+          $COMPOSE logs --no-color ai-worker > /tmp/worker.log
+          grep -E '"event": "job_(started|succeeded|failed|cancelled|no_longer_active)"' /tmp/worker.log | tail -n 8
+          grep -F "\"jobId\": \"$job\"" /tmp/worker.log | grep -qE 'job_(cancelled|no_longer_active)'
+          echo "ok: cancelled job stopped in the worker"
+
       - name: AI service is not published to the host
         run: |
           if curl -s --max-time 3 http://localhost:8000/internal/v1/health; then
@@ -212,7 +309,7 @@ jobs:
 
       - name: Containers run as non-root
         run: |
-          for svc in api ai-service web; do
+          for svc in api ai-service ai-worker web; do
             uid=$($COMPOSE exec -T "$svc" id -u)
             echo "$svc uid=$uid"
             test "$uid" != 0

@@ -26,6 +26,7 @@ def test_celery_is_configured_for_safe_redelivery(settings: Settings) -> None:
     assert conf.task_serializer == "json"
     assert list(conf.accept_content) == ["json"]
     assert conf.task_default_queue == JOBS_QUEUE
+    assert conf.worker_redirect_stdouts is False  # JSON log lines reach stdout unwrapped
     assert (conf.task_soft_time_limit, conf.task_time_limit) == (900, 960)
     # Redelivery of an unacked message must wait longer than any job may run.
     assert conf.broker_transport_options["visibility_timeout"] >= conf.task_time_limit

@@ -41,6 +41,8 @@ def create_celery(settings: Settings) -> Celery:
         },
         "worker_prefetch_multiplier": 1,
         "worker_hijack_root_logger": False,
+        # Let structlog's JSON lines reach stdout as they are, not wrapped in Celery log lines.
+        "worker_redirect_stdouts": False,
         "enable_utc": True,
     }
     app.conf.update(conf)
