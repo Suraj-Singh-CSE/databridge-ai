@@ -48,13 +48,13 @@ The gateway runs these steps, in order:
 
 **Masking rules** (`mask_text`, `mask_value`; pure functions):
 
-| Data                                                                 | Example               | Becomes          |
-| -------------------------------------------------------------------- | --------------------- | ---------------- |
-| Email                                                                | `r.sharma@mail.com`   | `[EMAIL]`        |
-| PAN                                                                  | `ABCDE1234F`          | `[PAN]`          |
-| Indian mobile (+91 / 0091 / 91 / 0 prefixes, spaces, dashes)         | `+91 98200 12345`     | `+91 98200xxxxx` |
-| Card-like number (13-19 digits, plain or 4-digit groups, Amex 4-6-5) | `4111 1111 1111 1111` | `[CARD]`         |
-| Aadhaar (12 digits, first digit 2-9, plain or grouped 4-4-4)         | `2345 6789 0123`      | `[AADHAAR]`      |
+| Data                                                                          | Example               | Becomes          |
+| ----------------------------------------------------------------------------- | --------------------- | ---------------- |
+| Email                                                                         | `r.sharma@mail.com`   | `[EMAIL]`        |
+| PAN                                                                           | `ABCDE1234F`          | `[PAN]`          |
+| Indian mobile (+91 / 0091 / 91 / 0 prefixes, spaces, dashes, `(98200) 12345`) | `+91 98200 12345`     | `+91 98200xxxxx` |
+| Card-like number (13-19 digits, plain or 4-digit groups, Amex 4-6-5)          | `4111 1111 1111 1111` | `[CARD]`         |
+| Aadhaar (12 digits, first digit 2-9, plain or grouped 4-4-4)                  | `2345 6789 0123`      | `[AADHAAR]`      |
 
 - Emails become `[EMAIL]` rather than `r…@mail.com`: the model only needs to know the value is an
   email; a first letter plus a personal domain can still identify someone, and a fixed token also

@@ -120,8 +120,8 @@ both paths score 25/25 (100%), with 22/25 columns at High confidence, all correc
 
 - The synonym table and weights were written with the three sample systems in view, so 100% on
   them overstates accuracy on unseen files. New systems will need new synonyms (cheap) or the
-  model (configured, not yet measured against a real provider). The eval should grow a set of
-  unseen headers before the weights are tuned further.
+  model. The unseen-header holdout and the manual live-model evaluation that measure this are in
+  [ADR 0013](0013-mapping-evaluation-and-holdout.md) (rules: 72.7% on the holdout).
 - The mock path equals the rules path by construction; it proves the plumbing and the fallback,
   not the model's quality. Measuring Gemini needs a run with `LLM_PROVIDER=gemini` on synthetic
   data (free tier, ADR 0006), outside CI.
@@ -130,5 +130,5 @@ both paths score 25/25 (100%), with 22/25 columns at High confidence, all correc
   unique partial index or a transaction is the fix if it matters.
 - Header names are sent to the model. They are not record values, but a file whose headers hold
   personal data would leak them (masked by the gateway if they match its patterns).
-- Follow-ups: the Mapping Review screen (M3.2), transforms applied by the pipeline (M4), unseen-
-  header evaluation set, a measured Gemini run, schema history if users need to diff versions.
+- Follow-ups: the Mapping Review screen (M3.2), transforms applied by the pipeline (M4), a
+  measured Gemini run (workflow ready, ADR 0013), schema history if users need to diff versions.

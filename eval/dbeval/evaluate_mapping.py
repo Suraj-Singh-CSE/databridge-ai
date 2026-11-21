@@ -12,6 +12,7 @@ target and the role match (``target: null`` without a role means "ignore").
 
     python -m dbeval.evaluate_mapping                # the committed samples
     python -m dbeval.evaluate_mapping --data eval/data
+    python -m dbeval.evaluate_mapping --set unseen   # the unseen-header holdout (eval/unseen)
 
 Needs the ai-service package installed (``pip install -e apps/ai-service``).
 """
@@ -39,12 +40,25 @@ from app.profiling.reader import SourceFormat, read_table
 from app.profiling.zip_guard import ZipLimits
 from pydantic import SecretStr
 
+from dbeval.unseen import UNSEEN_SOURCES
+
 SAMPLES = Path(__file__).parents[1] / "samples"
+UNSEEN = Path(__file__).parents[1] / "unseen"
+SourceFiles = dict[str, tuple[str, SourceFormat]]
 # The answer key's system name -> file in the dataset folder.
-SOURCE_FILES: dict[str, tuple[str, SourceFormat]] = {
+SOURCE_FILES: SourceFiles = {
     "crm": ("crm_customers.csv", "csv"),
     "billing": ("billing_export.xlsx", "xlsx"),
     "support": ("support_contacts.csv", "csv"),
+}
+UNSEEN_FILES: SourceFiles = {
+    spec.name: (spec.file_name, "xlsx" if spec.file_name.endswith(".xlsx") else "csv")
+    for spec in UNSEEN_SOURCES
+}
+SetName = Literal["samples", "unseen"]
+SETS: dict[SetName, tuple[Path, SourceFiles]] = {
+    "samples": (SAMPLES, SOURCE_FILES),
+    "unseen": (UNSEEN, UNSEEN_FILES),
 }
 _LIMITS = ZipLimits(max_uncompressed_bytes=200 * 1024 * 1024, max_ratio=100)
 _MAX_ROWS = 200_000
@@ -85,6 +99,11 @@ class Metrics:
     def high_accuracy(self) -> float:
         return _ratio(self.high_correct, self.high)
 
+    @property
+    def high_wrong(self) -> int:
+        """Wrong suggestions labelled High: the most dangerous error (likely bulk-accepted)."""
+        return self.high - self.high_correct
+
 
 def _ratio(part: int, whole: int) -> float:
     return 1.0 if whole == 0 else part / whole
@@ -101,6 +120,7 @@ def load_schema(answers: Path) -> TargetSchema:
             "description": f.get("description", ""),
             "isPii": f.get("is_pii", False),
             "generated": f.get("generated", False),
+            "allowConcat": f.get("allow_concat", False),
         }
         for f in raw["fields"]
     ]
@@ -116,8 +136,10 @@ def load_key(answers: Path) -> list[dict[str, Any]]:
     return key
 
 
-def profile_source(data: Path, source: str) -> list[ColumnProfile]:
-    file, fmt = SOURCE_FILES[source]
+def profile_source(
+    data: Path, source: str, files: SourceFiles = SOURCE_FILES
+) -> list[ColumnProfile]:
+    file, fmt = files[source]
     table = read_table(data / file, fmt, max_rows=_MAX_ROWS, zip_limits=_LIMITS)
     return profile_table(table, lambda *_: None)
 
@@ -147,13 +169,43 @@ def map_source(
 
 
 def evaluate(
-    data: Path = SAMPLES, paths: Sequence[PipelinePath] = ("rules", "mock")
+    data: Path = SAMPLES,
+    paths: Sequence[PipelinePath] = ("rules", "mock"),
+    files: SourceFiles = SOURCE_FILES,
 ) -> list[Metrics]:
     answers = data / "answers"
     schema = load_schema(answers)
     key = load_key(answers)
-    profiles = {source: profile_source(data, source) for source in SOURCE_FILES}
+    profiles = {source: profile_source(data, source, files) for source in files}
     return [score(path, _scored(path, profiles, schema, key)) for path in paths]
+
+
+def evaluate_set(name: SetName, paths: Sequence[PipelinePath] = ("rules", "mock")) -> list[Metrics]:
+    data, files = SETS[name]
+    return evaluate(data, paths, files)
+
+
+def score_suggestions(
+    source: str, suggestions: Sequence[Suggestion], key: list[dict[str, Any]]
+) -> list[Scored]:
+    """Compare one source's suggestions with its answer-key entries."""
+    by_column = {s.column: s for s in suggestions}
+    rows: list[Scored] = []
+    for answer in (a for a in key if a["source"] == source):
+        suggestion = by_column[answer["column"]]
+        target = answer["target"]
+        rows.append(
+            Scored(
+                source=source,
+                column=answer["column"],
+                expected_target=target,
+                expected_role=answer.get("role", "field" if target else "ignore"),
+                target=suggestion.target,
+                role=suggestion.role,
+                label=suggestion.confidence_label,
+            )
+        )
+    return rows
 
 
 def _scored(
@@ -164,21 +216,7 @@ def _scored(
 ) -> list[Scored]:
     rows: list[Scored] = []
     for source, columns in profiles.items():
-        by_column = {s.column: s for s in map_source(path, columns, schema)}
-        for answer in (a for a in key if a["source"] == source):
-            suggestion = by_column[answer["column"]]
-            target = answer["target"]
-            rows.append(
-                Scored(
-                    source=source,
-                    column=answer["column"],
-                    expected_target=target,
-                    expected_role=answer.get("role", "field" if target else "ignore"),
-                    target=suggestion.target,
-                    role=suggestion.role,
-                    label=suggestion.confidence_label,
-                )
-            )
+        rows += score_suggestions(source, map_source(path, columns, schema), key)
     return rows
 
 
@@ -203,24 +241,32 @@ def table(metrics: Sequence[Metrics]) -> str:
     """A small Markdown table (pasted into PR descriptions)."""
     lines = [
         "| Path | Columns | Accuracy | Null precision | Null recall | High-confidence | "
-        "Accuracy at High |",
-        "| --- | ---: | ---: | ---: | ---: | ---: | ---: |",
+        "Accuracy at High | High-confidence wrong |",
+        "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
     ]
     for m in metrics:
         lines.append(
             f"| {m.path} | {m.columns} | {m.accuracy:.1%} ({m.correct}/{m.columns}) | "
             f"{m.null_precision:.1%} | {m.null_recall:.1%} | {m.high}/{m.columns} | "
-            f"{m.high_accuracy:.1%} |"
+            f"{m.high_accuracy:.1%} | {m.high_wrong} |"
         )
     return "\n".join(lines)
 
 
 def main(argv: Sequence[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    parser.add_argument("--data", type=Path, default=SAMPLES, help="dataset folder")
+    parser.add_argument("--data", type=Path, default=None, help="dataset folder (samples layout)")
+    parser.add_argument(
+        "--set",
+        choices=sorted(SETS),
+        default="samples",
+        help="samples: the committed samples; unseen: the holdout of headers never tuned on",
+    )
     args = parser.parse_args(argv)
     configure_logging("WARNING")  # keep per-call llm_call lines out of the table
-    print(table(evaluate(args.data)))
+    metrics = evaluate(args.data) if args.data is not None else evaluate_set(args.set)
+    print(f"Set: {args.data or args.set}")
+    print(table(metrics))
 
 
 if __name__ == "__main__":

@@ -24,6 +24,8 @@ from app.privacy.masking import PIIMasker, mask_text, mask_value
         ("09820012345", "098200xxxxx"),
         ("91 98200 12345", "91 98200xxxxx"),
         ("(m) 7012345678; (w) 6123456789", "(m) 70123xxxxx; (w) 61234xxxxx"),
+        ("(98200) 12345", "98200xxxxx"),  # first 5 digits in parentheses
+        ("tel (98200)-12345.", "tel 98200xxxxx."),
         # PAN
         ("ABCDE1234F", "[PAN]"),
         ("pan: abcde1234f.", "pan: [PAN]."),

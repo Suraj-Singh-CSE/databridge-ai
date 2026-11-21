@@ -6,7 +6,7 @@ The thresholds are the bar the rules path must keep; the actual numbers are prin
 
 import pytest
 
-from dbeval.evaluate_mapping import Metrics, Scored, evaluate, main, score, table
+from dbeval.evaluate_mapping import Metrics, Scored, evaluate, evaluate_set, main, score, table
 from tests.conftest import Dataset
 
 MIN_RULES_ACCURACY = 0.9
@@ -52,6 +52,7 @@ def test_score_counts_null_precision_recall_and_high_confidence() -> None:
     # Predicted null: c, d (c expected null) -> 1/2. Expected null: b, c (c found) -> 1/2.
     assert (metrics.null_precision, metrics.null_recall) == (0.5, 0.5)
     assert (metrics.high, metrics.high_correct, metrics.high_accuracy) == (2, 1, 0.5)
+    assert metrics.high_wrong == 1
     assert score("rules", []).accuracy == 1.0
 
 
@@ -59,7 +60,26 @@ def test_prints_a_results_table(capsys: pytest.CaptureFixture[str]) -> None:
     main([])
 
     out = capsys.readouterr().out
+    assert "Set: samples" in out
     assert "| Path | Columns | Accuracy" in out
+    assert "High-confidence wrong |" in out
     assert "| rules | 25 |" in out
     assert "| mock | 25 |" in out
     assert table([]).count("\n") == 1
+
+
+def test_unseen_holdout_runs_and_prints_results(capsys: pytest.CaptureFixture[str]) -> None:
+    """No accuracy bar on the holdout: its honest number is recorded in ADR 0013, not enforced."""
+    main(["--set", "unseen"])
+
+    out = capsys.readouterr().out
+    print(out)  # visible with pytest -s / in the CI log on failure
+    assert "Set: unseen" in out
+    assert "| rules | 44 |" in out
+    assert "| mock | 44 |" in out
+
+
+def test_unseen_holdout_scores_every_answer_key_column() -> None:
+    for metrics in evaluate_set("unseen"):
+        assert metrics.columns == 44
+        assert 0 <= metrics.high_wrong <= metrics.high <= metrics.columns

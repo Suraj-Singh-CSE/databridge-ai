@@ -43,7 +43,8 @@ with the `X-Service-Token` header. The AI service is never exposed publicly.
    `admin`, `data_engineer`, `data_steward`, `viewer`. Check role AND project membership on every project route.
 5. **Secrets only from env vars**, validated at startup. Never commit `.env`. Update `.env.example`.
 6. **No raw personal data to any LLM.** Every LLM call goes through the gateway, which masks PII and logs
-   tokens, cost and latency. Tests use the Mock provider; CI never calls a real LLM.
+   tokens, cost and latency. Tests use the Mock provider; CI never calls a real LLM (the manual, opt-in
+   live-eval workflow is the one exception and uses synthetic data only).
 7. **Logging**: structured JSON (pino / structlog) with a `requestId` passed between services. Never log
    passwords, tokens, or raw record values.
 8. **Tests are part of the task**: unit tests for logic, API tests for every route (success, validation
