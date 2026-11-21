@@ -101,6 +101,29 @@ Settings: `UPLOAD_DIR`, `MAX_UPLOAD_ROWS` (200,000), `XLSX_MAX_UNCOMPRESSED_BYTE
 and `tests/test_profile_handler.py` (the job end to end on mongomock, including the `eval/samples`
 CSV and XLSX).
 
+## Column mapping (`app/mapping/`, job type `mapping`)
+
+`app/worker/handlers/mapping.py` runs one `mapping` job for a `profiled` source: load its column
+profiles and the project's target schema (`target_schemas`, written by the api), score every
+(column, field) pair with rules, ask the model to rank them through the gateway, resolve one
+column per field and save `mapping_suggestions`. If the LLM fails the job falls back to the rules
+(`method: "rules"`) and still succeeds. Design notes:
+[ADR 0012](../../docs/adr/0012-column-mapping.md).
+
+| Module        | What it does                                                                        |
+| ------------- | ----------------------------------------------------------------------------------- |
+| `names.py`    | Header normalisation: phrases, weighted synonyms, filler words, name similarity     |
+| `rules.py`    | Scores from name, pattern and type evidence; record-id detection; transform hints   |
+| `prompt.py`   | Prompt (`prompts/column_mapping_v1.txt`), answer schema, Mock provider responder    |
+| `resolve.py`  | Blends rules and LLM scores, one-to-one assignment, confidence labels, alternatives |
+| `engine.py`   | `suggest_with_rules` (pure) and `suggest` (with the gateway, fallback, batches)     |
+| `store.py`    | Reads profiles and schema; `mapping_suggestions` upserts per run (`runId`)          |
+
+Settings: `MAPPING_LLM_ENABLED` (true), `MAPPING_TEMPERATURE` (0), `MAPPING_MAX_OUTPUT_TOKENS`
+(4096). Tests: `tests/test_mapping_rules.py`, `tests/test_mapping_engine.py` (gateway with the
+Mock provider, fallback, no raw values in the prompt) and `tests/test_mapping_handler.py` (the
+job end to end on mongomock for all three samples). Accuracy: `python -m dbeval.evaluate_mapping`.
+
 ## LLM gateway (`app/llm/`)
 
 All model calls go through `LLMGateway.complete()`; never call a provider or SDK directly. In order

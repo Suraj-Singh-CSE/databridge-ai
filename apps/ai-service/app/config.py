@@ -73,6 +73,14 @@ class Settings(BaseSettings):
     xlsx_max_uncompressed_bytes: int = Field(default=200 * MIB, ge=MIB)
     xlsx_max_compression_ratio: float = Field(default=100.0, ge=10)
 
+    # ---- column mapping (ADR 0012)
+    # false = rules only (no LLM call); the job then reports method "rules".
+    mapping_llm_enabled: bool = True
+    # 0 keeps answers repeatable (and cacheable) for the same masked profile.
+    mapping_temperature: float = Field(default=0.0, ge=0.0, le=1.0)
+    # Per call; one call covers up to 40 columns.
+    mapping_max_output_tokens: int = Field(default=4096, ge=256, le=65_536)
+
     @model_validator(mode="after")
     def _hard_limit_after_soft_limit(self) -> Self:
         if self.job_hard_time_limit_seconds <= self.job_soft_time_limit_seconds:

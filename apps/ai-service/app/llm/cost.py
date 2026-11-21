@@ -60,6 +60,23 @@ class MongoCostLogger:
         await self._collection.insert_one(record.model_dump())
 
 
+class SyncInsertOneCollection(Protocol):
+    """The one method of a pymongo ``Collection`` that the worker's logger needs."""
+
+    def insert_one(self, document: dict[str, Any]) -> Any: ...  # noqa: ANN401
+
+
+class SyncMongoCostLogger:
+    """Appends records to ``llm_calls`` with a synchronous client (the worker; see
+    ``SyncRedisCache`` for why)."""
+
+    def __init__(self, collection: SyncInsertOneCollection) -> None:
+        self._collection = collection
+
+    async def record(self, record: LLMCallRecord) -> None:
+        self._collection.insert_one(record.model_dump())
+
+
 def cost_inr(
     prices: dict[str, ModelPrice], model: str, input_tokens: int, output_tokens: int
 ) -> float | None:
