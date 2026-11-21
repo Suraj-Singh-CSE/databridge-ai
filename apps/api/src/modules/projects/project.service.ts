@@ -42,7 +42,7 @@ function snapshot(project: Project): Record<string, unknown> {
 const PROJECT_GONE = 'Project not found.';
 
 export function createProjectService(
-  repos: Pick<Repositories, 'projects' | 'users' | 'sources' | 'audit'>,
+  repos: Pick<Repositories, 'projects' | 'users' | 'sources' | 'jobs' | 'audit'>,
   audit: AuditService,
   storage: FileStorage,
 ): ProjectService {
@@ -99,10 +99,11 @@ export function createProjectService(
     },
 
     async remove(actor, project) {
-      // Files, then source records, then the project: each step is idempotent, so if one fails
+      // Files, then source and job records, then the project: each step is idempotent, so if one fails
       // the project still exists and the owner can simply delete it again.
       await storage.deletePrefix(projectPrefix(project.id));
       await repos.sources.deleteByProject(project.id);
+      await repos.jobs.deleteByProject(project.id);
       const deleted = await repos.projects.delete(project.id);
       if (!deleted) throw AppError.notFound(PROJECT_GONE);
       await record(actor, project, 'project.delete', { before: snapshot(project) });

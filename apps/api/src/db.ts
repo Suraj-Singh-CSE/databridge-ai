@@ -1,12 +1,20 @@
 import mongoose from 'mongoose';
 
 import { AuditLogModel } from './modules/audit/audit.model.js';
+import { JobModel } from './modules/jobs/job.model.js';
 import { RefreshTokenModel } from './modules/auth/refresh-token.model.js';
 import { ProjectModel } from './modules/projects/project.model.js';
 import { SourceModel } from './modules/sources/source.model.js';
 import { UserModel } from './modules/users/user.model.js';
 
-const MODELS = [UserModel, RefreshTokenModel, ProjectModel, SourceModel, AuditLogModel] as const;
+const MODELS = [
+  UserModel,
+  RefreshTokenModel,
+  ProjectModel,
+  SourceModel,
+  JobModel,
+  AuditLogModel,
+] as const;
 
 export interface ConnectOptions {
   serverSelectionTimeoutMS?: number;

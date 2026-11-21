@@ -2,6 +2,7 @@ import { createApp } from './app.js';
 import { ConfigError, loadConfig } from './config.js';
 import { connectDb, disconnectDb } from './db.js';
 import { createLogger } from './logger.js';
+import { createRedisJobEventBus } from './modules/jobs/job.events.js';
 import { createMongoRepositories } from './repositories.js';
 import { createStorage, prepareStorage } from './storage/index.js';
 
@@ -25,18 +26,23 @@ async function main(): Promise<void> {
   await prepareStorage(storage);
   logger.info({ driver: config.STORAGE_DRIVER }, 'file storage ready');
 
-  const app = createApp({ config, logger, repos: createMongoRepositories(), storage });
+  // One shared Redis subscriber per process fans live job updates out to every open stream.
+  const jobEvents = createRedisJobEventBus(config.REDIS_URL, logger);
+
+  const app = createApp({ config, logger, repos: createMongoRepositories(), storage, jobEvents });
   const server = app.listen(config.PORT, () => {
     logger.info({ port: config.PORT, env: config.NODE_ENV }, 'api listening');
   });
 
   const shutdown = (signal: string): void => {
     logger.info({ signal }, 'shutting down');
+    // Open event streams would keep server.close() waiting; end them.
+    server.closeAllConnections();
     server.close(() => {
-      disconnectDb().then(
+      Promise.all([jobEvents.close(), disconnectDb()]).then(
         () => process.exit(0),
         (error: unknown) => {
-          logger.error({ err: error }, 'error while disconnecting from mongodb');
+          logger.error({ err: error }, 'error while disconnecting');
           process.exit(1);
         },
       );

@@ -54,6 +54,8 @@ const envSchema = z
     JWT_REFRESH_SECRET: secret,
     AI_SERVICE_URL: z.url({ error: 'is required and must be a valid URL' }),
     AI_SERVICE_TOKEN: required().min(16, 'must be at least 16 characters'),
+    // Timeout for one api -> ai-service call (enqueue or cancel a job).
+    AI_SERVICE_TIMEOUT_MS: z.coerce.number().int().min(100).default(5000),
     CORS_ORIGIN: z.url({ error: 'is required and must be a valid URL' }),
     TRUST_PROXY: trustProxy,
     AUTH_RATE_LIMIT_MAX: z.coerce.number().int().min(1).default(20),
@@ -87,6 +89,12 @@ const envSchema = z
       .int()
       .min(1000)
       .default(60 * 60 * 1000),
+
+    // Background jobs (ADR 0010).
+    // A running job whose worker sent no heartbeat for this long is reported as WORKER_LOST.
+    JOB_STALE_AFTER_SECONDS: positiveInt(300),
+    // Keep-alive comment interval on /jobs/:jobId/events; the job is also re-read each time.
+    JOB_EVENTS_KEEPALIVE_MS: z.coerce.number().int().min(10).default(15_000),
   })
   .superRefine((env, ctx) => {
     if (env.STORAGE_DRIVER === 's3') {

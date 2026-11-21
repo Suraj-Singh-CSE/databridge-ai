@@ -4,6 +4,7 @@ import express, { type Express } from 'express';
 import { rateLimit } from 'express-rate-limit';
 import helmet from 'helmet';
 
+import { createAiServiceClient, type AiServiceClient } from './ai-service.client.js';
 import type { Config } from './config.js';
 import { AppError } from './errors.js';
 import type { Logger } from './logger.js';
@@ -15,6 +16,9 @@ import { createAuthRouter } from './modules/auth/auth.routes.js';
 import { createAuthService } from './modules/auth/auth.service.js';
 import { createPasswordHasher, type PasswordHasher } from './modules/auth/password.js';
 import { createTokenService } from './modules/auth/tokens.js';
+import type { JobEventBus } from './modules/jobs/job.events.js';
+import { createJobRouter, createProjectJobsRouter } from './modules/jobs/job.routes.js';
+import { createJobService } from './modules/jobs/job.service.js';
 import { createProjectRouter } from './modules/projects/project.routes.js';
 import { createProjectService } from './modules/projects/project.service.js';
 import { createSourceRouter } from './modules/sources/source.routes.js';
@@ -30,9 +34,21 @@ export interface AppDeps {
   passwords?: PasswordHasher;
   /** Defaults to the driver selected by STORAGE_DRIVER. Tests inject a temp-dir storage. */
   storage?: FileStorage;
+  /** Live job updates (Redis pub/sub in production, in-memory in tests). */
+  jobEvents: JobEventBus;
+  /** Defaults to the HTTP client for AI_SERVICE_URL. Tests inject a fake. */
+  aiService?: AiServiceClient;
 }
 
-export function createApp({ config, logger, repos, passwords, storage }: AppDeps): Express {
+export function createApp({
+  config,
+  logger,
+  repos,
+  passwords,
+  storage,
+  jobEvents,
+  aiService,
+}: AppDeps): Express {
   const files = storage ?? createStorage(config);
   const tokens = createTokenService(config);
   const audit = createAuditService(repos.audit);
@@ -49,6 +65,21 @@ export function createApp({ config, logger, repos, passwords, storage }: AppDeps
     maxUploadRows: config.MAX_UPLOAD_ROWS,
     maxSourcesPerProject: config.MAX_SOURCES_PER_PROJECT,
   });
+  const jobService = createJobService({
+    repos,
+    audit,
+    events: jobEvents,
+    aiService: aiService ?? createAiServiceClient(config),
+    logger,
+    staleAfterMs: config.JOB_STALE_AFTER_SECONDS * 1000,
+  });
+  const jobDeps = {
+    jobService,
+    projects: repos.projects,
+    tokens,
+    events: jobEvents,
+    keepAliveMs: config.JOB_EVENTS_KEEPALIVE_MS,
+  };
 
   const app = express();
   app.disable('x-powered-by');
@@ -78,7 +109,7 @@ export function createApp({ config, logger, repos, passwords, storage }: AppDeps
     authLimiter,
     createAuthRouter({ auth, tokens, secureCookies: config.NODE_ENV === 'production' }),
   );
-  // Before the project router so its '/:id' routes and auth do not run for source paths first.
+  // Before the project router so its '/:id' routes and auth do not run for source/job paths first.
   app.use(
     '/api/v1/projects/:projectId/sources',
     createSourceRouter({
@@ -91,6 +122,8 @@ export function createApp({ config, logger, repos, passwords, storage }: AppDeps
       },
     }),
   );
+  app.use('/api/v1/projects/:projectId/jobs', createProjectJobsRouter(jobDeps));
+  app.use('/api/v1/jobs', createJobRouter(jobDeps));
   app.use(
     '/api/v1/projects',
     createProjectRouter({ projectService, projects: repos.projects, tokens }),

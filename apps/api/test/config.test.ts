@@ -77,6 +77,20 @@ describe('loadConfig', () => {
     expect(loadConfig({ NODE_ENV: 'test', TRUST_PROXY: value }).TRUST_PROXY).toBe(expected);
   });
 
+  it('defaults and validates the background job settings', () => {
+    const config = loadConfig({ NODE_ENV: 'test' });
+
+    expect(config.JOB_STALE_AFTER_SECONDS).toBe(300);
+    expect(config.JOB_EVENTS_KEEPALIVE_MS).toBe(15_000);
+    expect(config.AI_SERVICE_TIMEOUT_MS).toBe(5000);
+    expect(() => loadConfig({ NODE_ENV: 'test', JOB_STALE_AFTER_SECONDS: '0' })).toThrow(
+      /JOB_STALE_AFTER_SECONDS/,
+    );
+    expect(() => loadConfig({ NODE_ENV: 'test', JOB_EVENTS_KEEPALIVE_MS: '5' })).toThrow(
+      /JOB_EVENTS_KEEPALIVE_MS/,
+    );
+  });
+
   it('defaults the upload and storage settings', () => {
     const config = loadConfig({ NODE_ENV: 'test' });
 

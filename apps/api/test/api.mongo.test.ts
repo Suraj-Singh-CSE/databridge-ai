@@ -3,12 +3,14 @@ import { afterAll, describe, expect, it } from 'vitest';
 
 import { disconnectDb } from '../src/db.js';
 import { AuditLogModel } from '../src/modules/audit/audit.model.js';
+import { JobModel } from '../src/modules/jobs/job.model.js';
 import { RefreshTokenModel } from '../src/modules/auth/refresh-token.model.js';
 import { SourceModel } from '../src/modules/sources/source.model.js';
 import { UserModel } from '../src/modules/users/user.model.js';
 import { createMongoRepositories } from '../src/repositories.js';
 
 import { defineApiSuite } from './support/api-suite.js';
+import { defineJobsSuite } from './support/jobs-suite.js';
 import { defineSourcesSuite } from './support/sources-suite.js';
 import { clearDb, connectTestDb } from './support/mongo.js';
 
@@ -28,6 +30,12 @@ const mongoHarness = {
 describe.skipIf(!available)('MongoDB', () => {
   defineApiSuite('MongoDB repositories', mongoHarness);
   defineSourcesSuite('MongoDB repositories', mongoHarness);
+  defineJobsSuite('MongoDB repositories', {
+    ...mongoHarness,
+    async workerUpdate(_repos, jobId, patch) {
+      await JobModel.updateOne({ _id: jobId }, { $set: patch });
+    },
+  });
 
   describe('schema guarantees', () => {
     it('enforces unique, lowercased emails at the index level', async () => {
@@ -93,6 +101,14 @@ describe.skipIf(!available)('MongoDB', () => {
       );
       expect(indexes).toContainEqual(
         expect.objectContaining({ key: { projectId: 1, sha256: 1 }, unique: true }),
+      );
+    });
+
+    it('indexes jobs by project and creation time', async () => {
+      const indexes = await JobModel.collection.indexes();
+
+      expect(indexes).toContainEqual(
+        expect.objectContaining({ key: { projectId: 1, createdAt: -1 } }),
       );
     });
 
