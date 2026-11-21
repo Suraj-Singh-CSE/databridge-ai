@@ -6,7 +6,7 @@ AI proposes, a human approves.
 
 **Status:** M1 (foundation) complete: monorepo, Docker + CI, API auth/roles/projects/audit,
 AI service with LLM gateway and PII masking, web app shell with sign-in and projects. Next: M2
-(upload and profiling).
+(upload and profiling): uploads and background jobs with live progress are done.
 
 Approved designs (Figma, shadcn/ui kit): [all screens](docs/design/all-screens.png).
 
@@ -121,9 +121,68 @@ Errors: `VALIDATION_ERROR` 400 (with `details: [{ field, message }]`), `UNAUTHOR
 `LIMIT_REACHED` 409, `UNSUPPORTED_FILE` 400, `PAYLOAD_TOO_LARGE` 413, `TOO_MANY_ROWS` 413,
 `RATE_LIMITED` 429.
 
+**Background jobs.** Long work (profiling from M2.4; mapping, matching and pipelines later) runs
+in a Celery worker, not in the request. The api owns the job record in MongoDB; the worker moves it
+forward and publishes every change to Redis; the browser watches it live over Server-Sent Events.
+Design notes: [ADR 0010](docs/adr/0010-background-jobs.md).
+
+```
+1. browser --POST /projects/:id/jobs--> api           saves the job "queued" in MongoDB `jobs`
+2. api      --POST /internal/v1/jobs-->  ai-service    enqueues Celery task "jobs.run" in Redis
+                                                       (task id = job id); api answers 202 { job }
+3. ai-worker picks the task up --> updates the job in MongoDB --> publishes to Redis "jobs:<jobId>"
+4. browser  --GET /jobs/:id/events-->    api           current state, then every update (SSE)
+
+queued --> running --> succeeded
+   |          |  \---> failed      (handler error, time limit, retries used up, WORKER_LOST)
+   |          |   \--> cancelled
+   |          \--> queued          (transient error: waits for a retry, up to 3 attempts)
+   +--> failed (QUEUE_UNAVAILABLE) / cancelled
+```
+
+A finished job (`succeeded`, `failed`, `cancelled`) never changes again: every update is a
+conditional write, so late or duplicate updates are ignored.
+
+| Method | Path                               | Who                         | Result                                   |
+| ------ | ---------------------------------- | --------------------------- | ---------------------------------------- |
+| POST   | `/projects/:projectId/jobs`        | owner, admin, data_engineer | 202 `{ job }` (queued)                   |
+| GET    | `/projects/:projectId/jobs?limit=` | any member, owner, admin    | 200 `{ items }` newest first (1-100, 20) |
+| GET    | `/jobs/:jobId`                     | any member of its project   | 200 `{ job }`                            |
+| POST   | `/jobs/:jobId/cancel`              | owner, admin, data_engineer | 200 `{ job }` (finished jobs unchanged)  |
+| GET    | `/jobs/:jobId/events`              | any member of its project   | 200 `text/event-stream`                  |
+
+- **Start**: `{ "type": "demo", "payload": { "steps": 1-20, "stepMs": 10-2000, "failAtStep"?: n } }`.
+  `demo` sleeps through the steps and proves the system works; `profile` arrives in M2.4. An
+  unknown type or a bad payload is `400 VALIDATION_ERROR`. If the queue cannot be reached the job
+  is saved as `failed` with `QUEUE_UNAVAILABLE` and the answer is `503 QUEUE_UNAVAILABLE`.
+- **Job fields**: `id, projectId, type, status (queued|running|succeeded|failed|cancelled),
+progress (0-100), message, payload, result, error ({ code, message } or null), attempts,
+createdBy, queuedAt, startedAt, finishedAt, heartbeatAt, createdAt, updatedAt`.
+- **Access**: a job is visible to members of its project; anyone else gets `404`.
+- **Stuck jobs**: a `running` job with no heartbeat for `JOB_STALE_AFTER_SECONDS` (300) is
+  reported as `failed` with `WORKER_LOST` the next time it is read.
+
+**Watching progress.** `GET /jobs/:jobId/events` sends the current state at once, then each change,
+as `event: job` frames whose `data` is `{ jobId, status, progress, message, result, error }`. A
+`: keep-alive` comment comes every 15 s, and the stream ends after a finished status. It needs the
+normal `Authorization: Bearer` header, so read it with `fetch()` streaming (`response.body`),
+not `EventSource`, which cannot send headers. Reconnecting is safe: every connection starts with the
+current state.
+
+```bash
+JOB=$(curl -s -X POST http://localhost:8080/api/v1/projects/$PROJECT/jobs \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"type":"demo","payload":{"steps":5,"stepMs":200}}' | jq -r .data.job.id)
+curl -N http://localhost:8080/api/v1/jobs/$JOB/events -H "Authorization: Bearer $TOKEN"
+# event: job
+# data: {"jobId":"...","status":"running","progress":20,"message":"Step 1 of 5 done",...}
+```
+
 **Tests.** `npm test` runs unit tests and the full API suite against in-memory repositories. The
 same suite also runs against MongoDB when `MONGODB_URI` (default `mongodb://localhost:27017/databridge_test`)
-is reachable; otherwise those tests are skipped with a message (in CI, `CI=true`, they never skip).
+is reachable, and the Redis job event tests when `TEST_REDIS_URL` (default
+`redis://localhost:6379/15`, flushed) is; otherwise those tests are skipped with a message (in CI,
+`CI=true`, they never skip).
 `npm run test:coverage -w apps/api` prints coverage and enforces 80% of lines.
 
 ## Web app
@@ -166,7 +225,8 @@ The e2e tests expect the full stack (`docker compose ... up`, see below) and Chr
 
 ## Run with Docker
 
-Requires Docker with Compose v2. Builds and starts the whole stack (web, api, ai-service, MongoDB, Redis).
+Requires Docker with Compose v2. Builds and starts the whole stack (web, api, ai-service, the
+ai-worker Celery worker, MongoDB, Redis).
 
 ```bash
 cp .env.example .env    # then replace the change-me secrets
@@ -179,7 +239,7 @@ docker compose --env-file .env -f infra/docker-compose.yml up --build
 | http://localhost:8080/api/v1/health | API health, through the web proxy               |
 | http://localhost:4000/api/v1/health | API health, direct                              |
 
-The AI service, MongoDB and Redis are not published to your machine; they are reachable only inside
+The AI service, its worker, MongoDB and Redis are not published to your machine; they are reachable only inside
 the compose network (the AI service is internal by design). Uploaded files live in the `uploads`
 volume (written by the api, mounted read-only in the AI service). Stop with `Ctrl+C`; remove containers
 and data volumes with `docker compose --env-file .env -f infra/docker-compose.yml down -v`.
@@ -191,14 +251,17 @@ repo-root `.env` on its own. Missing secrets make Compose stop with a message na
 
 GitHub Actions (`.github/workflows/ci.yml`) runs on every pull request and on pushes to `main`:
 
-- **js**: format check, lint, typecheck, tests (api with coverage, against a MongoDB 7 service
-  container), and build for web and api (Node 22).
-- **python**: ruff lint and format check, mypy (strict), pytest for the ai-service (Python 3.12).
+- **js**: format check, lint, typecheck, tests (api with coverage, against MongoDB 7 and Redis 7
+  service containers), and build for web and api (Node 22).
+- **python**: ruff lint and format check, mypy (strict), pytest for the ai-service (Python 3.12),
+  including a real in-process Celery worker against Redis and MongoDB service containers.
 - **eval**: the same checks for the ground-truth data generator in `eval/` ([eval/README](eval/README.md)).
 - **docker**: builds every image, starts the full stack with throwaway secrets, and smoke-tests the
   web root, the api health route (direct and through the nginx proxy), register and `/auth/me`
   through the proxy, source uploads through the proxy (CSV and XLSX samples, list with row count,
-  preview, an `.exe` rejected, the file visible read-only to the AI service), that the AI service is not
+  preview, an `.exe` rejected, the file visible read-only to the AI service), background jobs through
+  the proxy (a demo job streamed with `curl -N` until it succeeds with increasing progress, a
+  `failAtStep` job that fails with the handler's code, a long job cancelled mid-run), that the AI service is not
   reachable from the host, and that containers run as non-root. Then it runs the Playwright e2e
   tests against the stack and uploads screenshots (`web-screenshots`) and, on failure, the
   Playwright report (`playwright-report`).
