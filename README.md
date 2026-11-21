@@ -6,8 +6,9 @@ AI proposes, a human approves.
 
 **Status:** M1 (foundation) complete: monorepo, Docker + CI, API auth/roles/projects/audit,
 AI service with LLM gateway and PII masking, web app shell with sign-in and projects. M2 (upload
-and profiling) in progress: uploads, background jobs with live progress and the column profiler
-are done.
+and profiling) done: uploads, background jobs with live progress and the column profiler. M3
+(mapping) in progress: target schema and the hybrid column-mapping engine (API) are done; the
+Mapping Review screen is next.
 
 Approved designs (Figma, shadcn/ui kit): [all screens](docs/design/all-screens.png).
 
@@ -110,8 +111,9 @@ error, profiledAt, uploadedBy, createdAt, updatedAt`. `rowCount`/`columnCount` a
   to an LLM. An XLSX is first fully inflated and measured (zip-bomb guard, same limits as the
   profiler): over `XLSX_MAX_UNCOMPRESSED_BYTES` (200 MiB) or `XLSX_MAX_COMPRESSION_RATIO` (100x,
   checked past 10 MiB) it is `422 FILE_TOO_COMPLEX`.
-- Deleting a project also deletes its sources, column profiles and stored files; deleting a
-  source deletes its column profiles.
+- Deleting a project also deletes its sources, column profiles, mapping suggestions and
+  decisions, target schema and stored files; deleting a source deletes its column profiles,
+  mapping suggestions and decisions.
 
 Example:
 
@@ -158,7 +160,53 @@ curl -s http://localhost:8080/api/v1/projects/$PROJECT/sources/$SOURCE/profile \
   `UNSUPPORTED_FILE`, `FILE_TOO_COMPLEX` (XLSX zip-bomb guard), `TOO_MANY_ROWS` (over
   `MAX_UPLOAD_ROWS`, mainly for XLSX), `TOO_MANY_COLUMNS` (over 500).
 
-**Background jobs.** Long work (profiling; mapping, matching and pipelines later) runs
+**Target schema and column mapping.** Each project has one versioned target schema (seeded with
+"Customer 360": `customer_id` (generated), `full_name`, `phone`, `email`, `date_of_birth`, `city`,
+`pin_code`, `address`). A `mapping` job then suggests a target field for every column of a
+profiled source, and a reviewer accepts, rejects or overrides each suggestion. Design notes:
+[ADR 0012](docs/adr/0012-column-mapping.md).
+
+```bash
+JOB=$(curl -s -X POST http://localhost:8080/api/v1/projects/$PROJECT/jobs \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d "{\"type\":\"mapping\",\"payload\":{\"sourceId\":\"$SOURCE\"}}" | jq -r .data.job.id)
+curl -s http://localhost:8080/api/v1/projects/$PROJECT/sources/$SOURCE/mappings \
+  -H "Authorization: Bearer $TOKEN" \
+  | jq '.data.columns[] | {column, target: .suggestion.target, label: .suggestion.confidenceLabel}'
+```
+
+| Method | Path (under `/projects/:projectId`)       | Who                                  | Result                                         |
+| ------ | ----------------------------------------- | ------------------------------------ | ---------------------------------------------- |
+| GET    | `/target-schema`                          | any member, owner, admin             | 200 `{ schema }` (`name, version, fields`)     |
+| PUT    | `/target-schema`                          | owner, admin, data_engineer          | 200 `{ schema }` (version + 1; audited)        |
+| GET    | `/sources/:sourceId/mappings`             | any member, owner, admin             | 200 `{ source, run, stale, columns, summary }` |
+| PATCH  | `/sources/:sourceId/mappings/:column`     | owner, admin, data_engineer, steward | 200 `{ column }` (audited)                     |
+| POST   | `/sources/:sourceId/mappings/accept-high` | owner, admin, data_engineer, steward | 200 `{ accepted, alreadyDecided, conflicts }`  |
+
+- **Schema** (`PUT` body `{ name, fields, baseVersion? }`): 1-100 fields, unique snake_case
+  names, `type` one of string, integer, decimal, boolean, date, datetime, plus `format`,
+  `description`, `isPii`, `generated`, `required`, `allowConcat`; at least one field must not be
+  generated. A `baseVersion` that is not the current version is `409 CONFLICT`.
+- **Start**: `{ "type": "mapping", "payload": { "sourceId": "<id>" } }`; `409` unless the source is
+  `profiled`, and while another mapping job works on it. The job fails with
+  `SOURCE_NOT_PROFILED` or `TARGET_SCHEMA_MISSING` when the worker finds those states. Running it
+  again replaces the suggestions (decisions are kept).
+- **Suggestion per column**: `target` (field or null), `role` (`field`, `source_record_id` for
+  the file's own id such as `cust_id`, or `ignore`), `confidence` 0-1 with `confidenceLabel`
+  (High >= 0.85, Medium >= 0.6, Low), a plain-language `reason`, a `transform` hint
+  (`lowercase`, `to_e164_in`, `digits_only`, `title_case`, `trim`, `concat`, `split_name`,
+  `parse_date:DD/MM/YYYY`...) and up to two `alternatives`. `run.method` is `hybrid` (rules plus
+  the LLM's ranking) or `rules` (the LLM failed or is off: the job still succeeds). `stale` is true
+  when the schema changed after the run.
+- **Decisions** (`PATCH` body): `{ "decision": "accept" }`, `{ "decision": "reject" }` or
+  `{ "decision": "override", "role", "target", "transform"? }`. The target must be a
+  non-generated field of the current schema (`400`); two columns of one source cannot be mapped
+  onto the same field unless it has `allowConcat` (`409 CONFLICT`). Viewers get `403`.
+- **Privacy**: the LLM sees only column names, inferred types, pattern shares, flags and the
+  masked or shape samples of the profile, never file values, and only through the gateway.
+- **Accuracy** on the committed samples: `cd eval && python -m dbeval.evaluate_mapping`.
+
+**Background jobs.** Long work (profiling, mapping; matching and pipelines later) runs
 in a Celery worker, not in the request. The api owns the job record in MongoDB; the worker moves it
 forward and publishes every change to Redis; the browser watches it live over Server-Sent Events.
 Design notes: [ADR 0010](docs/adr/0010-background-jobs.md).
@@ -188,8 +236,9 @@ conditional write, so late or duplicate updates are ignored.
 | POST   | `/jobs/:jobId/cancel`              | owner, admin, data_engineer | 200 `{ job }` (finished jobs unchanged)  |
 | GET    | `/jobs/:jobId/events`              | any member of its project   | 200 `text/event-stream`                  |
 
-- **Start**: `{ "type": "demo", "payload": { "steps": 1-20, "stepMs": 10-2000, "failAtStep"?: n } }`
-  or `{ "type": "profile", "payload": { "sourceId": "<id>" } }` (see Column profiling above).
+- **Start**: `{ "type": "demo", "payload": { "steps": 1-20, "stepMs": 10-2000, "failAtStep"?: n } }`,
+  `{ "type": "profile", "payload": { "sourceId": "<id>" } }` or `mapping` with the same payload
+  (see Column profiling and Column mapping above).
   `demo` sleeps through the steps and proves the system works. An
   unknown type or a bad payload is `400 VALIDATION_ERROR`. If the queue cannot be reached the job
   is saved as `failed` with `QUEUE_UNAVAILABLE` and the answer is `503 QUEUE_UNAVAILABLE`.

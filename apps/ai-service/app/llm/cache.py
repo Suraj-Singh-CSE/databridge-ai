@@ -4,6 +4,7 @@ import time
 from collections.abc import Callable
 from typing import Protocol
 
+from redis import Redis as SyncRedis
 from redis.asyncio import Redis
 
 
@@ -51,3 +52,25 @@ class RedisCache:
 
     async def set(self, key: str, value: str, ttl_seconds: int) -> None:
         await self._client.set(self._prefix + key, value, ex=ttl_seconds)
+
+
+class SyncRedisCache:
+    """The Redis cache over a synchronous client, for the worker.
+
+    The worker runs each job's LLM calls in a fresh event loop (``asyncio.run``); an asyncio
+    Redis client is tied to one loop, a synchronous one is not. Calls block briefly, which is
+    fine in a worker process.
+    """
+
+    def __init__(self, client: "SyncRedis", prefix: str = "llm:cache:") -> None:
+        self._client = client
+        self._prefix = prefix
+
+    async def get(self, key: str) -> str | None:
+        value = self._client.get(self._prefix + key)
+        if value is None:
+            return None
+        return value.decode() if isinstance(value, bytes) else str(value)
+
+    async def set(self, key: str, value: str, ttl_seconds: int) -> None:
+        self._client.set(self._prefix + key, value, ex=ttl_seconds)

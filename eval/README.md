@@ -9,7 +9,7 @@ is synthetic. Design notes: [ADR 0008](../docs/adr/0008-ground-truth-dataset.md)
 
 ```bash
 cd eval
-python -m venv .venv && . .venv/bin/activate && pip install -e ".[dev]"
+python -m venv .venv && . .venv/bin/activate && pip install -e ../apps/ai-service -e ".[dev]"
 cd ..
 python -m dbeval.generate --seed 42 --people 5000 --out eval/data   # these are the defaults
 ```
@@ -20,6 +20,15 @@ file's compressed bytes depend on the zlib build, so the manifest hashes its unz
 A small sample (`--seed 7 --people 300`) is committed in [`samples/`](samples) for UI demos and
 upload tests. A test fails if it no longer matches the generator; regenerate it with
 `python -m dbeval.generate --seed 7 --people 300 --out eval/samples`.
+
+## Column-mapping accuracy
+
+`python -m dbeval.evaluate_mapping [--data eval/data]` profiles the three files with the
+ai-service profiler, maps them with the rules path and with the hybrid path (LLM gateway plus the
+Mock provider; never a real model) and prints accuracy, precision and recall of "do not map" and
+accuracy at High confidence against `answers/column_mapping.json`. It needs the ai-service
+package: `pip install -e ../apps/ai-service -e ".[dev]"`. `tests/test_evaluate_mapping.py`
+fails below 90% accuracy (95% at High confidence) on the samples and on the full dataset.
 
 ## What it writes
 

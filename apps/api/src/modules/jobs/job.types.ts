@@ -1,5 +1,5 @@
 /** Every type has a payload schema in job.schemas.ts and a handler in apps/ai-service. */
-export const JOB_TYPES = ['demo', 'profile'] as const;
+export const JOB_TYPES = ['demo', 'profile', 'mapping'] as const;
 export type JobType = (typeof JOB_TYPES)[number];
 
 export const JOB_STATUSES = ['queued', 'running', 'succeeded', 'failed', 'cancelled'] as const;

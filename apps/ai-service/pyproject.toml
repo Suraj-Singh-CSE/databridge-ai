@@ -41,6 +41,10 @@ dev = [
 [tool.setuptools.packages.find]
 include = ["app*"]
 
+[tool.setuptools.package-data]
+"app" = ["py.typed"]
+"app.mapping" = ["prompts/*.txt"]
+
 [tool.ruff]
 target-version = "py312"
 line-length = 100
