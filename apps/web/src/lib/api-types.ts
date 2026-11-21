@@ -106,7 +106,7 @@ export interface SourcePreview {
   rows: string[][];
 }
 
-export type JobType = 'demo' | 'profile';
+export type JobType = 'demo' | 'profile' | 'mapping';
 export type JobStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled';
 
 export interface JobError {

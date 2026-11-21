@@ -54,6 +54,8 @@ select = [
 
 [tool.ruff.lint.isort]
 known-first-party = ["dbeval"]
+# The ai-service package, imported by dbeval.evaluate_mapping.
+known-third-party = ["app"]
 
 [tool.ruff.lint.per-file-ignores]
 # S311: the generator needs a seeded, reproducible PRNG, not a cryptographic one.
@@ -67,6 +69,14 @@ quote-style = "double"
 python_version = "3.12"
 strict = true
 files = ["dbeval"]
+plugins = ["pydantic.mypy"]
+# The mapping evaluation imports the ai-service package (installed from ../apps/ai-service);
+# it is type-checked in its own project, so here its modules are followed but not reported.
+mypy_path = "../apps/ai-service"
+
+[[tool.mypy.overrides]]
+module = ["app.*"]
+follow_imports = "silent"
 
 # xlsxwriter ships no type information (no py.typed, no stubs package).
 [[tool.mypy.overrides]]

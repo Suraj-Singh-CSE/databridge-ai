@@ -115,8 +115,11 @@ jobs:
         with:
           python-version: '3.12'
           cache: pip
-          cache-dependency-path: eval/pyproject.toml
-      - run: pip install -e ".[dev]"
+          cache-dependency-path: |
+            eval/pyproject.toml
+            apps/ai-service/pyproject.toml
+      # The mapping evaluation imports the ai-service's engine (pure functions, no services).
+      - run: pip install -e ../apps/ai-service -e ".[dev]"
       - run: ruff check .
       - run: ruff format --check .
       - run: mypy
@@ -343,6 +346,53 @@ jobs:
             and (.data.columns[] | select(.column == "PAN") | .patterns[0].code) == "pan"' \
             "/tmp/profile-body-$xlsx" > /dev/null
           echo "ok: CSV and XLSX profiled by the worker from the shared volume"
+
+      - name: Mapping smoke test through the nginx proxy (profile, then map the CRM sample)
+        run: |
+          set -euo pipefail
+          api=http://localhost:8080/api/v1
+          token=$(curl -sS --fail-with-body -X POST "$api/auth/login" \
+            -H 'Content-Type: application/json' \
+            -d '{"email":"smoke@example.com","password":"smoke-test-password"}' | jq -r '.data.accessToken')
+          auth="Authorization: Bearer $token"
+          project=$(curl -sS --fail-with-body -X POST "$api/projects" -H "$auth" \
+            -H 'Content-Type: application/json' -d '{"name":"Smoke mapping"}' | jq -r '.data.project.id')
+          source=$(curl -sS --fail-with-body -X POST "$api/projects/$project/sources" -H "$auth" \
+            -F "file=@eval/samples/crm_customers.csv" | jq -r '.data.source.id')
+
+          run_job() {
+            local type=$1 job
+            job=$(curl -sS --fail-with-body -X POST "$api/projects/$project/jobs" -H "$auth" \
+              -H 'Content-Type: application/json' \
+              -d "{\"type\":\"$type\",\"payload\":{\"sourceId\":\"$source\"}}" | jq -r '.data.job.id')
+            curl -sSN --fail --max-time 90 "$api/jobs/$job/events" -H "$auth" | sed -n 's/^data: //p' > "/tmp/$type-$job"
+            echo "$type job $job: $(jq -r '"\(.status) \(.progress)% \(.message)"' "/tmp/$type-$job" | paste -sd ',' -)"
+            jq -s -e 'last | .status == "succeeded"' "/tmp/$type-$job" > /dev/null
+            jq -s -c 'last | .result' "/tmp/$type-$job"
+          }
+
+          run_job profile
+          run_job mapping
+          curl -sS --fail-with-body "$api/projects/$project/sources/$source/mappings" -H "$auth" > /tmp/mappings
+          jq -c '[.data.columns[] | {column, target: .suggestion.target, role: .suggestion.role, label: .suggestion.confidenceLabel}]' /tmp/mappings
+          jq -e '(.data.columns | length) == 10 and .data.run.method == "hybrid"
+            and (.data.columns[] | select(.column == "email_id") | .suggestion
+              | .target == "email" and .confidenceLabel == "High")
+            and (.data.columns[] | select(.column == "cust_id") | .suggestion.role) == "source_record_id"' \
+            /tmp/mappings > /dev/null
+          # Bulk-accept the High suggestions, then a second column onto "email" is refused.
+          curl -sS --fail-with-body -X POST "$api/projects/$project/sources/$source/mappings/accept-high" \
+            -H "$auth" | jq -e '.data.accepted > 0' > /dev/null
+          code=$(curl -s -o /tmp/conflict -w '%{http_code}' -X PATCH \
+            "$api/projects/$project/sources/$source/mappings/gender" -H "$auth" \
+            -H 'Content-Type: application/json' \
+            -d '{"decision":"override","role":"field","target":"email"}')
+          test "$code" = 409
+          # No raw value of the first CRM row reaches the suggestions.
+          for value in "Rudra Shroff" 6376476497 rudra_s860@example.net 14/12/1975; do
+            if grep -qF "$value" /tmp/mappings; then echo "raw value in mappings" >&2; exit 1; fi
+          done
+          echo "ok: profile then mapping; email_id -> email (High)"
 
       - name: AI service is not published to the host
         run: |

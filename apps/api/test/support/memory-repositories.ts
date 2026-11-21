@@ -3,6 +3,11 @@ import { randomBytes } from 'node:crypto';
 import { DuplicateKeyError } from '../../src/errors.js';
 import type { AuditEntry } from '../../src/modules/audit/audit.types.js';
 import type { Job, JobRepository } from '../../src/modules/jobs/job.types.js';
+import type {
+  MappingDecision,
+  MappingRepository,
+  StoredSuggestion,
+} from '../../src/modules/mappings/mapping.types.js';
 import type { RefreshTokenRecord } from '../../src/modules/auth/refresh-token.types.js';
 import type { Project } from '../../src/modules/projects/project.types.js';
 import type {
@@ -10,6 +15,7 @@ import type {
   ColumnProfileRepository,
 } from '../../src/modules/sources/column-profile.types.js';
 import type { Source } from '../../src/modules/sources/source.types.js';
+import type { TargetSchema } from '../../src/modules/target-schema/target-schema.types.js';
 import type { User } from '../../src/modules/users/user.types.js';
 import type { Repositories } from '../../src/repositories.js';
 
@@ -33,9 +39,17 @@ export interface ProfileWrite {
   source: Partial<Pick<Source, 'status' | 'rowCount' | 'columnCount' | 'profiledAt' | 'error'>>;
 }
 
+/** What the Python mapping worker writes: one suggestion per column of a source. */
+export interface SuggestionWrite {
+  projectId: string;
+  sourceId: string;
+  suggestions: StoredSuggestion[];
+}
+
 export interface MemoryRepositories extends Repositories {
   jobs: JobRepository & { workerUpdate(id: string, patch: WorkerPatch): void };
   columnProfiles: ColumnProfileRepository & { workerSave(write: ProfileWrite): void };
+  mappings: MappingRepository & { workerSave(write: SuggestionWrite): void };
 }
 
 /**
@@ -50,6 +64,13 @@ export function createMemoryRepositories(): MemoryRepositories {
   // key: `${projectId}/${sourceId}`
   const profiles = new Map<string, ColumnProfile[]>();
   const jobs = new Map<string, Job>();
+  const schemas = new Map<string, TargetSchema>();
+  // key: `${projectId}/${sourceId}`
+  const suggestions = new Map<string, StoredSuggestion[]>();
+  const decisions = new Map<string, Map<string, MappingDecision>>();
+  const dropPrefix = (map: Map<string, unknown>, projectId: string) => {
+    for (const key of map.keys()) if (key.startsWith(`${projectId}/`)) map.delete(key);
+  };
   const audit: AuditEntry[] = [];
   let firstAdminClaimed = false;
 
@@ -386,6 +407,77 @@ export function createMemoryRepositories(): MemoryRepositories {
         const job = jobs.get(id);
         if (!job) throw new Error(`no job ${id}`);
         Object.assign(job, structuredClone(patch), { updatedAt: tick() });
+      },
+    },
+
+    targetSchemas: {
+      async findByProject(projectId) {
+        await Promise.resolve();
+        const schema = schemas.get(projectId);
+        return schema ? structuredClone(schema) : null;
+      },
+      async createIfMissing(projectId, input) {
+        await Promise.resolve();
+        const existing = schemas.get(projectId);
+        if (existing) return structuredClone(existing);
+        const at = tick();
+        const schema: TargetSchema = {
+          projectId,
+          ...structuredClone(input),
+          version: 1,
+          updatedBy: null,
+          createdAt: at,
+          updatedAt: at,
+        };
+        schemas.set(projectId, schema);
+        return structuredClone(schema);
+      },
+      async replace(projectId, expectedVersion, input, updatedBy) {
+        await Promise.resolve();
+        const schema = schemas.get(projectId);
+        if (schema?.version !== expectedVersion) return null;
+        Object.assign(schema, structuredClone(input), {
+          version: expectedVersion + 1,
+          updatedBy,
+          updatedAt: tick(),
+        });
+        return structuredClone(schema);
+      },
+      async deleteByProject(projectId) {
+        await Promise.resolve();
+        return schemas.delete(projectId) ? 1 : 0;
+      },
+    },
+
+    mappings: {
+      async listSuggestions(projectId, sourceId) {
+        await Promise.resolve();
+        const stored = suggestions.get(`${projectId}/${sourceId}`) ?? [];
+        return structuredClone(stored).sort((a, b) => a.position - b.position);
+      },
+      async listDecisions(projectId, sourceId) {
+        await Promise.resolve();
+        return structuredClone([...(decisions.get(`${projectId}/${sourceId}`)?.values() ?? [])]);
+      },
+      async saveDecision(projectId, sourceId, decision) {
+        await Promise.resolve();
+        const key = `${projectId}/${sourceId}`;
+        const byColumn = decisions.get(key) ?? new Map<string, MappingDecision>();
+        byColumn.set(decision.column, structuredClone(decision));
+        decisions.set(key, byColumn);
+      },
+      async deleteBySource(projectId, sourceId) {
+        await Promise.resolve();
+        suggestions.delete(`${projectId}/${sourceId}`);
+        decisions.delete(`${projectId}/${sourceId}`);
+      },
+      async deleteByProject(projectId) {
+        await Promise.resolve();
+        dropPrefix(suggestions, projectId);
+        dropPrefix(decisions, projectId);
+      },
+      workerSave({ projectId, sourceId, suggestions: stored }) {
+        suggestions.set(`${projectId}/${sourceId}`, structuredClone(stored));
       },
     },
 

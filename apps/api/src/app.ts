@@ -19,10 +19,14 @@ import { createTokenService } from './modules/auth/tokens.js';
 import type { JobEventBus } from './modules/jobs/job.events.js';
 import { createJobRouter, createProjectJobsRouter } from './modules/jobs/job.routes.js';
 import { createJobService } from './modules/jobs/job.service.js';
+import { createMappingRouter } from './modules/mappings/mapping.routes.js';
+import { createMappingService } from './modules/mappings/mapping.service.js';
 import { createProjectRouter } from './modules/projects/project.routes.js';
 import { createProjectService } from './modules/projects/project.service.js';
 import { createSourceRouter } from './modules/sources/source.routes.js';
 import { createSourceService } from './modules/sources/source.service.js';
+import { createTargetSchemaRouter } from './modules/target-schema/target-schema.routes.js';
+import { createTargetSchemaService } from './modules/target-schema/target-schema.service.js';
 import type { Repositories } from './repositories.js';
 import { createStorage, type FileStorage } from './storage/index.js';
 
@@ -69,8 +73,11 @@ export function createApp({
       maxCompressionRatio: config.XLSX_MAX_COMPRESSION_RATIO,
     },
   });
+  const targetSchemas = createTargetSchemaService(repos.targetSchemas, audit);
+  const mappingService = createMappingService(repos, targetSchemas, audit);
   const jobService = createJobService({
     repos,
+    targetSchemas,
     audit,
     events: jobEvents,
     aiService: aiService ?? createAiServiceClient(config),
@@ -114,6 +121,14 @@ export function createApp({
     createAuthRouter({ auth, tokens, secureCookies: config.NODE_ENV === 'production' }),
   );
   // Before the project router so its '/:id' routes and auth do not run for source/job paths first.
+  app.use(
+    '/api/v1/projects/:projectId/sources/:sourceId/mappings',
+    createMappingRouter({ mappingService, projects: repos.projects, tokens }),
+  );
+  app.use(
+    '/api/v1/projects/:projectId/target-schema',
+    createTargetSchemaRouter({ targetSchemas, projects: repos.projects, tokens }),
+  );
   app.use(
     '/api/v1/projects/:projectId/sources',
     createSourceRouter({
