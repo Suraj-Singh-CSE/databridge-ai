@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto';
 
 import { DuplicateKeyError } from '../../src/errors.js';
 import type { AuditEntry } from '../../src/modules/audit/audit.types.js';
+import type { Job, JobRepository } from '../../src/modules/jobs/job.types.js';
 import type { RefreshTokenRecord } from '../../src/modules/auth/refresh-token.types.js';
 import type { Project } from '../../src/modules/projects/project.types.js';
 import type { Source } from '../../src/modules/sources/source.types.js';
@@ -15,15 +16,25 @@ const newId = () => randomBytes(12).toString('hex');
 let clock = Date.now();
 const tick = () => new Date((clock += 1));
 
+/** A worker's direct write to a job (the Python worker writes MongoDB itself). */
+export type WorkerPatch = Partial<
+  Pick<Job, 'status' | 'progress' | 'message' | 'result' | 'error' | 'attempts'>
+> & { startedAt?: Date | null; heartbeatAt?: Date | null; finishedAt?: Date | null };
+
+export interface MemoryRepositories extends Repositories {
+  jobs: JobRepository & { workerUpdate(id: string, patch: WorkerPatch): void };
+}
+
 /**
  * In-memory implementations of every repository with the same contract as the Mongo ones.
  * Used to run the full API suite without a database; the same suite also runs against MongoDB.
  */
-export function createMemoryRepositories(): Repositories {
+export function createMemoryRepositories(): MemoryRepositories {
   const users = new Map<string, User & { passwordHash: string }>();
   const tokens = new Map<string, RefreshTokenRecord>();
   const projects = new Map<string, Project>();
   const sources = new Map<string, Source>();
+  const jobs = new Map<string, Job>();
   const audit: AuditEntry[] = [];
   let firstAdminClaimed = false;
 
@@ -244,6 +255,80 @@ export function createMemoryRepositories(): Repositories {
           deleted += 1;
         }
         return deleted;
+      },
+    },
+
+    jobs: {
+      async create(input) {
+        await Promise.resolve();
+        const at = tick();
+        const job: Job = {
+          id: newId(),
+          ...structuredClone(input),
+          status: 'queued',
+          progress: 0,
+          message: 'Waiting to start',
+          result: null,
+          error: null,
+          attempts: 0,
+          queuedAt: at,
+          startedAt: null,
+          finishedAt: null,
+          heartbeatAt: null,
+          createdAt: at,
+          updatedAt: at,
+        };
+        jobs.set(job.id, job);
+        return structuredClone(job);
+      },
+      async findById(id) {
+        await Promise.resolve();
+        const job = jobs.get(id);
+        return job ? structuredClone(job) : null;
+      },
+      async listByProject(projectId, limit) {
+        await Promise.resolve();
+        return [...jobs.values()]
+          .filter((j) => j.projectId === projectId)
+          .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
+          .slice(0, limit)
+          .map((j) => structuredClone(j));
+      },
+      async finishIfActive(id, { status, message, error }, at) {
+        await Promise.resolve();
+        const job = jobs.get(id);
+        if (!job || (job.status !== 'queued' && job.status !== 'running')) return null;
+        Object.assign(job, { status, message, error, finishedAt: at, updatedAt: tick() });
+        return structuredClone(job);
+      },
+      async failIfStale(id, cutoff, error, at) {
+        await Promise.resolve();
+        const job = jobs.get(id);
+        if (job?.status !== 'running') return null;
+        if (job.heartbeatAt && job.heartbeatAt >= cutoff) return null;
+        Object.assign(job, {
+          status: 'failed',
+          message: error.message,
+          error,
+          finishedAt: at,
+          updatedAt: tick(),
+        });
+        return structuredClone(job);
+      },
+      async deleteByProject(projectId) {
+        await Promise.resolve();
+        let deleted = 0;
+        for (const [id, job] of jobs) {
+          if (job.projectId !== projectId) continue;
+          jobs.delete(id);
+          deleted += 1;
+        }
+        return deleted;
+      },
+      workerUpdate(id, patch) {
+        const job = jobs.get(id);
+        if (!job) throw new Error(`no job ${id}`);
+        Object.assign(job, structuredClone(patch), { updatedAt: tick() });
       },
     },
 

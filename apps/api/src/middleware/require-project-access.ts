@@ -19,6 +19,10 @@ const RANK: Record<ProjectAccess, number> = {
 
 const OBJECT_ID = /^[a-f\d]{24}$/i;
 
+export function meetsMinimum(access: ProjectAccess, minimum: MinimumAccess): boolean {
+  return RANK[access] >= RANK[minimum];
+}
+
 export function accessFor(
   project: Project,
   userId: string,
@@ -55,7 +59,7 @@ export function requireProjectAccess(
       next(AppError.notFound('Project not found.'));
       return;
     }
-    if (RANK[access] < RANK[minimum]) {
+    if (!meetsMinimum(access, minimum)) {
       next(AppError.forbidden());
       return;
     }

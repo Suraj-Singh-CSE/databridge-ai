@@ -7,8 +7,25 @@
 # Secrets use ${VAR:?...} so compose refuses to start when one is missing.
 #
 # Published to the host: web (8080) and api (4000) only.
-# ai-service, mongo and redis are reachable only on the private compose network.
+# ai-service, ai-worker, mongo and redis are reachable only on the private compose network.
 name: databridge
+
+# Settings shared by ai-service (HTTP, enqueues jobs) and ai-worker (Celery, runs them).
+x-ai-environment: &ai-environment
+  AI_SERVICE_TOKEN: ${AI_SERVICE_TOKEN:?set AI_SERVICE_TOKEN in your env file}
+  MONGODB_URI: mongodb://mongo:27017/databridge
+  REDIS_URL: redis://redis:6379/0
+  LLM_PROVIDER: ${LLM_PROVIDER:-mock}
+  GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+  GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.8-flash}
+  LOG_LEVEL: ${LOG_LEVEL:-INFO}
+  UPLOAD_DIR: /data/uploads
+  # Background jobs (docs/adr/0010-background-jobs.md).
+  JOB_SOFT_TIME_LIMIT_SECONDS: ${JOB_SOFT_TIME_LIMIT_SECONDS:-900}
+  JOB_HARD_TIME_LIMIT_SECONDS: ${JOB_HARD_TIME_LIMIT_SECONDS:-960}
+  JOB_MAX_ATTEMPTS: ${JOB_MAX_ATTEMPTS:-3}
+  JOB_RETRY_BACKOFF_SECONDS: ${JOB_RETRY_BACKOFF_SECONDS:-2}
+  JOB_RETRY_BACKOFF_MAX_SECONDS: ${JOB_RETRY_BACKOFF_MAX_SECONDS:-60}
 
 services:
   mongo:
@@ -39,21 +56,50 @@ services:
       context: ..
       dockerfile: apps/ai-service/Dockerfile
     restart: unless-stopped
-    environment:
-      AI_SERVICE_TOKEN: ${AI_SERVICE_TOKEN:?set AI_SERVICE_TOKEN in your env file}
-      MONGODB_URI: mongodb://mongo:27017/databridge
-      REDIS_URL: redis://redis:6379/0
-      LLM_PROVIDER: ${LLM_PROVIDER:-mock}
-      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
-      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.8-flash}
-      LOG_LEVEL: ${LOG_LEVEL:-INFO}
-      UPLOAD_DIR: /data/uploads
+    environment: *ai-environment
     volumes:
       # Uploaded source files, written by the api. Read-only here: the profiler (M2.4) reads them.
       - uploads:/data/uploads:ro
     # No "ports": reachable only as http://ai-service:8000 inside the compose network.
     expose:
       - '8000'
+    depends_on:
+      mongo:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # Celery worker: runs background jobs (profiling from M2.4). Same image as ai-service.
+  ai-worker:
+    build:
+      context: ..
+      dockerfile: apps/ai-service/Dockerfile
+    restart: unless-stopped
+    command:
+      [
+        'celery',
+        '-A',
+        'app.worker.celery_app:celery_app',
+        'worker',
+        '--loglevel=INFO',
+        '--concurrency=2',
+        '--hostname=worker@%h',
+      ]
+    environment: *ai-environment
+    volumes:
+      - uploads:/data/uploads:ro
+    # Not published and listens on no port: it only talks to redis and mongo.
+    healthcheck:
+      # Replaces the image's HTTP check: asks this worker to answer a ping over the broker.
+      test:
+        [
+          'CMD-SHELL',
+          'celery -A app.worker.celery_app:celery_app inspect ping --destination "worker@$$HOSTNAME" --timeout 5 > /dev/null',
+        ]
+      interval: 15s
+      timeout: 15s
+      retries: 5
+      start_period: 20s
     depends_on:
       mongo:
         condition: service_healthy
@@ -74,6 +120,10 @@ services:
       JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:?set JWT_REFRESH_SECRET in your env file}
       AI_SERVICE_URL: http://ai-service:8000
       AI_SERVICE_TOKEN: ${AI_SERVICE_TOKEN:?set AI_SERVICE_TOKEN in your env file}
+      AI_SERVICE_TIMEOUT_MS: ${AI_SERVICE_TIMEOUT_MS:-5000}
+      # Background jobs (docs/adr/0010-background-jobs.md).
+      JOB_STALE_AFTER_SECONDS: ${JOB_STALE_AFTER_SECONDS:-300}
+      JOB_EVENTS_KEEPALIVE_MS: ${JOB_EVENTS_KEEPALIVE_MS:-15000}
       # The browser origin is the nginx web container, not the Vite dev server.
       CORS_ORIGIN: ${WEB_ORIGIN:-http://localhost:8080}
       # Number of proxy hops to trust for the client IP (rate limiting). See .env.example.
@@ -120,5 +170,5 @@ services:
 volumes:
   mongo-data:
   redis-data:
-  # Uploaded files: read-write for api, read-only for ai-service.
+  # Uploaded files: read-write for api, read-only for ai-service and ai-worker.
   uploads:

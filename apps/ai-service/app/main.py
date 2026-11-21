@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import APIRouter, Depends, FastAPI
 
-from app.api import health, llm
+from app.api import health, jobs, llm
 from app.config import Settings, get_settings
 from app.errors import register_error_handlers
 from app.logging import configure_logging
@@ -48,5 +48,6 @@ def create_app(settings: Settings | None = None, services: Services | None = Non
     app.include_router(health.router, prefix=API_PREFIX)
     protected = APIRouter(prefix=API_PREFIX, dependencies=[Depends(require_service_token)])
     protected.include_router(llm.router)
+    protected.include_router(jobs.router)
     app.include_router(protected)
     return app

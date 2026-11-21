@@ -9,6 +9,7 @@ export type ErrorCode =
   | 'UNSUPPORTED_FILE'
   | 'LIMIT_REACHED'
   | 'RATE_LIMITED'
+  | 'QUEUE_UNAVAILABLE'
   | 'INTERNAL_ERROR';
 
 /**
