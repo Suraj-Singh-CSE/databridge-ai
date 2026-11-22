@@ -4,6 +4,7 @@ import { Navigate, type RouteObject } from 'react-router';
 import {
   CreateAccountPage,
   MappingPage,
+  MatchingPage,
   ProfilePage,
   SignInPage,
   SourcesPage,
@@ -22,6 +23,7 @@ const STEP_PAGES: Partial<Record<ProjectPage['slug'], ComponentType>> = {
   sources: SourcesPage,
   profile: ProfilePage,
   mapping: MappingPage,
+  matching: MatchingPage,
 };
 
 function stepElement(page: ProjectPage) {

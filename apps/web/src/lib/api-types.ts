@@ -1,6 +1,7 @@
 /**
  * Shapes returned by apps/api (/api/v1), as JSON. Keep in step with
- * apps/api/src/modules/{users,projects,sources,jobs}/*.types.ts. Dates arrive as ISO strings.
+ * apps/api/src/modules/{users,projects,sources,jobs,candidates,scores,clusters}/*.types.ts (and the
+ * service views). Dates arrive as ISO strings.
  */
 
 export const ROLES = ['admin', 'data_engineer', 'data_steward', 'viewer'] as const;
@@ -81,6 +82,15 @@ export type SourceFormat = 'csv' | 'xlsx';
 export type SourceStatus =
   'uploaded' | 'profiling' | 'profiled' | 'standardised' | 'ready' | 'failed';
 
+/** Counts from the last standardise run (written by the worker). Never values. */
+export interface StandardisationSummary {
+  /** `<jobId>:<attempt>` whose rows are in staged_records. */
+  runId: string;
+  rowCount: number;
+  rowsWithIssues: number;
+  issues: { code: string; count: number }[];
+}
+
 /** An uploaded file: metadata only, never row values. */
 export interface Source {
   id: string;
@@ -96,6 +106,10 @@ export interface Source {
   columnCount: number | null;
   error: { code: string; message: string } | null;
   profiledAt: string | null;
+  /** When the last successful standardise run finished. */
+  standardisedAt: string | null;
+  /** Kept after a re-profile (status back to `profiled`): the cleaned rows are then outdated. */
+  standardisation: StandardisationSummary | null;
   uploadedBy: string;
   createdAt: string;
   updatedAt: string;
@@ -107,7 +121,15 @@ export interface SourcePreview {
   rows: string[][];
 }
 
-export type JobType = 'demo' | 'profile' | 'mapping' | 'standardise';
+export type JobType =
+  | 'demo'
+  | 'profile'
+  | 'mapping'
+  | 'standardise'
+  | 'candidates'
+  | 'scoring'
+  | 'pair_review'
+  | 'clustering';
 export type JobStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled';
 
 export interface JobError {
@@ -268,4 +290,210 @@ export interface AcceptHighResult {
   accepted: number;
   alreadyDecided: number;
   conflicts: number;
+}
+
+/** A cleaned row (apps/api staged.types.ts), looked up by id with its source's name. */
+export interface CandidateRecord {
+  id: string;
+  sourceId: string;
+  sourceName: string;
+  /** 1-based position among the file's data rows. */
+  rowNumber: number;
+  /** The source system's own id for the row, when a column has that role. */
+  sourceRecordId: string | null;
+  /** Target field -> cleaned value. */
+  fields: Record<string, string | null>;
+  issues: { field: string; code: string }[];
+}
+
+export interface KeyCount {
+  key: string;
+  count: number;
+}
+
+/** Candidate pairs (apps/api candidates module, ADR 0015): the last successful run. */
+export interface CandidateSummary {
+  jobId: string;
+  runId: string;
+  sources: { sourceId: string; runId: string; rowCount: number }[];
+  recordCount: number;
+  possiblePairs: number;
+  pairCount: number;
+  reductionRatio: number;
+  pairsByKey: KeyCount[];
+  pairsOnlyByKey: KeyCount[];
+  oversizeBlocksSkipped: number;
+  oversizeBlocksByKey: KeyCount[];
+  maxBlockSize: number;
+  finishedAt: string;
+}
+
+export interface CandidateSummaryView {
+  summary: CandidateSummary;
+  /** True when a source was cleaned again, re-profiled or added since this run. */
+  outdated: boolean;
+}
+
+/** Pair scores (apps/api scores module, ADR 0016). */
+export type ScoreBand = 'match' | 'maybe' | 'non_match';
+
+export interface ScoreModelLevel {
+  level: string;
+  m: number;
+  u: number;
+  weight: number;
+}
+
+export interface ScoreModel {
+  method: 'em' | 'defaults';
+  emIterations: number;
+  emConverged: boolean;
+  fallbackReason: string | null;
+  matchProportion: number;
+  priorWeight: number;
+  fields: { field: string; levels: ScoreModelLevel[] }[];
+}
+
+/** Counts of the last `pair_review` run on this scoring run (ADR 0017). */
+export interface AiReviewSummary {
+  jobId: string;
+  promptVersion: string;
+  model: string | null;
+  confidenceThreshold: number;
+  pairCount: number;
+  reviewed: number;
+  same: number;
+  different: number;
+  unsure: number;
+  unavailable: number;
+  suggestedMatch: number;
+  suggestedNonMatch: number;
+  calls: number;
+  failedCalls: number;
+  finishedAt: string;
+}
+
+export interface ScoreSummary {
+  jobId: string;
+  runId: string;
+  candidatesRunId: string;
+  pairCount: number;
+  bandCounts: { band: ScoreBand; count: number }[];
+  thresholds: { match: number; maybe: number };
+  model: ScoreModel;
+  finishedAt: string;
+  /** null until the AI has reviewed this run's maybe pairs. */
+  aiReview: AiReviewSummary | null;
+}
+
+export interface ScoreSummaryView {
+  summary: ScoreSummary;
+  /** True when the candidate pairs were found again, or are themselves outdated. */
+  outdated: boolean;
+}
+
+/** Clusters and golden records (apps/api clusters module, ADR 0018). */
+export type ClusterStatus = 'proposed' | 'approved' | 'rejected';
+export type ClusterFlag =
+  'needs_review' | 'different_people' | 'conflicting_evidence' | 'too_large';
+export type LinkKind = 'match' | 'ai_suggested' | 'human';
+export type SurvivorshipRule =
+  | 'only_value'
+  | 'most_frequent'
+  | 'most_complete'
+  | 'most_typical'
+  | 'source_trust'
+  | 'most_recent'
+  | 'row_order';
+
+/** A scored pair (or a person's decision) that holds two members together. */
+export interface ClusterLink {
+  recordA: string;
+  recordB: string;
+  score: number;
+  kind: LinkKind;
+  /** On the cluster's maximum spanning tree: the links it cannot do without. */
+  tree: boolean;
+}
+
+export interface FieldAlternative {
+  value: string;
+  count: number;
+  recordIds: string[];
+  sources: string[];
+}
+
+/** Where one golden value came from. */
+export interface FieldProvenance {
+  /** null when no member has the field. */
+  recordId: string | null;
+  /** The source's name. */
+  source: string | null;
+  rule: SurvivorshipRule | null;
+  /** Every distinct value among the members, the chosen one first. */
+  alternatives: FieldAlternative[];
+}
+
+export interface GoldenRecord {
+  customerId: string;
+  status: ClusterStatus;
+  fields: Record<string, string | null>;
+  provenance: Record<string, FieldProvenance>;
+}
+
+export interface Cluster {
+  position: number;
+  customerId: string;
+  memberRecordIds: string[];
+  size: number;
+  /** Weakest score on the spanning tree; null for a single record. */
+  confidence: number | null;
+  label: ConfidenceLabel | null;
+  status: ClusterStatus;
+  flags: ClusterFlag[];
+  /** Plain-language reasons for the flags; never values. */
+  reasons: string[];
+  aiSuggested: boolean;
+  links: ClusterLink[];
+}
+
+export interface ClusterView extends Cluster {
+  /** In `memberRecordIds` order; null when a record is gone. */
+  members: (CandidateRecord | null)[];
+  goldenRecord: GoldenRecord | null;
+}
+
+export interface ClusterSummary {
+  jobId: string;
+  runId: string;
+  scoresRunId: string;
+  candidatesRunId: string;
+  aiReviewJobId: string | null;
+  recordCount: number;
+  clusterCount: number;
+  singletonCount: number;
+  multiRecordCount: number;
+  needsReviewCount: number;
+  aiSuggestedCount: number;
+  averageSize: number;
+  largestCluster: number;
+  decisionCount: number;
+  settings: { includeAiSuggested: boolean; maxClusterSize: number; sourceTrust: string[] };
+  finishedAt: string;
+}
+
+export interface ClusterSummaryView {
+  summary: ClusterSummary;
+  /** True when the pairs were scored or reviewed again, or the scores are themselves outdated. */
+  outdated: boolean;
+}
+
+export interface ClusterPage extends ClusterSummaryView {
+  items: ClusterView[];
+  /** Pass as `cursor` for the next page; null on the last page. */
+  nextCursor: string | null;
+}
+
+export interface ClusterDetail extends ClusterSummaryView {
+  cluster: ClusterView;
 }

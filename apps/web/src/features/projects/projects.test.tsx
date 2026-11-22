@@ -205,19 +205,19 @@ describe('project pages', () => {
       ...signedInHandlers(),
       http.get(`${API}/projects/:id`, () => ok({ project })),
     );
-    renderApp(`/projects/${project.id}/matching`);
+    renderApp(`/projects/${project.id}/pipeline`);
 
     expect(
-      await screen.findByRole('heading', { name: 'Is this the same person?' }),
+      await screen.findByRole('heading', { name: 'Build the clean dataset' }),
     ).toBeInTheDocument();
     const breadcrumb = screen.getByRole('navigation', { name: 'Breadcrumb' });
-    expect(breadcrumb).toHaveTextContent('Projects/Customer 360 demo/Matching');
+    expect(breadcrumb).toHaveTextContent('Projects/Customer 360 demo/Pipeline');
     expect(screen.getByRole('list', { name: 'Project steps' })).toBeInTheDocument();
-    expect(screen.getByText('Coming in milestone M4')).toBeInTheDocument();
-    expect(document.title).toBe('Matching · Customer 360 demo · DataBridge AI');
+    expect(screen.getByText('Coming in milestone M5')).toBeInTheDocument();
+    expect(document.title).toBe('Pipeline · Customer 360 demo · DataBridge AI');
 
     const nav = screen.getByRole('navigation', { name: 'Main' });
-    expect(within(nav).getByRole('link', { name: 'Matching' })).toHaveAttribute(
+    expect(within(nav).getByRole('link', { name: 'Pipeline' })).toHaveAttribute(
       'aria-current',
       'page',
     );

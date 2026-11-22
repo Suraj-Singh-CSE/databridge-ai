@@ -17,3 +17,6 @@ export const ProfilePage = lazy(() =>
 export const MappingPage = lazy(() =>
   import('@/features/mapping/MappingPage').then((m) => ({ default: m.MappingPage })),
 );
+export const MatchingPage = lazy(() =>
+  import('@/features/matching/MatchingPage').then((m) => ({ default: m.MatchingPage })),
+);

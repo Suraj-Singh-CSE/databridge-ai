@@ -26,6 +26,8 @@ export const sourceKeys = {
   profile: (projectId: string, sourceId: string) =>
     [...sourceKeys.all(projectId), sourceId, 'profile'] as const,
   jobs: (projectId: string) => ['projects', projectId, 'jobs'] as const,
+  /** Root of the matching results' keys (features/matching/queries.ts). */
+  matching: (projectId: string) => ['projects', projectId, 'matching'] as const,
 };
 
 export function useSources(projectId: string) {
@@ -151,10 +153,14 @@ export function useDeleteSource(projectId: string) {
   });
 }
 
-/** After a job ends: the source's status, counts and profile have changed. */
+/**
+ * After a job ends: the source's status, counts and profile have changed, and so may the
+ * matching results (candidates, scores, clusters) the matching jobs write.
+ */
 export async function refreshAfterJob(queryClient: QueryClient, projectId: string): Promise<void> {
   await Promise.all([
     queryClient.invalidateQueries({ queryKey: sourceKeys.all(projectId) }),
     queryClient.invalidateQueries({ queryKey: sourceKeys.jobs(projectId) }),
+    queryClient.invalidateQueries({ queryKey: sourceKeys.matching(projectId) }),
   ]);
 }

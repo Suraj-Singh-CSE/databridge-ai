@@ -86,6 +86,8 @@ export function makeSource(overrides: Partial<Source> = {}): Source {
     columnCount: 9,
     error: null,
     profiledAt: '2026-11-21T10:05:00.000Z',
+    standardisedAt: null,
+    standardisation: null,
     uploadedBy: '64b000000000000000000001',
     createdAt: new Date(Date.now() - 5 * 60_000).toISOString(),
     updatedAt: new Date(Date.now() - 5 * 60_000).toISOString(),
