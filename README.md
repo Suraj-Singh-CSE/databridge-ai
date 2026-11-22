@@ -555,6 +555,12 @@ Every route except sign-in, create-account and the 404 page needs a session; oth
   split or merge the rebuild job's progress shows and the list refreshes when it ends. Results
   and plain-language errors (409, 403, network) are announced in an `aria-live` region; dialogs
   return focus to their button. Viewers see the same page without these buttons.
+- The e2e test `apps/web/e2e/matching.spec.ts` walks the whole flow on the full stack (Mock LLM):
+  it maps the CRM and support samples, runs the five steps, opens a multi-record customer (records
+  side by side, golden values with "From …"), approves it, splits a record out (keyboard check of
+  the dialog: Escape closes it and focus returns), waits for the rebuild, runs Approve all High,
+  checks that no raw email is announced or in the page title, and runs an axe WCAG 2 A/AA scan
+  with a customer open. Screenshot: `08-match-review.png`.
 
 **Run it in development** (Vite proxies `/api` to `http://localhost:4000`):
 

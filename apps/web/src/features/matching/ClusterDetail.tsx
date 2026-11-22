@@ -334,7 +334,7 @@ export function ClusterDetail({
                       >
                         {own ?? <Empty />}
                         {differs && (
-                          <span className="mt-0.5 flex items-center gap-1 text-xs text-muted-foreground">
+                          <span className="mt-0.5 flex items-center gap-1 text-xs text-accent-foreground">
                             <CircleAlert aria-hidden="true" className="size-3" />
                             Differs
                           </span>
