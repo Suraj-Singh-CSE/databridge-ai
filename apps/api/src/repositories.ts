@@ -10,6 +10,8 @@ import { createMongoProjectRepository } from './modules/projects/project.reposit
 import type { ProjectRepository } from './modules/projects/project.types.js';
 import { createMongoColumnProfileRepository } from './modules/sources/column-profile.repository.js';
 import type { ColumnProfileRepository } from './modules/sources/column-profile.types.js';
+import { createMongoStagedRecordRepository } from './modules/staged/staged.repository.js';
+import type { StagedRecordRepository } from './modules/staged/staged.types.js';
 import { createMongoSourceRepository } from './modules/sources/source.repository.js';
 import type { SourceRepository } from './modules/sources/source.types.js';
 import { createMongoTargetSchemaRepository } from './modules/target-schema/target-schema.repository.js';
@@ -27,6 +29,7 @@ export interface Repositories {
   jobs: JobRepository;
   targetSchemas: TargetSchemaRepository;
   mappings: MappingRepository;
+  stagedRecords: StagedRecordRepository;
   audit: AuditRepository;
 }
 
@@ -40,6 +43,7 @@ export function createMongoRepositories(): Repositories {
     jobs: createMongoJobRepository(),
     targetSchemas: createMongoTargetSchemaRepository(),
     mappings: createMongoMappingRepository(),
+    stagedRecords: createMongoStagedRecordRepository(),
     audit: createMongoAuditRepository(),
   };
 }

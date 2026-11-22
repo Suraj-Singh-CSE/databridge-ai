@@ -127,6 +127,8 @@ export function sourceStatusPill(
     case 'profiled':
     case 'ready':
       return { label: 'Profiled', tone: 'high' };
+    case 'standardised':
+      return { label: 'Standardised', tone: 'high' };
     case 'failed':
       return { label: 'Failed', tone: 'low' };
     case 'uploaded':

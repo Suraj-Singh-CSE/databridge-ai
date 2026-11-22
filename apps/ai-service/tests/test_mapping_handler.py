@@ -150,6 +150,12 @@ def test_maps_every_sample_source_like_the_answer_key(world: World, source: str)
         assert got[answer["column"]] == (answer["target"], role), answer["column"]
 
 
+def test_a_standardised_source_can_be_mapped_again(world: World) -> None:
+    source_id = world.add_source("support", status="standardised")
+    job_id = world.run(source_id)
+    assert world.job(job_id)["status"] == "succeeded"
+
+
 def test_stored_suggestions_carry_run_schema_and_model(world: World) -> None:
     source_id = world.add_source("crm")
     job_id = world.run(source_id)

@@ -1,9 +1,40 @@
 export const SOURCE_FORMATS = ['csv', 'xlsx'] as const;
 export type SourceFormat = (typeof SOURCE_FORMATS)[number];
 
-/** `profiling` -> `profiled` | `failed` are set by the ai-service profiler (ADR 0011). */
-export const SOURCE_STATUSES = ['uploaded', 'profiling', 'profiled', 'ready', 'failed'] as const;
+/**
+ * `profiling` -> `profiled` | `failed` are set by the ai-service profiler (ADR 0011),
+ * `standardised` by the standardise job (ADR 0014).
+ */
+export const SOURCE_STATUSES = [
+  'uploaded',
+  'profiling',
+  'profiled',
+  'standardised',
+  'ready',
+  'failed',
+] as const;
 export type SourceStatus = (typeof SOURCE_STATUSES)[number];
+
+/** Profiled (or later): the column profile exists, so the source can be mapped. */
+export function isProfiled(status: SourceStatus): boolean {
+  return status === 'profiled' || status === 'standardised';
+}
+
+export interface IssueCount {
+  field: string;
+  /** Plain issue code, e.g. `INVALID_PHONE`. */
+  code: string;
+  count: number;
+}
+
+/** Counts from the last standardise run (written by the worker). Never values. */
+export interface StandardisationSummary {
+  /** `<jobId>:<attempt>` whose rows are in staged_records. */
+  runId: string;
+  rowCount: number;
+  rowsWithIssues: number;
+  issues: IssueCount[];
+}
 
 export interface SourceError {
   code: string;
@@ -33,12 +64,24 @@ export interface Source {
   error: SourceError | null;
   /** When the last successful profile finished. */
   profiledAt: Date | null;
+  /** When the last successful standardise run finished. */
+  standardisedAt: Date | null;
+  standardisation: StandardisationSummary | null;
   uploadedBy: string;
   createdAt: Date;
   updatedAt: Date;
 }
 
-export type NewSource = Omit<Source, 'status' | 'error' | 'profiledAt' | 'createdAt' | 'updatedAt'>;
+export type NewSource = Omit<
+  Source,
+  | 'status'
+  | 'error'
+  | 'profiledAt'
+  | 'standardisedAt'
+  | 'standardisation'
+  | 'createdAt'
+  | 'updatedAt'
+>;
 
 export interface SourcePatch {
   name?: string | undefined;

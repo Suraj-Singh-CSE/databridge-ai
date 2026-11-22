@@ -21,6 +21,8 @@ import { createJobRouter, createProjectJobsRouter } from './modules/jobs/job.rou
 import { createJobService } from './modules/jobs/job.service.js';
 import { createMappingRouter } from './modules/mappings/mapping.routes.js';
 import { createMappingService } from './modules/mappings/mapping.service.js';
+import { createStagedRouter } from './modules/staged/staged.routes.js';
+import { createStagedService } from './modules/staged/staged.service.js';
 import { createProjectRouter } from './modules/projects/project.routes.js';
 import { createProjectService } from './modules/projects/project.service.js';
 import { createSourceRouter } from './modules/sources/source.routes.js';
@@ -75,6 +77,7 @@ export function createApp({
   });
   const targetSchemas = createTargetSchemaService(repos.targetSchemas, audit);
   const mappingService = createMappingService(repos, targetSchemas, audit);
+  const stagedService = createStagedService(repos);
   const jobService = createJobService({
     repos,
     targetSchemas,
@@ -124,6 +127,10 @@ export function createApp({
   app.use(
     '/api/v1/projects/:projectId/sources/:sourceId/mappings',
     createMappingRouter({ mappingService, projects: repos.projects, tokens }),
+  );
+  app.use(
+    '/api/v1/projects/:projectId/sources/:sourceId/staged',
+    createStagedRouter({ stagedService, projects: repos.projects, tokens }),
   );
   app.use(
     '/api/v1/projects/:projectId/target-schema',

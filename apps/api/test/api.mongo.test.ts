@@ -12,6 +12,7 @@ import {
 import { ColumnProfileModel } from '../src/modules/sources/column-profile.model.js';
 import { TargetSchemaModel } from '../src/modules/target-schema/target-schema.model.js';
 import { SourceModel } from '../src/modules/sources/source.model.js';
+import { StagedRecordModel } from '../src/modules/staged/staged.model.js';
 import { UserModel } from '../src/modules/users/user.model.js';
 import { createMongoRepositories } from '../src/repositories.js';
 
@@ -20,6 +21,8 @@ import { defineJobsSuite } from './support/jobs-suite.js';
 import { defineMappingsSuite, suggested } from './support/mappings-suite.js';
 import { columnProfile, defineProfilesSuite } from './support/profiles-suite.js';
 import { defineSourcesSuite } from './support/sources-suite.js';
+import { defineStagedSuite } from './support/staged-suite.js';
+import type { SuggestionWrite } from './support/memory-repositories.js';
 import { clearDb, connectTestDb } from './support/mongo.js';
 
 const available = await connectTestDb();
@@ -57,12 +60,12 @@ describe.skipIf(!available)('MongoDB', () => {
     },
   });
 
-  defineMappingsSuite('MongoDB repositories', {
+  const mongoMappings = {
     ...mongoHarness,
-    async markProfiled(_repos, _projectId, sourceId) {
+    async markProfiled(_repos: unknown, _projectId: string, sourceId: string) {
       await SourceModel.updateOne({ _id: sourceId }, { $set: { status: 'profiled' } });
     },
-    async workerSuggest(_repos, { projectId, sourceId, suggestions }) {
+    async workerSuggest(_repos: unknown, { projectId, sourceId, suggestions }: SuggestionWrite) {
       // What apps/ai-service/app/mapping/store.py writes.
       await MappingSuggestionModel.insertMany(
         suggestions.map(({ column, position, suggestion, run }) => ({
@@ -81,9 +84,56 @@ describe.skipIf(!available)('MongoDB', () => {
         })),
       );
     },
+  };
+  defineMappingsSuite('MongoDB repositories', mongoMappings);
+  defineStagedSuite('MongoDB repositories', {
+    ...mongoMappings,
+    async workerStage(_repos, { projectId, sourceId, runId, rows, source }) {
+      // What apps/ai-service/app/standardise/store.py writes.
+      const jobId = new mongoose.Types.ObjectId();
+      await StagedRecordModel.insertMany(
+        rows.map((row) => ({
+          ...row,
+          projectId,
+          sourceId,
+          jobId,
+          runId,
+          hasIssues: row.issues.length > 0,
+          createdAt: new Date(),
+        })),
+      );
+      const standardisation = source.standardisation && { ...source.standardisation, jobId };
+      await SourceModel.updateOne({ _id: sourceId }, { $set: { ...source, standardisation } });
+    },
   });
 
   describe('schema guarantees', () => {
+    it('keeps one staged row per run and row number', async () => {
+      await clearDb();
+      await StagedRecordModel.syncIndexes();
+      const doc = {
+        projectId: new mongoose.Types.ObjectId(),
+        sourceId: new mongoose.Types.ObjectId(),
+        jobId: new mongoose.Types.ObjectId(),
+        runId: 'r:1',
+        rowNumber: 1,
+        fields: { phone: '+919820012345' },
+        hasIssues: false,
+        createdAt: new Date(),
+      };
+      await StagedRecordModel.create(doc);
+      await StagedRecordModel.create({ ...doc, runId: 'r:2' });
+
+      await expect(StagedRecordModel.create(doc)).rejects.toThrow(/duplicate key/);
+      const indexes = await StagedRecordModel.collection.indexes();
+      expect(indexes).toContainEqual(
+        expect.objectContaining({
+          key: { projectId: 1, sourceId: 1, runId: 1, rowNumber: 1 },
+          unique: true,
+        }),
+      );
+    });
+
     it('enforces unique, lowercased emails at the index level', async () => {
       await clearDb();
       const repos = createMongoRepositories();

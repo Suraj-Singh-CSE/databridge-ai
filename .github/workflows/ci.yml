@@ -394,6 +394,73 @@ jobs:
           done
           echo "ok: profile then mapping; email_id -> email (High)"
 
+      - name: Standardise smoke test through the nginx proxy (map, review, standardise the CRM sample)
+        run: |
+          set -euo pipefail
+          api=http://localhost:8080/api/v1
+          token=$(curl -sS --fail-with-body -X POST "$api/auth/login" \
+            -H 'Content-Type: application/json' \
+            -d '{"email":"smoke@example.com","password":"smoke-test-password"}' | jq -r '.data.accessToken')
+          auth="Authorization: Bearer $token"
+          project=$(curl -sS --fail-with-body -X POST "$api/projects" -H "$auth" \
+            -H 'Content-Type: application/json' -d '{"name":"Smoke standardise"}' | jq -r '.data.project.id')
+          source=$(curl -sS --fail-with-body -X POST "$api/projects/$project/sources" -H "$auth" \
+            -F "file=@eval/samples/crm_customers.csv" | jq -r '.data.source.id')
+          mappings="$api/projects/$project/sources/$source/mappings"
+
+          run_job() {
+            local type=$1 job
+            job=$(curl -sS --fail-with-body -X POST "$api/projects/$project/jobs" -H "$auth" \
+              -H 'Content-Type: application/json' \
+              -d "{\"type\":\"$type\",\"payload\":{\"sourceId\":\"$source\"}}" | jq -r '.data.job.id')
+            curl -sSN --fail --max-time 90 "$api/jobs/$job/events" -H "$auth" | sed -n 's/^data: //p' > "/tmp/$type-$job"
+            echo "$type job $job: $(jq -r '"\(.status) \(.progress)% \(.message)"' "/tmp/$type-$job" | paste -sd ',' -)"
+            jq -s -e 'last | .status == "succeeded"' "/tmp/$type-$job" > /dev/null
+            jq -s -c 'last | .result' "/tmp/$type-$job" | tee /tmp/last-result
+          }
+
+          run_job profile
+          run_job mapping
+          curl -sS --fail-with-body -X POST "$mappings/accept-high" -H "$auth" | jq -c '.data'
+
+          # Refused early while columns are still pending.
+          code=$(curl -s -o /tmp/refused -w '%{http_code}' -X POST "$api/projects/$project/jobs" -H "$auth" \
+            -H 'Content-Type: application/json' -d "{\"type\":\"standardise\",\"payload\":{\"sourceId\":\"$source\"}}")
+          echo "standardise before review -> $code $(jq -c '.error | {code, details}' /tmp/refused)"
+          test "$code" = 409
+          jq -e '.error.details.reason == "MAPPING_NOT_APPROVED"' /tmp/refused > /dev/null
+
+          # The phone column must be used; every other pending column is rejected.
+          curl -sS --fail-with-body "$mappings" -H "$auth" > /tmp/mappings
+          if jq -e '.data.columns[] | select(.column == "ph") | .status == "pending"' /tmp/mappings > /dev/null; then
+            curl -sS --fail-with-body -X PATCH "$mappings/ph" -H "$auth" -H 'Content-Type: application/json' \
+              -d '{"decision":"override","role":"field","target":"phone","transform":"to_e164_in"}' > /dev/null
+          fi
+          for column in $(jq -r '.data.columns[] | select(.status == "pending" and .column != "ph") | .column' /tmp/mappings); do
+            curl -sS --fail-with-body -X PATCH "$mappings/$column" -H "$auth" \
+              -H 'Content-Type: application/json' -d '{"decision":"reject"}' > /dev/null
+          done
+          curl -sS --fail-with-body "$mappings" -H "$auth" \
+            | jq -c '[.data.columns[] | {column, status, target: (.decision.target // .suggestion.target)}]'
+
+          run_job standardise
+          jq -e '.rowCount == 143' /tmp/last-result > /dev/null
+
+          staged="$api/projects/$project/sources/$source/staged"
+          curl -sS --fail-with-body "$staged?limit=100" -H "$auth" > /tmp/staged
+          # Counts and formats only: no staged value is printed.
+          jq -c '{summary: .data.summary | {rowCount, rowsWithIssues, issues}, rows: (.data.items | length), nextCursor: .data.nextCursor}' /tmp/staged
+          jq -e '.data.source.status == "standardised" and .data.summary.rowCount == 143
+            and (.data.items | length) == 100 and .data.nextCursor == "100"
+            and ([.data.items[] | .fields.phone | select(. != null)] | length) > 80
+            and all(.data.items[] | .fields.phone | select(. != null); test("^\\+91[6-9][0-9]{9}$"))
+            and all(.data.items[]; .sourceRecordId != null)' /tmp/staged > /dev/null
+          curl -sS --fail-with-body "$staged?limit=100&cursor=100" -H "$auth" \
+            | jq -e '(.data.items | length) == 43 and .data.nextCursor == null' > /dev/null
+          code=$(curl -s -o /dev/null -w '%{http_code}' "$staged?limit=101" -H "$auth")
+          test "$code" = 400
+          echo "ok: reviewed mapping applied to all 143 rows; phones are E.164"
+
       - name: AI service is not published to the host
         run: |
           if curl -s --max-time 3 http://localhost:8000/internal/v1/health; then

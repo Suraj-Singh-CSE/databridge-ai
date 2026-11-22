@@ -68,7 +68,7 @@ function parseUploadFields(fields: Record<string, string>) {
 }
 
 export function createSourceService(
-  repos: Pick<Repositories, 'sources' | 'columnProfiles' | 'mappings'>,
+  repos: Pick<Repositories, 'sources' | 'columnProfiles' | 'mappings' | 'stagedRecords'>,
   storage: FileStorage,
   audit: AuditService,
   limits: SourceLimits,
@@ -193,6 +193,7 @@ export function createSourceService(
       await storage.delete(source.fileKey);
       await repos.columnProfiles.deleteBySource(project.id, sourceId);
       await repos.mappings.deleteBySource(project.id, sourceId);
+      await repos.stagedRecords.deleteBySource(project.id, sourceId);
       if (!(await repos.sources.delete(project.id, sourceId))) {
         throw AppError.notFound(SOURCE_GONE);
       }

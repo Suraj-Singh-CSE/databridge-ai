@@ -1,12 +1,16 @@
 import { defineApiSuite } from './support/api-suite.js';
 import { defineJobsSuite } from './support/jobs-suite.js';
+import type { Repositories } from '../src/repositories.js';
+
 import {
   createMemoryRepositories,
   type MemoryRepositories,
+  type SuggestionWrite,
 } from './support/memory-repositories.js';
 import { defineMappingsSuite } from './support/mappings-suite.js';
 import { defineProfilesSuite } from './support/profiles-suite.js';
 import { defineSourcesSuite } from './support/sources-suite.js';
+import { defineStagedSuite } from './support/staged-suite.js';
 
 const harness = { setup: () => Promise.resolve(createMemoryRepositories()) };
 
@@ -26,9 +30,9 @@ defineJobsSuite('in-memory repositories', {
     (repos as MemoryRepositories).jobs.workerUpdate(jobId, patch);
   },
 });
-defineMappingsSuite('in-memory repositories', {
+const memoryMappings = {
   ...harness,
-  async markProfiled(repos, projectId, sourceId) {
+  async markProfiled(repos: Repositories, projectId: string, sourceId: string) {
     await Promise.resolve();
     (repos as MemoryRepositories).columnProfiles.workerSave({
       projectId,
@@ -37,8 +41,16 @@ defineMappingsSuite('in-memory repositories', {
       source: { status: 'profiled' },
     });
   },
-  async workerSuggest(repos, write) {
+  async workerSuggest(repos: Repositories, write: SuggestionWrite) {
     await Promise.resolve();
     (repos as MemoryRepositories).mappings.workerSave(write);
+  },
+};
+defineMappingsSuite('in-memory repositories', memoryMappings);
+defineStagedSuite('in-memory repositories', {
+  ...memoryMappings,
+  async workerStage(repos, write) {
+    await Promise.resolve();
+    (repos as MemoryRepositories).stagedRecords.workerSave(write);
   },
 });

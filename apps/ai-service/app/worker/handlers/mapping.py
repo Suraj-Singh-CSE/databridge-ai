@@ -69,7 +69,7 @@ class MappingHandler:
         if source is None:
             raise JobFailedError("SOURCE_NOT_FOUND", "This source no longer exists.")
         profiles = self._store.profiles_of(ctx.project_id, source_id)
-        if source.get("status") != "profiled" or not profiles:
+        if source.get("status") not in ("profiled", "standardised") or not profiles:
             raise JobFailedError(
                 "SOURCE_NOT_PROFILED",
                 "Profile this source first: mapping suggestions are built from its profile.",

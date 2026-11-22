@@ -88,7 +88,9 @@ class ProfileHandler:
             raise JobFailedError("SOURCE_NOT_FOUND", "This source no longer exists.")
         # A source left "profiling" or "failed" by an earlier run goes back to "uploaded".
         previous = source.get("status")
-        restore_to = previous if previous in ("uploaded", "profiled") else "uploaded"
+        restore_to = (
+            previous if previous in ("uploaded", "profiled", "standardised") else "uploaded"
+        )
         run_id = f"{ctx.job_id}:{ctx.attempt}"
 
         if ctx.is_cancelled():
@@ -157,23 +159,7 @@ class ProfileHandler:
         return table, profile_table(table, on_column)
 
     def _read(self, path: Path, fmt: SourceFormat) -> Table:
-        settings = self._settings
-        try:
-            return read_table(path, fmt, max_rows=settings.max_rows, zip_limits=settings.zip_limits)
-        except SourceReadError as error:
-            raise JobFailedError(error.code, error.message) from error
-        except ZipTooComplexError as error:
-            mib = settings.zip_limits.max_uncompressed_bytes // (1024 * 1024)
-            raise JobFailedError(
-                "FILE_TOO_COMPLEX",
-                f"This Excel file is too large once unpacked (the limit is {mib} MB) or is "
-                "compressed unusually much. Save it as CSV or split it, then upload it again.",
-            ) from error
-        except ZipUnreadableError as error:
-            raise JobFailedError(
-                "UNSUPPORTED_FILE",
-                "This Excel file could not be read. Save it again as .xlsx and retry.",
-            ) from error
+        return read_source_table(path, fmt, self._settings)
 
     @staticmethod
     def _best_effort(update: Callable[..., bool], *args: str) -> None:
@@ -181,6 +167,26 @@ class ProfileHandler:
             update(*args)
         except Exception as error:  # never hide the original failure
             logger.warning("source_status_not_saved", error_type=type(error).__name__)
+
+
+def read_source_table(path: Path, fmt: SourceFormat, settings: ProfilerSettings) -> Table:
+    """The whole file as text columns, with the row limit and zip-bomb guard; job errors."""
+    try:
+        return read_table(path, fmt, max_rows=settings.max_rows, zip_limits=settings.zip_limits)
+    except SourceReadError as error:
+        raise JobFailedError(error.code, error.message) from error
+    except ZipTooComplexError as error:
+        mib = settings.zip_limits.max_uncompressed_bytes // (1024 * 1024)
+        raise JobFailedError(
+            "FILE_TOO_COMPLEX",
+            f"This Excel file is too large once unpacked (the limit is {mib} MB) or is "
+            "compressed unusually much. Save it as CSV or split it, then upload it again.",
+        ) from error
+    except ZipUnreadableError as error:
+        raise JobFailedError(
+            "UNSUPPORTED_FILE",
+            "This Excel file could not be read. Save it again as .xlsx and retry.",
+        ) from error
 
 
 def _invalid_source() -> JobFailedError:

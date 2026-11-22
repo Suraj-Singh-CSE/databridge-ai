@@ -21,6 +21,14 @@ A small sample (`--seed 7 --people 300`) is committed in [`samples/`](samples) f
 upload tests. A test fails if it no longer matches the generator; regenerate it with
 `python -m dbeval.generate --seed 7 --people 300 --out eval/samples`.
 
+## Cleaning accuracy
+
+`python -m dbeval.evaluate_standardise [--data eval/data]` cleans every row of the three files
+with the ai-service's standardisation pipeline (answer-key mapping, engine transform hints) and
+compares each staged field with `answers/golden_records.csv` through `answers/clusters.csv`. It
+prints per-field accuracy (rows with a source value), values missing at the source, null rate and
+issue counts. `tests/test_evaluate_standardise.py` holds per-field floors (ADR 0014).
+
 ## Column-mapping accuracy
 
 `python -m dbeval.evaluate_mapping [--data eval/data]` profiles the three files with the

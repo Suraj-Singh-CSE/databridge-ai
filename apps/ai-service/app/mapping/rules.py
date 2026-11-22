@@ -218,7 +218,7 @@ def transform_for(profile: ColumnProfile, column: HeaderConcepts, target: Target
             return "split_name"
         return "title_case"
     if "city" in field_concepts:
-        return "title_case"
+        return "city"
     return "trim"
 
 

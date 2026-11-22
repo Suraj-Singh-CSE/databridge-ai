@@ -78,7 +78,8 @@ export interface FieldIssue {
 
 export type SourceFormat = 'csv' | 'xlsx';
 /** `profiling` -> `profiled` | `failed` are set by the profiler (ADR 0011). */
-export type SourceStatus = 'uploaded' | 'profiling' | 'profiled' | 'ready' | 'failed';
+export type SourceStatus =
+  'uploaded' | 'profiling' | 'profiled' | 'standardised' | 'ready' | 'failed';
 
 /** An uploaded file: metadata only, never row values. */
 export interface Source {
@@ -106,7 +107,7 @@ export interface SourcePreview {
   rows: string[][];
 }
 
-export type JobType = 'demo' | 'profile' | 'mapping';
+export type JobType = 'demo' | 'profile' | 'mapping' | 'standardise';
 export type JobStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled';
 
 export interface JobError {

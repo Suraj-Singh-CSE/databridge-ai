@@ -15,6 +15,10 @@ import type {
   ColumnProfileRepository,
 } from '../../src/modules/sources/column-profile.types.js';
 import type { Source } from '../../src/modules/sources/source.types.js';
+import type {
+  StagedRecord,
+  StagedRecordRepository,
+} from '../../src/modules/staged/staged.types.js';
 import type { TargetSchema } from '../../src/modules/target-schema/target-schema.types.js';
 import type { User } from '../../src/modules/users/user.types.js';
 import type { Repositories } from '../../src/repositories.js';
@@ -46,10 +50,20 @@ export interface SuggestionWrite {
   suggestions: StoredSuggestion[];
 }
 
+/** What the Python standardise worker writes: one run's rows plus the source summary. */
+export interface StagedWrite {
+  projectId: string;
+  sourceId: string;
+  runId: string;
+  rows: StagedRecord[];
+  source: Partial<Pick<Source, 'status' | 'standardisedAt' | 'standardisation'>>;
+}
+
 export interface MemoryRepositories extends Repositories {
   jobs: JobRepository & { workerUpdate(id: string, patch: WorkerPatch): void };
   columnProfiles: ColumnProfileRepository & { workerSave(write: ProfileWrite): void };
   mappings: MappingRepository & { workerSave(write: SuggestionWrite): void };
+  stagedRecords: StagedRecordRepository & { workerSave(write: StagedWrite): void };
 }
 
 /**
@@ -68,6 +82,8 @@ export function createMemoryRepositories(): MemoryRepositories {
   // key: `${projectId}/${sourceId}`
   const suggestions = new Map<string, StoredSuggestion[]>();
   const decisions = new Map<string, Map<string, MappingDecision>>();
+  // key: `${projectId}/${sourceId}`; one run per source (the worker drops older runs).
+  const staged = new Map<string, { runId: string; rows: StagedRecord[] }>();
   const dropPrefix = (map: Map<string, unknown>, projectId: string) => {
     for (const key of map.keys()) if (key.startsWith(`${projectId}/`)) map.delete(key);
   };
@@ -240,6 +256,8 @@ export function createMemoryRepositories(): MemoryRepositories {
           status: 'uploaded',
           error: null,
           profiledAt: null,
+          standardisedAt: null,
+          standardisation: null,
           createdAt: at,
           updatedAt: at,
         };
@@ -478,6 +496,33 @@ export function createMemoryRepositories(): MemoryRepositories {
       },
       workerSave({ projectId, sourceId, suggestions: stored }) {
         suggestions.set(`${projectId}/${sourceId}`, structuredClone(stored));
+      },
+    },
+
+    stagedRecords: {
+      async list(projectId, sourceId, { runId, afterRow, limit, issuesOnly }) {
+        await Promise.resolve();
+        const run = staged.get(`${projectId}/${sourceId}`);
+        if (run?.runId !== runId) return [];
+        return structuredClone(
+          run.rows
+            .filter((r) => r.rowNumber > afterRow && (!issuesOnly || r.issues.length > 0))
+            .sort((a, b) => a.rowNumber - b.rowNumber)
+            .slice(0, limit),
+        );
+      },
+      async deleteBySource(projectId, sourceId) {
+        await Promise.resolve();
+        staged.delete(`${projectId}/${sourceId}`);
+      },
+      async deleteByProject(projectId) {
+        await Promise.resolve();
+        dropPrefix(staged, projectId);
+      },
+      workerSave({ projectId, sourceId, runId, rows, source }) {
+        staged.set(`${projectId}/${sourceId}`, { runId, rows: structuredClone(rows) });
+        const stored = sources.get(sourceId);
+        if (stored) Object.assign(stored, structuredClone(source), { updatedAt: tick() });
       },
     },
 
