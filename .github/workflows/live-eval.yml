@@ -1,21 +1,27 @@
-name: Live mapping eval
+name: Live eval
 
-# Manual only: calls the real model (Gemini) on synthetic data (the committed samples and the
-# unseen-header holdout). Never runs on push or pull request; regular CI uses the Mock provider.
-# Needs the repository secret GEMINI_API_KEY. See ADR 0013 and README "Evaluating mapping accuracy".
+# Manual only: calls the real model (Gemini) on synthetic data only. Task "mapping": the committed
+# samples and the unseen-header holdout (ADR 0013). Task "pair_review": hard pairs of the seed 42,
+# 2027 and 2028 sets, as evidence without values (ADR 0017). Never runs on push or pull request;
+# regular CI uses the Mock provider. Needs the repository secret GEMINI_API_KEY.
 on:
   workflow_dispatch:
     inputs:
+      task:
+        description: What to evaluate
+        type: choice
+        options: [mapping, pair_review]
+        default: mapping
       model:
         description: Gemini model name
         type: string
         default: gemini-3.5-flash-lite
         required: true
       max_calls:
-        description: Most provider calls this run may make, retries included
-        type: number
-        default: 30
-        required: true
+        description: Most provider calls this run may make, retries included (empty = 30 for mapping, 15 for pair_review)
+        type: string
+        default: ''
+        required: false
       thinking_level:
         description: Gemini thinking level (default = the model's own; use low for 3 Flash models)
         type: choice
@@ -29,6 +35,10 @@ on:
         description: Columns per mapping call (1-40); smaller calls answer faster
         type: number
         default: 12
+      pairs_per_call:
+        description: pair_review only - maybe pairs per call (1-25)
+        type: number
+        default: 10
       requests_per_minute:
         description: Most provider calls per minute, retries included (Flash Lite free tier allows 15; 0 = no pacing)
         type: number
@@ -43,7 +53,7 @@ permissions:
 
 jobs:
   live-eval:
-    name: Live mapping eval (${{ inputs.model }})
+    name: Live ${{ inputs.task }} eval (${{ inputs.model }})
     runs-on: ubuntu-latest
     # Worst case: every one of max_calls attempts runs into the timeout.
     timeout-minutes: 60
@@ -69,6 +79,8 @@ jobs:
           THINKING_LEVEL: ${{ inputs.thinking_level }}
           TIMEOUT_SECONDS: ${{ inputs.timeout_seconds }}
           COLUMNS_PER_CALL: ${{ inputs.columns_per_call }}
+          TASK: ${{ inputs.task }}
+          PAIRS_PER_CALL: ${{ inputs.pairs_per_call }}
           REQUESTS_PER_MINUTE: ${{ inputs.requests_per_minute }}
         run: |
           set -euo pipefail
@@ -77,15 +89,19 @@ jobs:
             exit 1
           fi
           if [ "$THINKING_LEVEL" = "default" ]; then THINKING_LEVEL=""; fi
+          budget=()
+          if [ -n "$MAX_CALLS" ]; then budget=(--max-calls "$MAX_CALLS"); fi
           status=0
-          python -m dbeval.live_mapping_eval --provider gemini --model "$MODEL" \
-            --max-calls "$MAX_CALLS" --thinking-level "$THINKING_LEVEL" \
+          python -m dbeval.live_mapping_eval --task "$TASK" --provider gemini --model "$MODEL" \
+            "${budget[@]}" --thinking-level "$THINKING_LEVEL" \
             --timeout-seconds "$TIMEOUT_SECONDS" --columns-per-call "$COLUMNS_PER_CALL" \
-            --requests-per-minute "$REQUESTS_PER_MINUTE" \
+            --pairs-per-call "$PAIRS_PER_CALL" --requests-per-minute "$REQUESTS_PER_MINUTE" \
             --out "$RUNNER_TEMP/live-eval-report" || status=$?
-          if [ -f "$RUNNER_TEMP/live-eval-report/live_mapping_report.md" ]; then
-            cat "$RUNNER_TEMP/live-eval-report/live_mapping_report.md" >> "$GITHUB_STEP_SUMMARY"
-          fi
+          for report in live_mapping_report.md live_pair_review_report.md; do
+            if [ -f "$RUNNER_TEMP/live-eval-report/$report" ]; then
+              cat "$RUNNER_TEMP/live-eval-report/$report" >> "$GITHUB_STEP_SUMMARY"
+            fi
+          done
           exit "$status"
 
       - name: Upload report

@@ -79,7 +79,7 @@ class ScoringHandler:
             if (
                 latest is None
                 or latest.get("runId") != candidates_run
-                or not _sources_current(latest, self._store.standardised_runs(ctx.project_id))
+                or not sources_current(latest, self._store.standardised_runs(ctx.project_id))
             ):
                 raise JobFailedError(
                     "CANDIDATES_CHANGED",
@@ -119,7 +119,7 @@ class ScoringHandler:
         summary = self._store.candidate_summary(project_id)
         if summary is None:
             raise JobFailedError("CANDIDATES_NOT_RUN", "Find candidate pairs before scoring them.")
-        if not _sources_current(summary, self._store.standardised_runs(project_id)):
+        if not sources_current(summary, self._store.standardised_runs(project_id)):
             raise JobFailedError("CANDIDATES_OUTDATED", _OUTDATED)
         return summary
 
@@ -154,7 +154,7 @@ class ScoringHandler:
             raise JobCancelledError(ctx.job_id)
 
 
-def _sources_current(candidates: Document, standardised: dict[str, str]) -> bool:
+def sources_current(candidates: Document, standardised: dict[str, str]) -> bool:
     """The same sources as the candidates run, each still on the run it was built from."""
     used = {str(s["sourceId"]): str(s["runId"]) for s in candidates.get("sources") or []}
     return used == standardised

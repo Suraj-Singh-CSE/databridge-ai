@@ -606,13 +606,18 @@ export function createMemoryRepositories(): MemoryRepositories {
         const run = scores.get(projectId);
         return run ? structuredClone(run.summary) : null;
       },
-      async listScores(projectId, { runId, band, afterPosition, limit }) {
+      async listScores(projectId, { runId, band, suggestedBand, afterPosition, limit }) {
         await Promise.resolve();
         const run = scores.get(projectId);
         if (run?.summary.runId !== runId) return [];
         return structuredClone(
           run.scores
-            .filter((s) => s.position > afterPosition && (!band || s.band === band))
+            .filter(
+              (s) =>
+                s.position > afterPosition &&
+                (!band || s.band === band) &&
+                (!suggestedBand || s.suggestedBand === suggestedBand),
+            )
             .sort((a, b) => a.position - b.position)
             .slice(0, limit),
         );

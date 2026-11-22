@@ -506,6 +506,34 @@ jobs:
           test "$code" = 400
           echo "ok: candidate pairs scored, bands sum to the pairs, matches carry reasons"
 
+          # AI review of maybe pairs (Mock provider in CI): runs when there are maybe pairs,
+          # else the api refuses with 409 NO_MAYBE_PAIRS. Suggestions never change the band.
+          maybe=$(jq -r '[.data.summary.bandCounts[] | select(.band == "maybe") | .count] | add // 0' /tmp/scores-summary)
+          if [ "$maybe" -gt 0 ]; then
+            job=$(curl -sS --fail-with-body -X POST "$api/projects/$project/jobs" -H "$auth" \
+              -H 'Content-Type: application/json' -d '{"type":"pair_review","payload":{}}' | jq -r '.data.job.id')
+            curl -sSN --fail --max-time 90 "$api/jobs/$job/events" -H "$auth" | sed -n 's/^data: //p' > "/tmp/review-$job"
+            echo "pair_review job $job: $(jq -r '"\(.status) \(.progress)% \(.message)"' "/tmp/review-$job" | paste -sd ',' -)"
+            jq -s -e 'last | .status == "succeeded"' "/tmp/review-$job" > /dev/null
+            curl -sS --fail-with-body "$scores/summary" -H "$auth" > /tmp/review-summary
+            jq -c '.data.summary.aiReview | {reviewed, same, different, unsure, unavailable, model, promptVersion}' /tmp/review-summary
+            jq -e --argjson maybe "$maybe" '.data.summary.aiReview.pairCount == $maybe
+              and (.data.summary.aiReview | .reviewed + .unavailable) == $maybe' /tmp/review-summary > /dev/null
+            curl -sS --fail-with-body "$scores?band=maybe&limit=100" -H "$auth" > /tmp/review-items
+            # Decisions and reasons only: no record value is printed.
+            jq -c '[.data.items[] | {aiStatus, aiDecision, aiConfidence, suggestedBand, aiReason}]' /tmp/review-items
+            jq -e 'all(.data.items[]; .band == "maybe" and (.aiStatus == "reviewed" or .aiStatus == "unavailable")
+              and .aiPromptVersion == "pair_review.v1" and .reviewedAt != null
+              and (.suggestedBand | IN("match", "maybe", "non_match")))' /tmp/review-items > /dev/null
+            echo "ok: maybe pairs reviewed by the AI, suggestions stored beside the scores"
+          else
+            curl -sS -X POST "$api/projects/$project/jobs" -H "$auth" -H 'Content-Type: application/json' \
+              -d '{"type":"pair_review","payload":{}}' > /tmp/review-refused
+            jq -c '.error | {code, reason: .details.reason}' /tmp/review-refused
+            jq -e '.error.code == "CONFLICT" and .error.details.reason == "NO_MAYBE_PAIRS"' /tmp/review-refused > /dev/null
+            echo "ok: no maybe pairs, the AI review is refused with NO_MAYBE_PAIRS"
+          fi
+
       - name: AI service is not published to the host
         run: |
           if curl -s --max-time 3 http://localhost:8000/internal/v1/health; then

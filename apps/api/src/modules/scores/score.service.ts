@@ -28,7 +28,12 @@ export interface ScoreService {
   summary(project: Project): Promise<ScoreSummaryView>;
   list(
     project: Project,
-    query: { band?: ScoreBand | undefined; limit: number; cursor?: number | undefined },
+    query: {
+      band?: ScoreBand | undefined;
+      suggestedBand?: ScoreBand | undefined;
+      limit: number;
+      cursor?: number | undefined;
+    },
   ): Promise<ScorePage>;
 }
 
@@ -55,12 +60,13 @@ export function createScoreService(
       return { summary, outdated };
     },
 
-    async list(project, { band, limit, cursor }) {
+    async list(project, { band, suggestedBand, limit, cursor }) {
       const { summary, outdated, sources } = await current(project);
       // One extra score tells whether there is a next page.
       const scores = await repos.scores.listScores(project.id, {
         runId: summary.runId,
         band,
+        suggestedBand,
         afterPosition: cursor ?? 0,
         limit: limit + 1,
       });
