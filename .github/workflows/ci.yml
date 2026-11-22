@@ -610,7 +610,8 @@ jobs:
 
           # Export golden records (ADR 0020): approve a customer of the new run, then a CSV of the
           # approved customers and an Excel workbook of all of them. Only counts are printed.
-          customer=$(curl -sS --fail-with-body "$clusters?minSize=2&limit=1" -H "$auth" | jq -r '.data.items[0].customerId')
+          # The largest customer (the split may have left no customer of two records).
+          customer=$(curl -sS --fail-with-body "$clusters?limit=1" -H "$auth" | jq -r '.data.items[0].customerId')
           curl -sS --fail-with-body -X POST "$clusters/$customer/approve" -H "$auth" \
             -H 'Content-Type: application/json' -d '{}' > /dev/null
           exports="$api/projects/$project/exports"
