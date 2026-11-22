@@ -237,6 +237,8 @@ test('clean, match and group two files, then review a customer', async ({ page }
     .include('main')
     .withTags(['wcag2a', 'wcag2aa'])
     .analyze();
-  const summary = violations.map((v) => `${v.id}: ${v.help} (${v.nodes.length} nodes)`);
+  const summary = violations.map(
+    (v) => `${v.id}: ${v.help} (${v.nodes.map((n) => n.target.join(' ')).join(' | ')})`,
+  );
   expect(summary).toEqual([]);
 });
