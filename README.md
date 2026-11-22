@@ -279,7 +279,39 @@ and still finds 99.5% of the true duplicate pairs. No LLM is involved. Design no
   source is deleted.
 - **Quality**: `cd eval && python -m dbeval.evaluate_blocking`.
 
-**Background jobs.** Long work (profiling, mapping; matching and pipelines later) runs
+**Pair scoring.** The `scoring` job decides, for every candidate pair, how likely the two records
+are one person: each field is compared (name similarity that ignores word order and accepts
+initials, phone, email, birth date with day/month swaps, city, PIN, address words), the levels are
+combined with Fellegi-Sunter weights (estimated per project without labels by EM, or hand-set
+defaults) into a 0-1 score, and the pair lands in `match` (>= 0.90), `maybe` (>= 0.50, for review)
+or `non_match`, with plain reasons such as "Same phone" or "Names very similar (0.94)". On the full
+dataset and on two unseen holdout sets: no false match, 99.2-99.9% of the true candidate pairs in
+`match`. No LLM is involved. Design notes: [ADR 0016](docs/adr/0016-pair-scoring.md).
+
+| Method | Path (under `/api/v1/projects/:projectId`) | Who                         | Result                                         |
+| ------ | ------------------------------------------ | --------------------------- | ---------------------------------------------- |
+| POST   | `/jobs` `{ type: "scoring", payload: {} }` | owner, admin, data_engineer | 202 `{ job }`                                  |
+| GET    | `/scores/summary`                          | any member                  | 200 `{ summary, outdated }`                    |
+| GET    | `/scores?band=&limit=&cursor=`             | any member                  | 200 `{ summary, outdated, items, nextCursor }` |
+
+- **Start**: project-level. `409` (`details.reason`) unless candidate pairs were found
+  (`CANDIDATES_NOT_RUN`) and are current (`CANDIDATES_OUTDATED`), with no candidates job
+  (`CANDIDATES_RUNNING`) or other scoring job (`SCORING_RUNNING`) active. The worker checks again
+  and fails with `CANDIDATES_CHANGED` if the pairs change while it runs. Running it again
+  replaces the scores.
+- **Score**: `{ position, score, band, matchWeight, fieldLevels, reasons, recordA, recordB }`,
+  highest score first; `band` is `match`, `maybe` or `non_match` (every band when absent); each
+  reason is `{ field, level, weight, text }` (weight in bits, positive for a match; never a value);
+  records as for candidates. `limit` 1-100 (default 20); pass `nextCursor` as `cursor`. `summary`
+  has the pair count, counts per band, the thresholds and the model (`method` `em` or `defaults`,
+  `fallbackReason`, the m/u table). `outdated` is true once candidate pairs were found again or are
+  themselves outdated. `409 SCORES_NOT_RUN` before the first run. Scores are deleted with the
+  project and when a source is deleted.
+- **Settings**: `SCORING_MATCH_THRESHOLD` (0.90), `SCORING_MAYBE_THRESHOLD` (0.50),
+  `SCORING_MODEL` (`em` or `defaults`).
+- **Quality**: `cd eval && python -m dbeval.evaluate_scoring`.
+
+**Background jobs.** Long work (profiling, mapping, standardising, matching; pipelines later) runs
 in a Celery worker, not in the request. The api owns the job record in MongoDB; the worker moves it
 forward and publishes every change to Redis; the browser watches it live over Server-Sent Events.
 Design notes: [ADR 0010](docs/adr/0010-background-jobs.md).
@@ -506,6 +538,23 @@ Pair completeness is the share of true pairs among the candidates (a pair missed
 matched later); reduction ratio is 1 - candidates / all possible pairs; pairs quality is the share
 of candidates that are true pairs. CI holds floors (`eval/tests/test_evaluate_blocking.py`).
 
+### Scoring quality
+
+`python -m dbeval.evaluate_scoring` runs standardise, blocking and scoring, and grades the bands
+against the true pairs of `clusters.csv` (`--data <folder>`, `--defaults` for the hand-set model).
+Defaults and thresholds were chosen on seed 42 only; the holdout sets are generated fresh at test
+time (seed 2028 was first run after the last change; see ADR 0016):
+
+| Set                 | Model | match / maybe / non-match | Precision | Recall | False matches | True pairs in maybe | End-to-end recall |
+| ------------------- | ----- | ------------------------: | --------: | -----: | ------------: | ------------------: | ----------------: |
+| seed 42 (dev)       | em    |             1280 / 8 / 34 |    100.0% | 99.38% |             0 |               0.62% |            98.92% |
+| seed 2027 (holdout) | em    |             1388 / 1 / 51 |    100.0% | 99.86% |             0 |               0.07% |            99.28% |
+| seed 2028 (holdout) | em    |            1336 / 10 / 34 |    100.0% | 99.18% |             0 |               0.74% |            99.11% |
+
+Precision and recall are for the `match` band over the true pairs among the candidates;
+end-to-end recall also counts the pairs blocking missed. CI holds floors on all three sets
+(`eval/tests/test_evaluate_scoring.py`).
+
 ## CI
 
 GitHub Actions (`.github/workflows/ci.yml`) runs on every pull request and on pushes to `main`:
@@ -525,7 +574,7 @@ never on push or pull request (see "Evaluating mapping accuracy").
   preview, an `.exe` rejected, the file visible read-only to the AI service), background jobs through
   the proxy (a demo job streamed with `curl -N` until it succeeds with increasing progress, a
   `failAtStep` job that fails with the handler's code, a long job cancelled mid-run), profiling,
-  mapping, standardising and finding candidate pairs for the CRM sample, that the AI service is not
+  mapping, standardising, finding and scoring candidate pairs for the CRM sample, that the AI service is not
   reachable from the host, and that containers run as non-root. Then it runs the Playwright e2e
   tests against the stack and uploads screenshots (`web-screenshots`) and, on failure, the
   Playwright report (`playwright-report`).

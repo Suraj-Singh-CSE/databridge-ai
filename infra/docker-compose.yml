@@ -42,6 +42,10 @@ x-ai-environment: &ai-environment
   MAPPING_MAX_COLUMNS_PER_CALL: ${MAPPING_MAX_COLUMNS_PER_CALL:-40}
   # Candidate pairs (docs/adr/0015-blocking.md).
   BLOCKING_MAX_BLOCK_SIZE: ${BLOCKING_MAX_BLOCK_SIZE:-200}
+  # Pair scoring (docs/adr/0016-pair-scoring.md).
+  SCORING_MATCH_THRESHOLD: ${SCORING_MATCH_THRESHOLD:-0.90}
+  SCORING_MAYBE_THRESHOLD: ${SCORING_MAYBE_THRESHOLD:-0.50}
+  SCORING_MODEL: ${SCORING_MODEL:-em}
 
 services:
   mongo:

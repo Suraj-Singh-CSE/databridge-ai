@@ -42,8 +42,8 @@ export interface CandidateService {
 export const CANDIDATES_NOT_RUN =
   'Candidate pairs have not been found yet. Standardise your sources, then run "Find candidates".';
 
-/** Same sources, each still on the run the pairs were built from. */
-function isOutdated(summary: CandidateSummary, sources: Source[]): boolean {
+/** False while the same sources are each still on the run the pairs were built from. */
+export function candidatesOutdated(summary: CandidateSummary, sources: Source[]): boolean {
   const current = new Map(
     sources
       .filter((s) => s.status === 'standardised' && s.standardisation)
@@ -62,7 +62,7 @@ export function createCandidateService(
     const summary = await repos.candidates.findSummary(project.id);
     if (!summary) throw AppError.conflict(CANDIDATES_NOT_RUN, { reason: 'CANDIDATES_NOT_RUN' });
     const sources = await repos.sources.listByProject(project.id);
-    return { summary, outdated: isOutdated(summary, sources), sources };
+    return { summary, outdated: candidatesOutdated(summary, sources), sources };
   }
 
   return {

@@ -4,6 +4,8 @@ import type { CandidateRepository } from './modules/candidates/candidate.types.j
 import type { AuditRepository } from './modules/audit/audit.types.js';
 import { createMongoRefreshTokenRepository } from './modules/auth/refresh-token.repository.js';
 import type { RefreshTokenRepository } from './modules/auth/refresh-token.types.js';
+import { createMongoScoreRepository } from './modules/scores/score.repository.js';
+import type { ScoreRepository } from './modules/scores/score.types.js';
 import { createMongoMappingRepository } from './modules/mappings/mapping.repository.js';
 import type { MappingRepository } from './modules/mappings/mapping.types.js';
 import { createMongoJobRepository } from './modules/jobs/job.repository.js';
@@ -33,6 +35,7 @@ export interface Repositories {
   mappings: MappingRepository;
   stagedRecords: StagedRecordRepository;
   candidates: CandidateRepository;
+  scores: ScoreRepository;
   audit: AuditRepository;
 }
 
@@ -48,6 +51,7 @@ export function createMongoRepositories(): Repositories {
     mappings: createMongoMappingRepository(),
     stagedRecords: createMongoStagedRecordRepository(),
     candidates: createMongoCandidateRepository(),
+    scores: createMongoScoreRepository(),
     audit: createMongoAuditRepository(),
   };
 }

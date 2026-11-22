@@ -1,10 +1,12 @@
 import { defineApiSuite } from './support/api-suite.js';
 import { defineCandidatesSuite } from './support/candidates-suite.js';
+import { defineScoresSuite } from './support/scores-suite.js';
 import { defineJobsSuite } from './support/jobs-suite.js';
 import type { Repositories } from '../src/repositories.js';
 
 import {
   createMemoryRepositories,
+  type CandidateWrite,
   type MemoryRepositories,
   type StagedWrite,
   type SuggestionWrite,
@@ -57,10 +59,18 @@ const memoryStaged = {
   },
 };
 defineStagedSuite('in-memory repositories', memoryStaged);
-defineCandidatesSuite('in-memory repositories', {
+const memoryCandidates = {
   ...memoryStaged,
-  async workerCandidates(repos, write) {
+  async workerCandidates(repos: Repositories, write: CandidateWrite) {
     await Promise.resolve();
     (repos as MemoryRepositories).candidates.workerSave(write);
+  },
+};
+defineCandidatesSuite('in-memory repositories', memoryCandidates);
+defineScoresSuite('in-memory repositories', {
+  ...memoryCandidates,
+  async workerScores(repos, write) {
+    await Promise.resolve();
+    (repos as MemoryRepositories).scores.workerSave(write);
   },
 });

@@ -484,6 +484,28 @@ jobs:
           test "$code" = 400
           echo "ok: candidate pairs found and listed side by side"
 
+          # Pair scoring: a project-level job (payload {}) over the current candidate pairs.
+          job=$(curl -sS --fail-with-body -X POST "$api/projects/$project/jobs" -H "$auth" \
+            -H 'Content-Type: application/json' -d '{"type":"scoring","payload":{}}' | jq -r '.data.job.id')
+          curl -sSN --fail --max-time 90 "$api/jobs/$job/events" -H "$auth" | sed -n 's/^data: //p' > "/tmp/scoring-$job"
+          echo "scoring job $job: $(jq -r '"\(.status) \(.progress)% \(.message)"' "/tmp/scoring-$job" | paste -sd ',' -)"
+          jq -s -e 'last | .status == "succeeded"' "/tmp/scoring-$job" > /dev/null
+          pairs=$(jq -r '.data.summary.pairCount' /tmp/candidates-summary)
+          scores="$api/projects/$project/scores"
+          curl -sS --fail-with-body "$scores/summary" -H "$auth" > /tmp/scores-summary
+          jq -c '.data | {outdated, summary: .summary | {pairCount, bandCounts, thresholds, model: .model | {method, fallbackReason, emIterations}}}' /tmp/scores-summary
+          jq -e --argjson pairs "$pairs" '.data.outdated == false and .data.summary.pairCount == $pairs
+            and ([.data.summary.bandCounts[].count] | add) == $pairs' /tmp/scores-summary > /dev/null
+          curl -sS --fail-with-body "$scores?band=match&limit=100" -H "$auth" > /tmp/scores
+          # Bands, scores and reason texts only: no record value is printed.
+          jq -c '{matches: (.data.items | length), reasons: [.data.items[].reasons[].text] | unique}' /tmp/scores
+          jq -e '(.data.items | length) > 0
+            and all(.data.items[]; .band == "match" and .score >= 0.9 and (.reasons | length) > 0
+              and .recordA.id < .recordB.id and (.recordA.fields | type) == "object")' /tmp/scores > /dev/null
+          code=$(curl -s -o /dev/null -w '%{http_code}' "$scores?band=maybe-not" -H "$auth")
+          test "$code" = 400
+          echo "ok: candidate pairs scored, bands sum to the pairs, matches carry reasons"
+
       - name: AI service is not published to the host
         run: |
           if curl -s --max-time 3 http://localhost:8000/internal/v1/health; then

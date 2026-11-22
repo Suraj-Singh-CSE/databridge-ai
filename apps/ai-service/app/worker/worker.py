@@ -16,6 +16,8 @@ from app.logging import configure_logging
 from app.mapping.engine import MappingSettings
 from app.mapping.store import MappingStore
 from app.matching.blocking import BlockingConfig
+from app.matching.scoring import ScoringConfig
+from app.matching.scoring_store import ScoreStore
 from app.matching.store import CandidateStore
 from app.profiling.store import ProfileStore
 from app.profiling.zip_guard import ZipLimits
@@ -25,6 +27,7 @@ from app.worker.handlers import build_registry
 from app.worker.handlers.candidates import CandidatesHandler
 from app.worker.handlers.mapping import MappingHandler, MappingHandlerSettings
 from app.worker.handlers.profile import ProfileHandler, ProfilerSettings
+from app.worker.handlers.scoring import ScoringHandler
 from app.worker.handlers.standardise import StandardiseHandler
 from app.worker.runner import JobRunner, RetryPolicy
 from app.worker.signals import JobSignals
@@ -37,7 +40,8 @@ CLIENT_TIMEOUT_SECONDS = 5
 def build_runner(settings: Settings) -> JobRunner:
     """Production collaborators: MongoDB (``jobs``, ``sources``, ``column_profiles``,
     ``target_schemas``, ``mapping_suggestions``, ``mapping_decisions``, ``staged_records``,
-    ``candidate_pairs``, ``candidate_summaries``, ``llm_calls``), Redis, the uploads folder and
+    ``candidate_pairs``, ``candidate_summaries``, ``pair_scores``, ``score_summaries``,
+    ``llm_calls``), Redis, the uploads folder and
     the LLM gateway. Clients connect lazily."""
     mongo: MongoClient[Document] = MongoClient(
         settings.mongodb_uri, serverSelectionTimeoutMS=CLIENT_TIMEOUT_SECONDS * 1000
@@ -68,7 +72,8 @@ def build_runner(settings: Settings) -> JobRunner:
     blocker = CandidatesHandler(
         CandidateStore(database), BlockingConfig(max_block_size=settings.blocking_max_block_size)
     )
-    registry = build_registry(profiler, mapper, standardiser, blocker)
+    scorer = ScoringHandler(ScoreStore(database), scoring_config(settings))
+    registry = build_registry(profiler, mapper, standardiser, blocker, scorer)
     return JobRunner(store, JobSignals(redis), registry, retry)
 
 
@@ -99,3 +104,11 @@ def create_worker_app(settings: Settings) -> Celery:
     celery = create_celery(settings)
     register_tasks(celery, cache(lambda: build_runner(settings)))
     return celery
+
+
+def scoring_config(settings: Settings) -> ScoringConfig:
+    return ScoringConfig(
+        match_threshold=settings.scoring_match_threshold,
+        maybe_threshold=settings.scoring_maybe_threshold,
+        use_em=settings.scoring_model == "em",
+    )
