@@ -31,3 +31,9 @@ export function canReviewMappings(access: ProjectAccess | null): boolean {
 
 export const READ_ONLY_MAPPING_NOTE =
   'You can view these suggestions. Only the project owner, an admin, a data engineer or a data steward can accept or change them.';
+
+/** Start or cancel the matching jobs (clean, find pairs, score, AI review, group). */
+export const canRunMatching = canManageSources;
+
+export const READ_ONLY_MATCHING_NOTE =
+  'You can view the matching results. Only the project owner, an admin or a data engineer can run the matching steps.';

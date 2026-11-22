@@ -456,15 +456,16 @@ React 18 + Vite + Tailwind with shadcn/ui components (`apps/web/src/components/u
 (data router), TanStack Query for server data and react-hook-form + Zod for forms. Design notes:
 [ADR 0007](docs/adr/0007-frontend-architecture-and-sessions.md).
 
-| Route                                       | What                                                         |
-| ------------------------------------------- | ------------------------------------------------------------ |
-| `/sign-in`, `/create-account`               | Sign in / register (signed-in users are sent to `/projects`) |
-| `/projects`                                 | Your projects; admins and data engineers can create one      |
-| `/projects/:id/sources`                     | Upload CSV/XLSX files, watch profiling live, preview, remove |
-| `/projects/:id/profile`                     | Column profile per file: types, empty %, patterns, flags     |
-| `/projects/:id/mapping`                     | Mapping Review: run mapping, accept/reject/change per column |
-| `/projects/:id/{matching,pipeline,quality}` | Project steps (placeholders until M4/M5)                     |
-| `/projects/:id/{dashboard,assistant}`       | Dashboard and assistant (placeholders until M6)              |
+| Route                                 | What                                                         |
+| ------------------------------------- | ------------------------------------------------------------ |
+| `/sign-in`, `/create-account`         | Sign in / register (signed-in users are sent to `/projects`) |
+| `/projects`                           | Your projects; admins and data engineers can create one      |
+| `/projects/:id/sources`               | Upload CSV/XLSX files, watch profiling live, preview, remove |
+| `/projects/:id/profile`               | Column profile per file: types, empty %, patterns, flags     |
+| `/projects/:id/mapping`               | Mapping Review: run mapping, accept/reject/change per column |
+| `/projects/:id/matching`              | Match Review: run the matching steps, browse customers       |
+| `/projects/:id/{pipeline,quality}`    | Project steps (placeholders until M5)                        |
+| `/projects/:id/{dashboard,assistant}` | Dashboard and assistant (placeholders until M6)              |
 
 Every route except sign-in, create-account and the 404 page needs a session; others redirect to
 `/sign-in?next=<where you were going>`.
@@ -492,6 +493,23 @@ Every route except sign-in, create-account and the 404 page needs a session; oth
 - Viewers and data stewards can see files, previews and profiles; upload, profile and remove are
   for the project owner, admins and data engineers (the api enforces the same rule).
 - Pages are lazy-loaded (`React.lazy`), see ADR 0007.
+
+**Match Review (M4.6a, read-only)**
+
+- **Prepare matching** lists the five jobs in order with their state (Done / Out of date / Not
+  run), counts and a plain explanation: 1 clean each mapped file (`standardise`), 2 find possible
+  duplicates (`candidates`), 3 score pairs (`scoring`), 4 optional AI review of unclear pairs
+  (`pair_review`, disabled when there are none), 5 group records (`clustering`). Run / Re-run and
+  Cancel are for the project owner, admins and data engineers; progress is live over SSE, and a
+  409 is explained in plain words (e.g. an unapproved mapping links to the Mapping page).
+- **Customers found** shows summary cards, then the customers (multi-record ones by default) with
+  confidence in words, flags and status. Filters: needs review and size use the api; "AI
+  suggested" filters the loaded page. Search takes an exact customer id. Pages follow the api
+  cursor.
+- **View** opens a customer: its records side by side (one column per source row), values that
+  differ from the golden record marked "Differs", the golden value with where it came from
+  ("From CRM row 12 · most frequent") and every value on request, and the links that join them.
+- Approve / split / merge decisions come in M4.6b.
 
 **Run it in development** (Vite proxies `/api` to `http://localhost:4000`):
 
