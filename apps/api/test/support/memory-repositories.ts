@@ -16,6 +16,11 @@ import type {
 import type { RefreshTokenRecord } from '../../src/modules/auth/refresh-token.types.js';
 import type { Project } from '../../src/modules/projects/project.types.js';
 import type {
+  PairScore,
+  ScoreRepository,
+  ScoreSummary,
+} from '../../src/modules/scores/score.types.js';
+import type {
   ColumnProfile,
   ColumnProfileRepository,
 } from '../../src/modules/sources/column-profile.types.js';
@@ -73,12 +78,20 @@ export interface CandidateWrite {
   summary: CandidateSummary;
 }
 
+/** What the Python scoring worker writes: one run's scores plus the project summary. */
+export interface ScoreWrite {
+  projectId: string;
+  scores: PairScore[];
+  summary: ScoreSummary;
+}
+
 export interface MemoryRepositories extends Repositories {
   jobs: JobRepository & { workerUpdate(id: string, patch: WorkerPatch): void };
   columnProfiles: ColumnProfileRepository & { workerSave(write: ProfileWrite): void };
   mappings: MappingRepository & { workerSave(write: SuggestionWrite): void };
   stagedRecords: StagedRecordRepository & { workerSave(write: StagedWrite): void };
   candidates: CandidateRepository & { workerSave(write: CandidateWrite): void };
+  scores: ScoreRepository & { workerSave(write: ScoreWrite): void };
 }
 
 /**
@@ -101,6 +114,8 @@ export function createMemoryRepositories(): MemoryRepositories {
   const staged = new Map<string, { runId: string; rows: StagedRecordRef[] }>();
   // key: projectId; one run per project (the worker drops older runs).
   const candidates = new Map<string, { summary: CandidateSummary; pairs: CandidatePair[] }>();
+  // key: projectId; one run per project (the worker drops older runs).
+  const scores = new Map<string, { summary: ScoreSummary; scores: PairScore[] }>();
   const dropPrefix = (map: Map<string, unknown>, projectId: string) => {
     for (const key of map.keys()) if (key.startsWith(`${projectId}/`)) map.delete(key);
   };
@@ -582,6 +597,32 @@ export function createMemoryRepositories(): MemoryRepositories {
       },
       workerSave({ projectId, pairs, summary }) {
         candidates.set(projectId, structuredClone({ summary, pairs }));
+      },
+    },
+
+    scores: {
+      async findSummary(projectId) {
+        await Promise.resolve();
+        const run = scores.get(projectId);
+        return run ? structuredClone(run.summary) : null;
+      },
+      async listScores(projectId, { runId, band, afterPosition, limit }) {
+        await Promise.resolve();
+        const run = scores.get(projectId);
+        if (run?.summary.runId !== runId) return [];
+        return structuredClone(
+          run.scores
+            .filter((s) => s.position > afterPosition && (!band || s.band === band))
+            .sort((a, b) => a.position - b.position)
+            .slice(0, limit),
+        );
+      },
+      async deleteByProject(projectId) {
+        await Promise.resolve();
+        scores.delete(projectId);
+      },
+      workerSave({ projectId, scores: written, summary }) {
+        scores.set(projectId, structuredClone({ summary, scores: written }));
       },
     },
 

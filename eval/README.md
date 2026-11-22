@@ -38,6 +38,16 @@ prints pair completeness (recall), reduction ratio, pairs quality (precision), t
 count, and per key the pairs it found, the pairs only it found and oversize blocks skipped.
 `tests/test_evaluate_blocking.py` holds the floors (ADR 0015).
 
+## Scoring quality
+
+`python -m dbeval.evaluate_scoring [--data eval/data] [--defaults] [--match-threshold 0.9]
+[--maybe-threshold 0.5]` runs standardisation, blocking and the ai-service's pair scoring, then
+grades the bands with `answers/clusters.csv`: precision, recall and F1 of the `match` band, false
+matches, true pairs left in `maybe`, and end-to-end recall (pairs lost at blocking count as
+missed). The answer key is only used to grade; the model is estimated without labels.
+`tests/test_evaluate_scoring.py` holds floors on seed 42 and on two holdout sets generated at test
+time with seeds 2027 and 2028 (ADR 0016).
+
 ## Column-mapping accuracy
 
 `python -m dbeval.evaluate_mapping [--data eval/data]` profiles the three files with the

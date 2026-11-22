@@ -8,6 +8,7 @@ import {
   CandidateSummaryModel,
 } from '../src/modules/candidates/candidate.model.js';
 import { JobModel } from '../src/modules/jobs/job.model.js';
+import { PairScoreModel, ScoreSummaryModel } from '../src/modules/scores/score.model.js';
 import { RefreshTokenModel } from '../src/modules/auth/refresh-token.model.js';
 import {
   MappingDecisionModel,
@@ -22,12 +23,17 @@ import { createMongoRepositories } from '../src/repositories.js';
 
 import { defineApiSuite } from './support/api-suite.js';
 import { defineCandidatesSuite } from './support/candidates-suite.js';
+import { defineScoresSuite } from './support/scores-suite.js';
 import { defineJobsSuite } from './support/jobs-suite.js';
 import { defineMappingsSuite, suggested } from './support/mappings-suite.js';
 import { columnProfile, defineProfilesSuite } from './support/profiles-suite.js';
 import { defineSourcesSuite } from './support/sources-suite.js';
 import { defineStagedSuite } from './support/staged-suite.js';
-import type { StagedWrite, SuggestionWrite } from './support/memory-repositories.js';
+import type {
+  CandidateWrite,
+  StagedWrite,
+  SuggestionWrite,
+} from './support/memory-repositories.js';
 import { clearDb, connectTestDb } from './support/mongo.js';
 
 const available = await connectTestDb();
@@ -114,9 +120,9 @@ describe.skipIf(!available)('MongoDB', () => {
     },
   };
   defineStagedSuite('MongoDB repositories', mongoStaged);
-  defineCandidatesSuite('MongoDB repositories', {
+  const mongoCandidates = {
     ...mongoStaged,
-    async workerCandidates(_repos, { projectId, pairs, summary }) {
+    async workerCandidates(_repos: unknown, { projectId, pairs, summary }: CandidateWrite) {
       // What apps/ai-service/app/matching/store.py writes.
       const jobId = summary.jobId;
       await CandidatePairModel.insertMany(
@@ -133,6 +139,30 @@ describe.skipIf(!available)('MongoDB', () => {
         { ...summary, projectId },
         { upsert: true },
       );
+    },
+  };
+  defineCandidatesSuite('MongoDB repositories', mongoCandidates);
+  defineScoresSuite('MongoDB repositories', {
+    ...mongoCandidates,
+    async workerScores(_repos, { projectId, scores, summary }) {
+      // What apps/ai-service/app/matching/scoring_store.py writes (then drops the older runs).
+      const { jobId, runId, candidatesRunId } = summary;
+      await PairScoreModel.insertMany(
+        scores.map((score) => ({
+          ...score,
+          projectId,
+          jobId,
+          runId,
+          candidatesRunId,
+          createdAt: new Date(),
+        })),
+      );
+      await ScoreSummaryModel.replaceOne(
+        { projectId },
+        { ...summary, projectId },
+        { upsert: true },
+      );
+      await PairScoreModel.deleteMany({ projectId, runId: { $ne: runId } });
     },
   });
 

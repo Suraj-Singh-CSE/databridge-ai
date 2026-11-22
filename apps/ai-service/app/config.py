@@ -100,6 +100,14 @@ class Settings(BaseSettings):
     # Blocks with more records than this are skipped (and counted), not paired.
     blocking_max_block_size: int = Field(default=200, ge=2, le=5000)
 
+    # ---- pair scoring (ADR 0016)
+    # Score at or above: "match"; at or above the maybe threshold: "maybe"; else "non_match".
+    scoring_match_threshold: float = Field(default=0.90, gt=0, lt=1)
+    scoring_maybe_threshold: float = Field(default=0.50, gt=0, lt=1)
+    # "em": estimate m/u from the candidate pairs (falls back to the defaults if EM fails);
+    # "defaults": the hand-set m/u only.
+    scoring_model: Literal["em", "defaults"] = "em"
+
     @property
     def paced_requests_per_minute(self) -> int:
         """The pacing limit in force: 0 for the mock provider, which has no quota to respect."""
@@ -109,6 +117,12 @@ class Settings(BaseSettings):
     def _hard_limit_after_soft_limit(self) -> Self:
         if self.job_hard_time_limit_seconds <= self.job_soft_time_limit_seconds:
             raise ValueError("JOB_HARD_TIME_LIMIT_SECONDS must be greater than the soft limit")
+        return self
+
+    @model_validator(mode="after")
+    def _maybe_below_match(self) -> Self:
+        if self.scoring_maybe_threshold >= self.scoring_match_threshold:
+            raise ValueError("SCORING_MAYBE_THRESHOLD must be lower than SCORING_MATCH_THRESHOLD")
         return self
 
 

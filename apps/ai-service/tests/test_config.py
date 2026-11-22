@@ -84,3 +84,27 @@ def test_llm_tuning_settings_default_and_validate(settings: Settings) -> None:
         "llm_max_requests_per_minute",
         "llm_retry_after_max_seconds",
     }
+
+
+def _scoring_settings(**overrides: object) -> Settings:
+    return Settings(  # type: ignore[call-arg]
+        _env_file=None,
+        ai_service_token="x" * 16,
+        redis_url="redis://r",
+        mongodb_uri="mongodb://m",
+        **overrides,
+    )
+
+
+def test_scoring_settings_default_and_validate(settings: Settings) -> None:
+    assert settings.scoring_match_threshold == 0.9
+    assert settings.scoring_maybe_threshold == 0.5
+    assert settings.scoring_model == "em"
+
+    with pytest.raises(ValidationError) as exc_info:
+        _scoring_settings(scoring_match_threshold=1.0, scoring_maybe_threshold=0, scoring_model="x")
+    invalid = {str(error["loc"][0]) for error in exc_info.value.errors()}
+    assert invalid == {"scoring_match_threshold", "scoring_maybe_threshold", "scoring_model"}
+
+    with pytest.raises(ValidationError, match="SCORING_MAYBE_THRESHOLD must be lower"):
+        _scoring_settings(scoring_match_threshold=0.6, scoring_maybe_threshold=0.6)

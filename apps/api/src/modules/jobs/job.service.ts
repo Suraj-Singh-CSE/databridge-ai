@@ -3,6 +3,7 @@ import { AppError } from '../../errors.js';
 import type { Logger } from '../../logger.js';
 import type { Repositories } from '../../repositories.js';
 import type { AuditService } from '../audit/audit.service.js';
+import { candidatesOutdated } from '../candidates/candidate.service.js';
 import type { Actor } from '../projects/project.service.js';
 import type { Project } from '../projects/project.types.js';
 import type { MappingDecision, MappingSuggestion } from '../mappings/mapping.types.js';
@@ -27,7 +28,7 @@ export interface JobService {
 }
 
 export interface JobServiceDeps {
-  repos: Pick<Repositories, 'jobs' | 'sources' | 'mappings'>;
+  repos: Pick<Repositories, 'jobs' | 'sources' | 'mappings' | 'candidates'>;
   /** Mapping jobs need the project's target schema stored (the default is seeded here). */
   targetSchemas: TargetSchemaService;
   audit: AuditService;
@@ -73,6 +74,14 @@ const CANDIDATES = {
   outdated: (names: string[]) =>
     `These sources changed after they were standardised: ${names.join(', ')}. ` +
     'Standardise them again first.',
+};
+
+const SCORING = {
+  busy: 'The candidate pairs are already being scored. Wait for that job to finish, or cancel it first.',
+  notRun: 'Find candidate pairs before scoring them.',
+  outdated:
+    'The candidate pairs are out of date: a source changed after they were found. Find candidate pairs again first.',
+  finding: 'Candidate pairs are being found. Wait for that job to finish, then score them.',
 };
 
 function pendingMessage(count: number): string {
@@ -202,17 +211,40 @@ export function createJobService({
     if (!sources.some((s) => s.status === 'standardised')) {
       throw AppError.conflict(CANDIDATES.none, { reason: 'NO_STANDARDISED_SOURCES' });
     }
-    const active = async (type: JobType): Promise<boolean> => {
-      const jobs = await Promise.all(
-        (await repos.jobs.listActive(project.id, type)).map(withStaleCheck),
-      );
-      return jobs.some((job) => !isTerminal(job.status));
-    };
-    if (await active('standardise')) {
+    if (await isActive(project, 'standardise')) {
       throw AppError.conflict(CANDIDATES.standardising, { reason: 'STANDARDISE_RUNNING' });
     }
-    if (await active('candidates')) {
+    if (await isActive(project, 'candidates')) {
       throw AppError.conflict(CANDIDATES.busy, { reason: 'CANDIDATES_RUNNING' });
+    }
+  }
+
+  async function isActive(project: Project, type: JobType): Promise<boolean> {
+    const jobs = await Promise.all(
+      (await repos.jobs.listActive(project.id, type)).map(withStaleCheck),
+    );
+    return jobs.some((job) => !isTerminal(job.status));
+  }
+
+  /**
+   * `scoring` is project-level (payload `{}`): it scores the current candidate pairs, so they
+   * must exist (409 CANDIDATES_NOT_RUN) and be current (CANDIDATES_OUTDATED), with no
+   * candidates job (CANDIDATES_RUNNING) or other scoring job (SCORING_RUNNING) active. The
+   * worker checks the pairs again.
+   */
+  async function checkScoringJob(project: Project): Promise<void> {
+    const candidates = await repos.candidates.findSummary(project.id);
+    if (!candidates) {
+      throw AppError.conflict(SCORING.notRun, { reason: 'CANDIDATES_NOT_RUN' });
+    }
+    if (candidatesOutdated(candidates, await repos.sources.listByProject(project.id))) {
+      throw AppError.conflict(SCORING.outdated, { reason: 'CANDIDATES_OUTDATED' });
+    }
+    if (await isActive(project, 'candidates')) {
+      throw AppError.conflict(SCORING.finding, { reason: 'CANDIDATES_RUNNING' });
+    }
+    if (await isActive(project, 'scoring')) {
+      throw AppError.conflict(SCORING.busy, { reason: 'SCORING_RUNNING' });
     }
   }
 
@@ -246,6 +278,7 @@ export function createJobService({
     async create(actor, project, { type, payload }) {
       if (isSourceJob(type)) await checkSourceJob(project, type, payload);
       if (type === 'candidates') await checkCandidatesJob(project);
+      if (type === 'scoring') await checkScoringJob(project);
       const job = await repos.jobs.create({
         projectId: project.id,
         type,

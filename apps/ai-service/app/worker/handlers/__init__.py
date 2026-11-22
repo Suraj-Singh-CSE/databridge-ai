@@ -7,6 +7,7 @@ from app.worker.handlers.candidates import CandidatesPayload
 from app.worker.handlers.demo import DemoPayload, run_demo
 from app.worker.handlers.mapping import MappingPayload
 from app.worker.handlers.profile import ProfilePayload
+from app.worker.handlers.scoring import ScoringPayload
 from app.worker.handlers.standardise import StandardisePayload
 from app.worker.registry import Handler, JobRegistry, JobResult
 
@@ -20,6 +21,7 @@ def build_registry(
     mapping: Handler[MappingPayload] | None = None,
     standardise: Handler[StandardisePayload] | None = None,
     candidates: Handler[CandidatesPayload] | None = None,
+    scoring: Handler[ScoringPayload] | None = None,
 ) -> JobRegistry:
     """All job types. The HTTP service only validates payloads, so it passes no handlers; the
     worker passes handlers wired to MongoDB, the uploads volume and the LLM gateway."""
@@ -29,4 +31,5 @@ def build_registry(
     registry.register("mapping", MappingPayload, mapping or _runs_in_worker_only)
     registry.register("standardise", StandardisePayload, standardise or _runs_in_worker_only)
     registry.register("candidates", CandidatesPayload, candidates or _runs_in_worker_only)
+    registry.register("scoring", ScoringPayload, scoring or _runs_in_worker_only)
     return registry
