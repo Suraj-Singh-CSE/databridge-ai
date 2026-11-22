@@ -7,6 +7,7 @@ export const JOB_TYPES = [
   'candidates',
   'scoring',
   'pair_review',
+  'clustering',
 ] as const;
 export type JobType = (typeof JOB_TYPES)[number];
 

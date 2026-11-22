@@ -16,17 +16,21 @@ from app.logging import configure_logging
 from app.mapping.engine import MappingSettings
 from app.mapping.store import MappingStore
 from app.matching.blocking import BlockingConfig
+from app.matching.cluster_store import ClusterStore
+from app.matching.clustering import ClusteringConfig
 from app.matching.review import ReviewSettings
 from app.matching.review_store import PairReviewStore
 from app.matching.scoring import ScoringConfig
 from app.matching.scoring_store import ScoreStore
 from app.matching.store import CandidateStore
+from app.matching.survivorship import SurvivorshipConfig
 from app.profiling.store import ProfileStore
 from app.profiling.zip_guard import ZipLimits
 from app.standardise.store import StandardiseStore
 from app.worker.celery_config import create_celery
 from app.worker.handlers import build_registry
 from app.worker.handlers.candidates import CandidatesHandler
+from app.worker.handlers.clustering import ClusteringHandler, ClusteringSettings
 from app.worker.handlers.mapping import MappingHandler, MappingHandlerSettings
 from app.worker.handlers.pair_review import PairReviewHandler, PairReviewHandlerSettings
 from app.worker.handlers.profile import ProfileHandler, ProfilerSettings
@@ -44,6 +48,7 @@ def build_runner(settings: Settings) -> JobRunner:
     """Production collaborators: MongoDB (``jobs``, ``sources``, ``column_profiles``,
     ``target_schemas``, ``mapping_suggestions``, ``mapping_decisions``, ``staged_records``,
     ``candidate_pairs``, ``candidate_summaries``, ``pair_scores``, ``score_summaries``,
+    ``match_decisions``, ``clusters``, ``golden_records``, ``cluster_summaries``,
     ``llm_calls``), Redis, the uploads folder and the LLM gateway. Clients connect lazily."""
     mongo: MongoClient[Document] = MongoClient(
         settings.mongodb_uri, serverSelectionTimeoutMS=CLIENT_TIMEOUT_SECONDS * 1000
@@ -76,7 +81,8 @@ def build_runner(settings: Settings) -> JobRunner:
     )
     scorer = ScoringHandler(ScoreStore(database), scoring_config(settings))
     reviewer = PairReviewHandler(PairReviewStore(database), gateway, review_settings(settings))
-    registry = build_registry(profiler, mapper, standardiser, blocker, scorer, reviewer)
+    clusterer = ClusteringHandler(ClusterStore(database), clustering_settings(settings))
+    registry = build_registry(profiler, mapper, standardiser, blocker, scorer, reviewer, clusterer)
     return JobRunner(store, JobSignals(redis), registry, retry)
 
 
@@ -126,4 +132,14 @@ def review_settings(settings: Settings) -> PairReviewHandlerSettings:
             temperature=settings.pair_review_temperature,
             max_output_tokens=settings.pair_review_max_output_tokens,
         ),
+    )
+
+
+def clustering_settings(settings: Settings) -> ClusteringSettings:
+    return ClusteringSettings(
+        clustering=ClusteringConfig(
+            include_ai_suggested=settings.clustering_include_ai_suggested,
+            max_cluster_size=settings.clustering_max_cluster_size,
+        ),
+        survivorship=SurvivorshipConfig(source_trust=settings.source_trust),
     )

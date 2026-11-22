@@ -70,7 +70,13 @@ function parseUploadFields(fields: Record<string, string>) {
 export function createSourceService(
   repos: Pick<
     Repositories,
-    'sources' | 'columnProfiles' | 'mappings' | 'stagedRecords' | 'candidates' | 'scores'
+    | 'sources'
+    | 'columnProfiles'
+    | 'mappings'
+    | 'stagedRecords'
+    | 'candidates'
+    | 'scores'
+    | 'clusters'
   >,
   storage: FileStorage,
   audit: AuditService,
@@ -197,10 +203,11 @@ export function createSourceService(
       await repos.columnProfiles.deleteBySource(project.id, sourceId);
       await repos.mappings.deleteBySource(project.id, sourceId);
       await repos.stagedRecords.deleteBySource(project.id, sourceId);
-      // Pairs and scores may point at this source's records: they are made again over the
-      // sources left.
+      // Pairs, scores and clusters may point at this source's records: they are made again
+      // over the sources left.
       await repos.candidates.deleteByProject(project.id);
       await repos.scores.deleteByProject(project.id);
+      await repos.clusters.deleteByProject(project.id);
       if (!(await repos.sources.delete(project.id, sourceId))) {
         throw AppError.notFound(SOURCE_GONE);
       }

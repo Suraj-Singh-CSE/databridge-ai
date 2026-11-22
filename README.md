@@ -346,6 +346,44 @@ the score's `band` never changes, and a person decides. Design notes:
 - **Quality**: `cd eval && python -m dbeval.evaluate_pair_review` (Mock provider); the real model
   with the live eval below, task `pair_review`.
 
+**Clusters and golden records.** The `clustering` job groups the staged records into customers
+and builds one golden record per customer. Both are _proposals_ (`status: "proposed"`): a person
+approves or splits them on the review screen. `match` pairs link records (and, by default, `maybe`
+pairs the AI suggested as `match`; those clusters are marked `aiSuggested`); every record without
+a link is a customer on its own. A cluster's confidence is its weakest needed link (High at 0.97,
+Medium at 0.90, else Low). The chaining guard never splits, it flags: `needs_review` with a plain
+reason when a pair inside scores `non_match` ("Contains records that look like different
+people"), when two members have different birth dates and different phones, or when the cluster
+has more than 6 records. Each golden value keeps its provenance (record, source, rule, and the
+alternatives with counts). Rules: most frequent value; ties to the most typical form (names,
+addresses), then source trust (`crm` > `billing` > `support`), then the most recent record, then
+row order; names prefer the most complete compatible form (`Rahul Sharma` over `R. Sharma`).
+`customer_id` is `C` + 12 hex characters of a hash of the members' source record keys: the same
+members keep the same id. Design notes: [ADR 0018](docs/adr/0018-clusters-and-golden-records.md).
+
+| Method | Path (under `/api/v1/projects/:projectId`)                    | Who                         | Result                                                     |
+| ------ | ------------------------------------------------------------- | --------------------------- | ---------------------------------------------------------- |
+| POST   | `/jobs` `{ type: "clustering", payload: {} }`                 | owner, admin, data_engineer | 202 `{ job }`                                              |
+| GET    | `/clusters/summary`                                           | any member                  | 200 `{ summary, outdated }`                                |
+| GET    | `/clusters?status=&flag=needs_review&minSize=&limit=&cursor=` | any member                  | 200 `{ summary, outdated, items, nextCursor }` (limit 100) |
+| GET    | `/clusters/:customerId`                                       | any member                  | 200 `{ summary, outdated, cluster }`                       |
+
+- **Start**: project-level. `409` (`details.reason`) unless the pairs were scored
+  (`SCORES_NOT_RUN`), the scores are current (`SCORES_OUTDATED`), and no scoring
+  (`SCORING_RUNNING`), AI review (`PAIR_REVIEW_RUNNING`) or other clustering job
+  (`CLUSTERING_RUNNING`) is active. The worker checks again (`SCORES_CHANGED` if the pairs are
+  scored or reviewed again while it runs). Running it again replaces the proposals.
+- **Items**: `customerId`, `memberRecordIds`, `size`, `confidence`, `label`, `status`, `flags`,
+  `reasons`, `aiSuggested`, `links` (score, kind `match` / `ai_suggested` / `human`, and whether it
+  is on the spanning tree), the members' standardised fields with source names, and the
+  `goldenRecord` (`fields`, `provenance`). The summary counts clusters, single records,
+  multi-record clusters, `needs_review`, AI-suggested, average and largest size; `outdated: true`
+  once the pairs were scored or reviewed again, or a source changed. `409 CLUSTERS_NOT_RUN` before
+  the first run. Deleted with the project and when a source is deleted.
+- **Settings**: `CLUSTERING_INCLUDE_AI_SUGGESTED` (true), `CLUSTERING_MAX_CLUSTER_SIZE` (6),
+  `SURVIVORSHIP_SOURCE_TRUST` (`crm,billing,support`).
+- **Quality**: `cd eval && python -m dbeval.evaluate_golden`.
+
 **Background jobs.** Long work (profiling, mapping, standardising, matching; pipelines later) runs
 in a Celery worker, not in the request. The api owns the job record in MongoDB; the worker moves it
 forward and publishes every change to Redis; the browser watches it live over Server-Sent Events.
@@ -611,6 +649,24 @@ checked; `live_mapping_eval --task pair_review` measures the real model.
 | seed 2027 |           21 (11) |       95.2% |              1 (4.8%) |      100.0% |          0 |                1 / 0 / 20 | passed  |
 | seed 2028 |           21 (11) |       95.2% |              0 (0.0%) |         n/a |          0 |                0 / 0 / 21 | passed  |
 | pooled    |           60 (30) |       96.7% |              1 (1.7%) |      100.0% |          0 |                1 / 0 / 59 | passed  |
+
+### Clusters and golden records
+
+`python -m dbeval.evaluate_golden` runs the whole pure pipeline (standardise, blocking, scoring,
+clustering, survivorship; no AI review) on seeds 42, 2027 and 2028 and grades the clusters against
+`clusters.csv` (pairwise and B-cubed precision / recall, people exactly rebuilt, over-merged
+clusters, split people) and the golden records against `golden_records.csv` (per field, on the
+people rebuilt exactly). The rules were chosen looking only at seed 42 (ADR 0018):
+
+| Set       | Pairwise P / R | B-cubed F1 | People exactly rebuilt | Over-merged | Split people | Golden fields right (when a member had the value) |
+| --------- | -------------- | ---------: | ---------------------: | ----------: | -----------: | ------------------------------------------------: |
+| seed 42   | 100% / 99.07%  |     99.92% |                 99.82% |           0 |            9 |                                     76.7% (99.7%) |
+| seed 2027 | 100% / 99.71%  |     99.97% |                 99.92% |           0 |            4 |                                     77.4% (99.6%) |
+| seed 2028 | 100% / 99.48%  |     99.96% |                 99.92% |           0 |            4 |                                     77.5% (99.7%) |
+
+Most golden-record misses are values no source held correctly (a PIN or address missing or
+abbreviated in the only record); when some member held the true value, the rules picked it
+99.6-99.7% of the time. CI holds floors on all three sets (`eval/tests/test_evaluate_golden.py`).
 
 ## CI
 

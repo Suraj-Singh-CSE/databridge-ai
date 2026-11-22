@@ -7,6 +7,11 @@ import {
   CandidatePairModel,
   CandidateSummaryModel,
 } from '../src/modules/candidates/candidate.model.js';
+import {
+  ClusterModel,
+  ClusterSummaryModel,
+  GoldenRecordModel,
+} from '../src/modules/clusters/cluster.model.js';
 import { JobModel } from '../src/modules/jobs/job.model.js';
 import { PairScoreModel, ScoreSummaryModel } from '../src/modules/scores/score.model.js';
 import type { PairScore } from '../src/modules/scores/score.types.js';
@@ -24,6 +29,7 @@ import { createMongoRepositories } from '../src/repositories.js';
 
 import { defineApiSuite } from './support/api-suite.js';
 import { defineCandidatesSuite } from './support/candidates-suite.js';
+import { defineClustersSuite } from './support/clusters-suite.js';
 import { defineScoresSuite } from './support/scores-suite.js';
 import { defineJobsSuite } from './support/jobs-suite.js';
 import { defineMappingsSuite, suggested } from './support/mappings-suite.js';
@@ -32,6 +38,7 @@ import { defineSourcesSuite } from './support/sources-suite.js';
 import { defineStagedSuite } from './support/staged-suite.js';
 import type {
   CandidateWrite,
+  ScoreWrite,
   StagedWrite,
   SuggestionWrite,
 } from './support/memory-repositories.js';
@@ -158,9 +165,9 @@ describe.skipIf(!available)('MongoDB', () => {
     },
   };
   defineCandidatesSuite('MongoDB repositories', mongoCandidates);
-  defineScoresSuite('MongoDB repositories', {
+  const mongoScores = {
     ...mongoCandidates,
-    async workerScores(_repos, { projectId, scores, summary }) {
+    async workerScores(_repos: unknown, { projectId, scores, summary }: ScoreWrite) {
       // What apps/ai-service/app/matching/scoring_store.py writes (then drops the older runs).
       const { jobId, runId, candidatesRunId } = summary;
       await PairScoreModel.insertMany(
@@ -181,6 +188,51 @@ describe.skipIf(!available)('MongoDB', () => {
         { upsert: true },
       );
       await PairScoreModel.deleteMany({ projectId, runId: { $ne: runId } });
+    },
+  };
+  defineScoresSuite('MongoDB repositories', mongoScores);
+  defineClustersSuite('MongoDB repositories', {
+    ...mongoScores,
+    async workerClusters(_repos, { projectId, clusters, golden, summary }) {
+      // What apps/ai-service/app/matching/cluster_store.py writes (then drops the older runs).
+      const { jobId, runId } = summary;
+      const oid = (id: string) => new mongoose.Types.ObjectId(id);
+      const common = { projectId, jobId, runId, createdAt: new Date() };
+      await ClusterModel.insertMany(
+        clusters.map((c) => ({
+          ...c,
+          ...common,
+          memberRecordIds: c.memberRecordIds.map(oid),
+          links: c.links.map((l) => ({ ...l, recordA: oid(l.recordA), recordB: oid(l.recordB) })),
+        })),
+      );
+      await GoldenRecordModel.insertMany(
+        golden.map((g) => ({
+          ...g,
+          ...common,
+          // ObjectIds inside the Mixed provenance, as pymongo stores them.
+          provenance: Object.fromEntries(
+            Object.entries(g.provenance).map(([field, p]) => [
+              field,
+              {
+                ...p,
+                recordId: p.recordId ? oid(p.recordId) : null,
+                alternatives: p.alternatives.map((a) => ({
+                  ...a,
+                  recordIds: a.recordIds.map(oid),
+                })),
+              },
+            ]),
+          ),
+        })),
+      );
+      await ClusterSummaryModel.replaceOne(
+        { projectId },
+        { ...summary, projectId },
+        { upsert: true },
+      );
+      await ClusterModel.deleteMany({ projectId, runId: { $ne: runId } });
+      await GoldenRecordModel.deleteMany({ projectId, runId: { $ne: runId } });
     },
   });
 
