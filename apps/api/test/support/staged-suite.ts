@@ -202,18 +202,26 @@ export function defineStagedSuite(label: string, harness: StagedHarness): void {
       });
 
       it('refuses an accept made on a suggestion that a mapping re-run changed', async () => {
-        // Accepted as "ph -> phone" (the snapshot stored on the decision) ...
+        // Accepted as "ph -> phone": the snapshot stored on the decision.
         await mapped();
-        // ... then the mapping re-runs with the same suggestion: still fine.
-        await harness.workerSuggest(repos, {
-          projectId,
-          sourceId,
-          suggestions: [
-            suggested('cust_id', 0, null, 'High', 'source_record_id'),
-            suggested('ph', 1, 'phone', 'High'),
-            suggested('gender', 2, null, 'Low'),
-          ],
-        });
+        const decisions = await repos.mappings.listDecisions(projectId, sourceId);
+        /** A mapping re-run: new suggestions, the earlier decisions kept. */
+        async function rerun(phTarget: string): Promise<void> {
+          await repos.mappings.deleteBySource(projectId, sourceId);
+          await harness.workerSuggest(repos, {
+            projectId,
+            sourceId,
+            suggestions: [
+              suggested('cust_id', 0, null, 'High', 'source_record_id'),
+              suggested('ph', 1, phTarget, 'High'),
+              suggested('gender', 2, null, 'Low'),
+            ],
+          });
+          for (const d of decisions) await repos.mappings.saveDecision(projectId, sourceId, d);
+        }
+
+        // Same suggestion after the re-run: the accept still stands.
+        await rerun('phone');
         await startJob(owner).expect(202);
         await repos.jobs.finishIfActive(
           ai.enqueued[0]?.input.jobId ?? '',
@@ -221,29 +229,8 @@ export function defineStagedSuite(label: string, harness: StagedHarness): void {
           new Date(),
         );
 
-        // A re-run that changes the target: the human never saw "ph -> email".
-        await repos.mappings.deleteBySource(projectId, sourceId);
-        await harness.workerSuggest(repos, {
-          projectId,
-          sourceId,
-          suggestions: [
-            suggested('cust_id', 0, null, 'High', 'source_record_id'),
-            suggested('ph', 1, 'email', 'High'),
-            suggested('gender', 2, null, 'Low'),
-          ],
-        });
-        for (const column of ['cust_id', 'ph', 'gender']) {
-          await repos.mappings.saveDecision(projectId, sourceId, {
-            column,
-            decision: column === 'gender' ? 'reject' : 'accept',
-            target: column === 'ph' ? 'phone' : null,
-            role: column === 'ph' ? 'field' : column === 'cust_id' ? 'source_record_id' : 'ignore',
-            transform: null,
-            schemaVersion: 1,
-            decidedBy: owner.id,
-            decidedAt: new Date(),
-          });
-        }
+        // Target changed: the human never saw "ph -> email".
+        await rerun('email');
 
         const res = await startJob(owner);
 
