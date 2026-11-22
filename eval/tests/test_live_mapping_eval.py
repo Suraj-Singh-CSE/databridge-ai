@@ -57,10 +57,11 @@ def test_mock_dry_run_writes_both_reports(tmp_path: Path) -> None:
     assert report["provider_calls_by_outcome"] == {"ok": 8}
     assert report["settings"] == {
         "model": "mock",
-        "thinking_level": "low",
+        "thinking_level": "model default",
         "timeout_seconds": 30.0,
         "max_attempts": 3,
         "columns_per_call": 40,
+        "requests_per_minute": 0,  # the mock provider is never paced
         "max_output_tokens": 4096,
     }
     latency = report["latency_ms"]
@@ -70,7 +71,11 @@ def test_mock_dry_run_writes_both_reports(tmp_path: Path) -> None:
     summary = (tmp_path / REPORT_MD).read_text(encoding="utf-8")
     assert "| unseen | hybrid | 44 |" in summary
     assert "PASSED" in summary
-    assert summary.splitlines()[4].startswith("Settings: model `mock`, thinking level low")
+    assert summary.splitlines()[4].startswith(
+        "Settings: model `mock`, thinking level model default"
+    )
+    assert "paced at no limit requests/min" in summary
+    assert "INR 0 (free tier)" in summary
 
 
 def test_run_settings_come_from_the_command_line(tmp_path: Path) -> None:
@@ -118,6 +123,7 @@ def test_gemini_without_key_fails_fast(monkeypatch: pytest.MonkeyPatch, tmp_path
         ["--columns-per-call", "41"],
         ["--timeout-seconds", "0"],
         ["--thinking-level", "extreme"],
+        ["--requests-per-minute", "-1"],
     ],
 )
 def test_bad_arguments_are_refused(bad: list[str], tmp_path: Path) -> None:

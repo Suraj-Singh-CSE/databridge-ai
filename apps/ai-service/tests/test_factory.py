@@ -4,7 +4,7 @@ from pydantic import SecretStr, ValidationError
 
 from app.config import Settings
 from app.llm.errors import LLMConfigError
-from app.llm.factory import build_provider
+from app.llm.factory import build_provider, process_limiter
 from app.llm.gemini import GeminiProvider
 from app.llm.mock import MockProvider
 from app.main import create_app
@@ -44,11 +44,11 @@ def test_gemini_with_key_uses_configured_model(settings: Settings) -> None:
 
     assert isinstance(provider, GeminiProvider)
     assert provider.model == "gemini-x-flash"
-    assert provider.thinking_level == "low"  # GEMINI_THINKING_LEVEL default
+    assert provider.thinking_level is None  # GEMINI_THINKING_LEVEL default: the model's own
 
-    default_level = build_provider(gemini.model_copy(update={"gemini_thinking_level": ""}))
-    assert isinstance(default_level, GeminiProvider)
-    assert default_level.thinking_level is None
+    low = build_provider(gemini.model_copy(update={"gemini_thinking_level": "low"}))
+    assert isinstance(low, GeminiProvider)
+    assert low.thinking_level == "low"
 
 
 def test_app_refuses_to_start_with_gemini_and_no_key(settings: Settings) -> None:
@@ -107,3 +107,9 @@ async def test_default_readiness_reports_unavailable_without_servers(settings: S
         await services.close()
 
     assert checks == {"redis": "unavailable", "mongodb": "unavailable"}
+
+
+def test_process_limiter_is_shared_per_limit() -> None:
+    assert process_limiter(12) is process_limiter(12)
+    assert process_limiter(12) is not process_limiter(5)
+    assert process_limiter(12).max_requests == 12

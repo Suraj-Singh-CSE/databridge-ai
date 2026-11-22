@@ -375,8 +375,9 @@ The mapping engine is scored against known answers on synthetic data
   2. On GitHub: **Settings → Secrets and variables → Actions → New repository secret**, name
      `GEMINI_API_KEY`, paste the key, **Add secret**.
   3. **Actions → "Live mapping eval" → Run workflow**. Keep or change `model` (default
-     `gemini-3.8-flash`), `max_calls` (default 40; retries count), `thinking_level` (default
-     `low`; `default` = the model's own), `timeout_seconds` (default 90) and `columns_per_call`
+     `gemini-3.5-flash-lite`), `max_calls` (default 30; retries count), `thinking_level`
+     (default `default` = the model's own; use `low` for Gemini 3 Flash models),
+     `timeout_seconds` (default 90), `columns_per_call` (default 12) and `requests_per_minute`
      (default 12).
   4. Read the results in the run's summary: it starts with the effective settings, counts every
      provider call by outcome, groups errors by status (e.g. `400 INVALID_ARGUMENT`) with
@@ -388,6 +389,25 @@ The mapping engine is scored against known answers on synthetic data
 
 Only synthetic files are sent, after the gateway's masking. Dry run without a key:
 `cd eval && python -m dbeval.live_mapping_eval --provider mock --out /tmp/live-report`.
+
+### Mapping accuracy
+
+Latest live run (2026-11-22, `gemini-3.5-flash-lite`, synthetic data; details in ADR 0013):
+
+| Unseen headers (44 columns) | Rules only | Hybrid (rules + model) |
+| --------------------------- | ---------- | ---------------------- |
+| Accuracy                    | 72.7%      | 81.8%                  |
+| Accuracy at High confidence | 81.0%      | 90.5%                  |
+| Wrong at High confidence    | 4          | 2                      |
+
+On the committed samples both paths score 100%. Privacy check passed: no raw email or phone in
+any of the 24 prompts.
+
+**Why requests are paced.** The Gemini free tier allows `gemini-3.5-flash-lite` 15 requests per
+minute, 250K tokens per minute and 500 requests per day (`gemini-3.8-flash`: 5 per minute, 20
+per day). That run hit exactly 15 requests in one minute and got two 429s. The gateway now
+spaces provider attempts (retries included) to `LLM_MAX_REQUESTS_PER_MINUTE` (default 12, per
+process) and waits out a 429's retry delay (up to `LLM_RETRY_AFTER_MAX_SECONDS`, default 60).
 
 ## CI
 

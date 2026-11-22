@@ -6,7 +6,7 @@ from typing import Literal, Self
 from pydantic import BaseModel, Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-DEFAULT_GEMINI_MODEL = "gemini-3.8-flash"
+DEFAULT_GEMINI_MODEL = "gemini-3.5-flash-lite"
 MIB = 1024 * 1024
 
 
@@ -24,7 +24,8 @@ def _default_prices() -> dict[str, ModelPrice]:
     # cost of moving to the paid tier can be estimated. Override with LLM_PRICES_INR_PER_1M.
     return {
         "mock": ModelPrice(input=0, output=0),
-        DEFAULT_GEMINI_MODEL: ModelPrice(input=0, output=0),
+        "gemini-3.5-flash-lite": ModelPrice(input=0, output=0),
+        "gemini-3.8-flash": ModelPrice(input=0, output=0),
     }
 
 
@@ -42,21 +43,28 @@ class Settings(BaseSettings):
     llm_provider: Literal["mock", "gemini"] = "mock"
     gemini_api_key: SecretStr | None = None
     gemini_model: str = Field(default=DEFAULT_GEMINI_MODEL, min_length=1)
-    # How much the model "thinks" before answering. "" = the model's default (medium on Gemini 3
-    # Flash, which made mapping calls slow). Thought tokens count as output tokens.
-    gemini_thinking_level: Literal["", "minimal", "low", "medium", "high"] = "low"
+    # How much the model "thinks" before answering. "" = the model's default; Lite models may
+    # not accept a level. For Gemini 3 Flash models "low" is recommended (their default, medium,
+    # made mapping calls slow). Thought tokens count as output tokens.
+    gemini_thinking_level: Literal["", "minimal", "low", "medium", "high"] = ""
     # Seconds a cached LLM response stays valid; 0 turns the cache off.
     llm_cache_ttl_seconds: int = Field(default=86_400, ge=0)
     # Total provider attempts per call for retryable errors (rate limit, timeout, unavailable).
     llm_max_attempts: int = Field(default=3, ge=1, le=10)
     # Exponential backoff: base * multiplier^(attempt-1), jittered by +/-20%, capped at max
-    # (defaults: about 2 s, 5 s, 12.5 s). A 429's Retry-After is honoured up to the cap.
+    # (defaults: about 2 s, 5 s, 12.5 s).
     llm_backoff_base_seconds: float = Field(default=2.0, gt=0)
     llm_backoff_multiplier: float = Field(default=2.5, ge=1, le=10)
     llm_backoff_max_seconds: float = Field(default=30.0, gt=0)
+    # A 429's RetryInfo delay is waited out when longer than the backoff, up to this cap.
+    llm_retry_after_max_seconds: float = Field(default=60.0, gt=0, le=600)
+    # Provider attempts (retries included) per minute, per process; 0 = no pacing. Below the
+    # Gemini free tier's 15 RPM for Flash Lite, so bursts are paced instead of refused (429).
+    llm_max_requests_per_minute: int = Field(default=12, ge=0, le=10_000)
     # Hard limit for one provider attempt (the live evaluation uses 90).
     llm_timeout_seconds: float = Field(default=30.0, gt=0, le=600)
-    # JSON, e.g. {"gemini-3.8-flash": {"input": 66, "output": 330}}. Unknown models cost 0.
+    # JSON, e.g. {"gemini-3.5-flash-lite": {"input": 10, "output": 40}} (illustrative numbers).
+    # The defaults price the free tier at 0. Unknown models cost 0 and log llm_price_missing.
     llm_prices_inr_per_1m: dict[str, ModelPrice] = Field(default_factory=_default_prices)
 
     # ---- background jobs (ADR 0010)
@@ -87,6 +95,11 @@ class Settings(BaseSettings):
     mapping_max_output_tokens: int = Field(default=4096, ge=256, le=65_536)
     # Columns per LLM call; smaller batches answer faster, larger ones make fewer calls.
     mapping_max_columns_per_call: int = Field(default=40, ge=1, le=40)
+
+    @property
+    def paced_requests_per_minute(self) -> int:
+        """The pacing limit in force: 0 for the mock provider, which has no quota to respect."""
+        return 0 if self.llm_provider == "mock" else self.llm_max_requests_per_minute
 
     @model_validator(mode="after")
     def _hard_limit_after_soft_limit(self) -> Self:
