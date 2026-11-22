@@ -21,6 +21,8 @@ import { createJobRouter, createProjectJobsRouter } from './modules/jobs/job.rou
 import { createJobService } from './modules/jobs/job.service.js';
 import { createCandidateRouter } from './modules/candidates/candidate.routes.js';
 import { createCandidateService } from './modules/candidates/candidate.service.js';
+import { createClusterRouter } from './modules/clusters/cluster.routes.js';
+import { createClusterService } from './modules/clusters/cluster.service.js';
 import { createScoreRouter } from './modules/scores/score.routes.js';
 import { createScoreService } from './modules/scores/score.service.js';
 import { createMappingRouter } from './modules/mappings/mapping.routes.js';
@@ -84,6 +86,7 @@ export function createApp({
   const stagedService = createStagedService(repos);
   const candidateService = createCandidateService(repos);
   const scoreService = createScoreService(repos);
+  const clusterService = createClusterService(repos);
   const jobService = createJobService({
     repos,
     targetSchemas,
@@ -145,6 +148,10 @@ export function createApp({
   app.use(
     '/api/v1/projects/:projectId/scores',
     createScoreRouter({ scoreService, projects: repos.projects, tokens }),
+  );
+  app.use(
+    '/api/v1/projects/:projectId/clusters',
+    createClusterRouter({ clusterService, projects: repos.projects, tokens }),
   );
   app.use(
     '/api/v1/projects/:projectId/target-schema',

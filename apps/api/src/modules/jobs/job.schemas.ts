@@ -39,6 +39,9 @@ const scoringPayload = z.strictObject({});
 /** `pair_review`: project-level, the maybe pairs of the current scores (handlers/pair_review.py). */
 const pairReviewPayload = z.strictObject({});
 
+/** `clustering`: project-level, the records of the current scores (handlers/clustering.py). */
+const clusteringPayload = z.strictObject({});
+
 /**
  * One entry per job type that can be started. A new type adds its payload schema here and its
  * handler in apps/ai-service/app/worker/handlers (the ai-service validates the payload again).
@@ -53,6 +56,7 @@ export const createJobBody = z.discriminatedUnion(
     z.strictObject({ type: z.literal('candidates'), payload: candidatesPayload }),
     z.strictObject({ type: z.literal('scoring'), payload: scoringPayload }),
     z.strictObject({ type: z.literal('pair_review'), payload: pairReviewPayload }),
+    z.strictObject({ type: z.literal('clustering'), payload: clusteringPayload }),
   ],
   { error: 'unknown job type' },
 );

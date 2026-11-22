@@ -4,6 +4,7 @@ from typing import Any
 
 from app.worker.context import JobContext
 from app.worker.handlers.candidates import CandidatesPayload
+from app.worker.handlers.clustering import ClusteringPayload
 from app.worker.handlers.demo import DemoPayload, run_demo
 from app.worker.handlers.mapping import MappingPayload
 from app.worker.handlers.pair_review import PairReviewPayload
@@ -24,6 +25,7 @@ def build_registry(
     candidates: Handler[CandidatesPayload] | None = None,
     scoring: Handler[ScoringPayload] | None = None,
     pair_review: Handler[PairReviewPayload] | None = None,
+    clustering: Handler[ClusteringPayload] | None = None,
 ) -> JobRegistry:
     """All job types. The HTTP service only validates payloads, so it passes no handlers; the
     worker passes handlers wired to MongoDB, the uploads volume and the LLM gateway."""
@@ -35,4 +37,5 @@ def build_registry(
     registry.register("candidates", CandidatesPayload, candidates or _runs_in_worker_only)
     registry.register("scoring", ScoringPayload, scoring or _runs_in_worker_only)
     registry.register("pair_review", PairReviewPayload, pair_review or _runs_in_worker_only)
+    registry.register("clustering", ClusteringPayload, clustering or _runs_in_worker_only)
     return registry

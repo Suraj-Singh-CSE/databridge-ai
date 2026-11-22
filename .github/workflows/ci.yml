@@ -534,6 +534,47 @@ jobs:
             echo "ok: no maybe pairs, the AI review is refused with NO_MAYBE_PAIRS"
           fi
 
+          # Clusters and golden records: a project-level job (payload {}) over the current scores
+          # (and the AI's suggestions, when the review ran). Proposals only: status "proposed".
+          job=$(curl -sS --fail-with-body -X POST "$api/projects/$project/jobs" -H "$auth" \
+            -H 'Content-Type: application/json' -d '{"type":"clustering","payload":{}}' | jq -r '.data.job.id')
+          curl -sSN --fail --max-time 90 "$api/jobs/$job/events" -H "$auth" | sed -n 's/^data: //p' > "/tmp/clustering-$job"
+          echo "clustering job $job: $(jq -r '"\(.status) \(.progress)% \(.message)"' "/tmp/clustering-$job" | paste -sd ',' -)"
+          jq -s -e 'last | .status == "succeeded"' "/tmp/clustering-$job" > /dev/null
+          clusters="$api/projects/$project/clusters"
+          records=$(jq -r '.data.summary.recordCount' /tmp/candidates-summary)
+          curl -sS --fail-with-body "$clusters/summary" -H "$auth" > /tmp/clusters-summary
+          jq -c '.data | {outdated, summary: .summary | {recordCount, clusterCount, singletonCount, multiRecordCount, needsReviewCount, aiSuggestedCount, averageSize, largestCluster}}' /tmp/clusters-summary
+          jq -e --argjson records "$records" '.data.outdated == false and .data.summary.recordCount == $records
+            and .data.summary.singletonCount + .data.summary.multiRecordCount == .data.summary.clusterCount
+            and .data.summary.multiRecordCount > 0' /tmp/clusters-summary > /dev/null
+          # Every staged record is in exactly one cluster (paged, 100 at a time).
+          cursor=""; members=0; seen=0
+          while :; do
+            curl -sS --fail-with-body "$clusters?limit=100${cursor:+&cursor=$cursor}" -H "$auth" > /tmp/clusters-page
+            members=$((members + $(jq '[.data.items[].size] | add // 0' /tmp/clusters-page)))
+            seen=$((seen + $(jq '.data.items | length' /tmp/clusters-page)))
+            jq -e 'all(.data.items[]; .status == "proposed" and (.memberRecordIds | length) == .size
+              and (.members | length) == .size and .goldenRecord.customerId == .customerId)' /tmp/clusters-page > /dev/null
+            cursor=$(jq -r '.data.nextCursor // empty' /tmp/clusters-page)
+            [ -n "$cursor" ] || break
+          done
+          echo "clusters listed: $seen, members: $members, staged records: $records"
+          test "$members" = "$records"
+          test "$seen" = "$(jq -r '.data.summary.clusterCount' /tmp/clusters-summary)"
+          # One multi-record cluster in detail: its golden record with provenance (rules only printed).
+          customer=$(curl -sS --fail-with-body "$clusters?minSize=2&limit=1" -H "$auth" | jq -r '.data.items[0].customerId')
+          curl -sS --fail-with-body "$clusters/$customer" -H "$auth" > /tmp/cluster-detail
+          jq -c '.data.cluster | {size, confidence, label, flags, aiSuggested, rules: (.goldenRecord.provenance | map_values(.rule))}' /tmp/cluster-detail
+          jq -e '.data.cluster as $c | $c.size >= 2 and ($c.label | IN("High", "Medium", "Low"))
+            and $c.goldenRecord.fields.customer_id == $c.customerId
+            and ($c.goldenRecord.provenance | length) > 0
+            and all($c.goldenRecord.provenance[]; .rule == null or (.recordId as $r | $c.memberRecordIds | index($r) != null))' \
+            /tmp/cluster-detail > /dev/null
+          code=$(curl -s -o /dev/null -w '%{http_code}' "$clusters?flag=maybe-not" -H "$auth")
+          test "$code" = 400
+          echo "ok: every record in one proposed cluster; golden records carry provenance"
+
       - name: AI service is not published to the host
         run: |
           if curl -s --max-time 3 http://localhost:8000/internal/v1/health; then

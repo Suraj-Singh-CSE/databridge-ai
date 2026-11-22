@@ -94,6 +94,16 @@ const PAIR_REVIEW = {
   none: 'There are no “maybe” pairs to review: every pair was already decided by its score.',
 };
 
+const CLUSTERING = {
+  busy: 'Clusters are already being built. Wait for that job to finish, or cancel it first.',
+  notRun: 'Score the candidate pairs before building clusters.',
+  outdated: PAIR_REVIEW.outdated,
+  scoring:
+    'The candidate pairs are being scored. Wait for that job to finish, then build clusters.',
+  reviewing:
+    'The AI is reviewing the maybe pairs. Wait for that job to finish, then build clusters.',
+};
+
 function pendingMessage(count: number): string {
   const noun = count === 1 ? 'column still needs' : 'columns still need';
   return `${count} ${noun} a decision. Accept, reject or change every column's mapping first.`;
@@ -285,6 +295,33 @@ export function createJobService({
   }
 
   /**
+   * `clustering` is project-level (payload `{}`): it groups the records of the current scores,
+   * so they must exist (409 SCORES_NOT_RUN) and be current (SCORES_OUTDATED), with no scoring
+   * (SCORING_RUNNING), AI review (PAIR_REVIEW_RUNNING: its suggestions would be half written)
+   * or other clustering job (CLUSTERING_RUNNING) active. The worker checks again.
+   */
+  async function checkClusteringJob(project: Project): Promise<void> {
+    const scores = await repos.scores.findSummary(project.id);
+    if (!scores) throw AppError.conflict(CLUSTERING.notRun, { reason: 'SCORES_NOT_RUN' });
+    const candidates = await repos.candidates.findSummary(project.id);
+    if (
+      candidates?.runId !== scores.candidatesRunId ||
+      candidatesOutdated(candidates, await repos.sources.listByProject(project.id))
+    ) {
+      throw AppError.conflict(CLUSTERING.outdated, { reason: 'SCORES_OUTDATED' });
+    }
+    if (await isActive(project, 'scoring')) {
+      throw AppError.conflict(CLUSTERING.scoring, { reason: 'SCORING_RUNNING' });
+    }
+    if (await isActive(project, 'pair_review')) {
+      throw AppError.conflict(CLUSTERING.reviewing, { reason: 'PAIR_REVIEW_RUNNING' });
+    }
+    if (await isActive(project, 'clustering')) {
+      throw AppError.conflict(CLUSTERING.busy, { reason: 'CLUSTERING_RUNNING' });
+    }
+  }
+
+  /**
    * Source jobs need a source of this project (404 otherwise) that no other job of the same
    * type is working on (409). Mapping and standardise also need the source profiled (409);
    * mapping needs the project's target schema stored, standardise a fully reviewed mapping.
@@ -316,6 +353,7 @@ export function createJobService({
       if (type === 'candidates') await checkCandidatesJob(project);
       if (type === 'scoring') await checkScoringJob(project);
       if (type === 'pair_review') await checkPairReviewJob(project);
+      if (type === 'clustering') await checkClusteringJob(project);
       const job = await repos.jobs.create({
         projectId: project.id,
         type,

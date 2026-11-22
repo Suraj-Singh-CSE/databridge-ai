@@ -410,6 +410,7 @@ def test_registry_rejects_duplicates_and_lists_names() -> None:
 
     assert registry.names() == [
         "candidates",
+        "clustering",
         "demo",
         "mapping",
         "pair_review",

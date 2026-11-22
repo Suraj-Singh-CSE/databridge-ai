@@ -251,13 +251,14 @@ _ADDRESS_WORD = re.compile(r"[a-z0-9]+")
 
 def address_overlap(a: str, b: str) -> float:
     """Jaccard overlap of the address words (lower case, common abbreviations folded)."""
-    words_a, words_b = _address_words(a), _address_words(b)
+    words_a, words_b = address_words(a), address_words(b)
     if not words_a or not words_b:
         return 0.0
     return len(words_a & words_b) / len(words_a | words_b)
 
 
-def _address_words(text: str) -> set[str]:
+def address_words(text: str) -> set[str]:
+    """Lower-case ASCII words of an address, common abbreviations folded (`Road` -> `rd`)."""
     folded = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode().lower()
     return {_ADDRESS_FOLDS.get(w, w) for w in _ADDRESS_WORD.findall(folded)}
 

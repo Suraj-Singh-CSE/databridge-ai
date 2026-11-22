@@ -118,6 +118,21 @@ class Settings(BaseSettings):
     pair_review_temperature: float = Field(default=0.0, ge=0.0, le=1.0)
     pair_review_max_output_tokens: int = Field(default=4096, ge=256, le=65_536)
 
+    # ---- clusters and golden records (ADR 0018)
+    # true: maybe pairs the AI suggested as "match" also link records (marked ai_suggested).
+    clustering_include_ai_suggested: bool = True
+    # Clusters with more records than this are flagged needs_review.
+    clustering_max_cluster_size: int = Field(default=6, ge=2, le=1000)
+    # Most trusted source first, comma-separated (system name or a word of the source's name).
+    survivorship_source_trust: str = Field(
+        default="crm,billing,support", pattern=r"^\s*[\w-]+(\s*,\s*[\w-]+)*\s*$", max_length=500
+    )
+
+    @property
+    def source_trust(self) -> tuple[str, ...]:
+        """``survivorship_source_trust`` as a tuple of lower-case names."""
+        return tuple(p.strip().lower() for p in self.survivorship_source_trust.split(","))
+
     @property
     def paced_requests_per_minute(self) -> int:
         """The pacing limit in force: 0 for the mock provider, which has no quota to respect."""

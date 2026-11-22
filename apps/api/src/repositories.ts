@@ -1,4 +1,6 @@
 import { createMongoAuditRepository } from './modules/audit/audit.repository.js';
+import { createMongoClusterRepository } from './modules/clusters/cluster.repository.js';
+import type { ClusterRepository } from './modules/clusters/cluster.types.js';
 import { createMongoCandidateRepository } from './modules/candidates/candidate.repository.js';
 import type { CandidateRepository } from './modules/candidates/candidate.types.js';
 import type { AuditRepository } from './modules/audit/audit.types.js';
@@ -36,6 +38,7 @@ export interface Repositories {
   stagedRecords: StagedRecordRepository;
   candidates: CandidateRepository;
   scores: ScoreRepository;
+  clusters: ClusterRepository;
   audit: AuditRepository;
 }
 
@@ -52,6 +55,7 @@ export function createMongoRepositories(): Repositories {
     stagedRecords: createMongoStagedRecordRepository(),
     candidates: createMongoCandidateRepository(),
     scores: createMongoScoreRepository(),
+    clusters: createMongoClusterRepository(),
     audit: createMongoAuditRepository(),
   };
 }

@@ -21,6 +21,12 @@ import type {
   ScoreSummary,
 } from '../../src/modules/scores/score.types.js';
 import type {
+  Cluster,
+  ClusterRepository,
+  ClusterSummary,
+  GoldenRecord,
+} from '../../src/modules/clusters/cluster.types.js';
+import type {
   ColumnProfile,
   ColumnProfileRepository,
 } from '../../src/modules/sources/column-profile.types.js';
@@ -85,6 +91,14 @@ export interface ScoreWrite {
   summary: ScoreSummary;
 }
 
+/** What the Python clustering worker writes: one run's clusters, golden records and summary. */
+export interface ClusterWrite {
+  projectId: string;
+  clusters: Cluster[];
+  golden: GoldenRecord[];
+  summary: ClusterSummary;
+}
+
 export interface MemoryRepositories extends Repositories {
   jobs: JobRepository & { workerUpdate(id: string, patch: WorkerPatch): void };
   columnProfiles: ColumnProfileRepository & { workerSave(write: ProfileWrite): void };
@@ -92,6 +106,7 @@ export interface MemoryRepositories extends Repositories {
   stagedRecords: StagedRecordRepository & { workerSave(write: StagedWrite): void };
   candidates: CandidateRepository & { workerSave(write: CandidateWrite): void };
   scores: ScoreRepository & { workerSave(write: ScoreWrite): void };
+  clusters: ClusterRepository & { workerSave(write: ClusterWrite): void };
 }
 
 /**
@@ -116,6 +131,8 @@ export function createMemoryRepositories(): MemoryRepositories {
   const candidates = new Map<string, { summary: CandidateSummary; pairs: CandidatePair[] }>();
   // key: projectId; one run per project (the worker drops older runs).
   const scores = new Map<string, { summary: ScoreSummary; scores: PairScore[] }>();
+  // key: projectId; one run per project (the worker drops older runs).
+  const clusters = new Map<string, Omit<ClusterWrite, 'projectId'>>();
   const dropPrefix = (map: Map<string, unknown>, projectId: string) => {
     for (const key of map.keys()) if (key.startsWith(`${projectId}/`)) map.delete(key);
   };
@@ -628,6 +645,51 @@ export function createMemoryRepositories(): MemoryRepositories {
       },
       workerSave({ projectId, scores: written, summary }) {
         scores.set(projectId, structuredClone({ summary, scores: written }));
+      },
+    },
+
+    clusters: {
+      async findSummary(projectId) {
+        await Promise.resolve();
+        const run = clusters.get(projectId);
+        return run ? structuredClone(run.summary) : null;
+      },
+      async listClusters(projectId, { runId, status, flag, minSize, afterPosition, limit }) {
+        await Promise.resolve();
+        const run = clusters.get(projectId);
+        if (run?.summary.runId !== runId) return [];
+        return structuredClone(
+          run.clusters
+            .filter(
+              (c) =>
+                c.position > afterPosition &&
+                (!status || c.status === status) &&
+                (!flag || c.flags.includes(flag)) &&
+                (!minSize || c.size >= minSize),
+            )
+            .sort((a, b) => a.position - b.position)
+            .slice(0, limit),
+        );
+      },
+      async findCluster(projectId, runId, customerId) {
+        await Promise.resolve();
+        const run = clusters.get(projectId);
+        if (run?.summary.runId !== runId) return null;
+        const found = run.clusters.find((c) => c.customerId === customerId);
+        return found ? structuredClone(found) : null;
+      },
+      async findGolden(projectId, runId, customerIds) {
+        await Promise.resolve();
+        const run = clusters.get(projectId);
+        if (run?.summary.runId !== runId) return [];
+        return structuredClone(run.golden.filter((g) => customerIds.includes(g.customerId)));
+      },
+      async deleteByProject(projectId) {
+        await Promise.resolve();
+        clusters.delete(projectId);
+      },
+      workerSave({ projectId, ...run }) {
+        clusters.set(projectId, structuredClone(run));
       },
     },
 
