@@ -99,7 +99,15 @@ class World:
                 }
             )
             if decide:
-                self.decide(source_id, entry["column"], "accept")
+                # The api stores the accepted suggestion as a snapshot on the decision.
+                self.decide(
+                    source_id,
+                    entry["column"],
+                    "accept",
+                    role=role,
+                    target=target,
+                    transform=transform,
+                )
         return source_id
 
     def decide(self, source_id: str, column: str, decision: str, **choice: Any) -> None:  # noqa: ANN401
@@ -275,6 +283,7 @@ def test_reports_progress_in_batches(world: World, monkeypatch: pytest.MonkeyPat
         ("not_mapped", "MAPPING_NOT_RUN"),
         ("not_profiled", "SOURCE_NOT_PROFILED"),
         ("stale", "MAPPING_STALE"),
+        ("outdated", "MAPPING_NOT_APPROVED"),
         ("no_schema", "TARGET_SCHEMA_MISSING"),
         ("changed_file", "SOURCE_CHANGED"),
         ("missing_file", "FILE_MISSING"),
@@ -290,6 +299,10 @@ def test_preconditions_fail_with_clear_codes(world: World, setup: str, code: str
         world.db.mapping_suggestions.delete_many({})
     if setup == "stale":
         world.decide(source_id, "ph", "override", role="field", target="mobile", transform=None)
+    if setup == "outdated":  # a mapping re-run changed the accepted suggestion
+        world.db.mapping_suggestions.update_one(
+            {"column": "ph"}, {"$set": {"suggestion.target": "email"}}
+        )
     if setup == "no_schema":
         world.db.target_schemas.delete_many({})
     path = world.uploads / world.source(source_id)["fileKey"]
@@ -303,6 +316,10 @@ def test_preconditions_fail_with_clear_codes(world: World, setup: str, code: str
     job = world.job(job_id)
     assert job["status"] == "failed"
     assert job["error"]["code"] == code
+    if setup == "outdated":
+        assert job["error"]["message"] == (
+            "Mapping changed after review for: ph. Review these columns again."
+        )
     assert world.staged(source_id) == []
     assert world.source(source_id)["status"] != "standardised"
 

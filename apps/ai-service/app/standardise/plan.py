@@ -7,7 +7,11 @@ The effective mapping of a column (ADR 0014):
 - ``reject`` (or a suggestion of role ``ignore``): the column is not used;
 - role ``source_record_id``: the value is kept as ``sourceRecordId`` for lineage.
 
-Every column with a suggestion must have a decision first (``MAPPING_NOT_APPROVED``). The plan
+Every column with a suggestion must have a decision first (``MAPPING_NOT_APPROVED``). An
+``accept`` counts only while the suggestion still has the role, target and transform the reviewer
+accepted (the snapshot the api stores on the decision); after a mapping re-run that changed it, or
+without a snapshot, the column must be reviewed again (``MAPPING_NOT_APPROVED``, reason
+``DECISION_OUTDATED``). The plan
 is pure data plus cleaners, so the worker, the tests and the evaluation run the same code.
 """
 
@@ -27,10 +31,11 @@ Document = Mapping[str, Any]
 class PlanError(Exception):
     """The mapping cannot be applied. ``code`` is UPPER_SNAKE; ``message`` is for the user."""
 
-    def __init__(self, code: str, message: str) -> None:
+    def __init__(self, code: str, message: str, details: dict[str, Any] | None = None) -> None:
         super().__init__(message)
         self.code = code
         self.message = message
+        self.details = details
 
 
 @dataclass(frozen=True)
@@ -120,6 +125,18 @@ def effective_choices(
             f"{len(pending)} {noun} a decision. Accept, reject or change every column's "
             "mapping first.",
         )
+    outdated = [
+        s["column"]
+        for s in suggestions
+        if by_column[s["column"]].get("decision") == "accept"
+        and not accepted_as_shown(s["suggestion"], by_column[s["column"]])
+    ]
+    if outdated:
+        raise PlanError(
+            "MAPPING_NOT_APPROVED",
+            f"Mapping changed after review for: {', '.join(outdated)}. Review these columns again.",
+            {"reason": "DECISION_OUTDATED", "columns": outdated},
+        )
     choices: list[ColumnChoice] = []
     for stored in suggestions:
         decision = by_column[stored["column"]]
@@ -144,6 +161,17 @@ def effective_choices(
             )
         )
     return sorted(choices, key=lambda choice: choice.position)
+
+
+_SNAPSHOT = ("role", "target", "transform")
+
+
+def accepted_as_shown(suggestion: Document, decision: Document) -> bool:
+    """True when the decision's snapshot matches the current suggestion (role, target,
+    transform). A decision without a snapshot is treated as outdated."""
+    if any(key not in decision for key in _SNAPSHOT):
+        return False
+    return all(suggestion.get(key) == decision[key] for key in _SNAPSHOT)
 
 
 def build_plan(choices: Sequence[ColumnChoice], schema: TargetSchema) -> Plan:

@@ -51,9 +51,12 @@ issue: it was missing at the source and the null rate already shows it. The refu
 kept in the staged row; the original stays in the uploaded file (row `rowNumber`).
 
 **Effective mapping** (`plan.effective_choices`): every column with a suggestion needs a decision
-(`MAPPING_NOT_APPROVED` otherwise). `accept` takes the **current** suggestion (the one the reviewer
-sees as accepted, even after a re-run), `override` the reviewer's role, target and transform,
-`reject` and role `ignore` leave the column out, role `source_record_id` keeps the value as
+(`MAPPING_NOT_APPROVED` otherwise). `accept` takes the suggestion the reviewer accepted, and
+only while it still matches the snapshot (role, target, transform) the api stores on the decision:
+after a mapping re-run changed it, or without a snapshot, the column needs review again
+(`MAPPING_NOT_APPROVED`, `details.reason: DECISION_OUTDATED` with the columns, in the api's early
+`409` and in the worker), so nothing the human never saw is applied. `override` the reviewer's
+role, target and transform, `reject` and role `ignore` leave the column out, role `source_record_id` keeps the value as
 `sourceRecordId` (the first such column in file order). The plan is checked against the current
 target schema: unknown or generated target (`MAPPING_STALE`), two columns on one non-concat field
 (`MAPPING_CONFLICT`), nothing mapped (`NOTHING_MAPPED`), unknown transform (`MAPPING_INVALID`).

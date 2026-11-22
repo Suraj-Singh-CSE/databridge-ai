@@ -5,6 +5,7 @@ import type { Repositories } from '../../repositories.js';
 import type { AuditService } from '../audit/audit.service.js';
 import type { Actor } from '../projects/project.service.js';
 import type { Project } from '../projects/project.types.js';
+import type { MappingDecision, MappingSuggestion } from '../mappings/mapping.types.js';
 import { isProfiled } from '../sources/source.types.js';
 import type { TargetSchemaService } from '../target-schema/target-schema.service.js';
 
@@ -70,6 +71,15 @@ function pendingMessage(count: number): string {
   return `${count} ${noun} a decision. Accept, reject or change every column's mapping first.`;
 }
 
+/** An accept still stands only while the suggestion is the one the reviewer accepted. */
+function acceptedAsShown(suggestion: MappingSuggestion, decision: MappingDecision): boolean {
+  return (
+    suggestion.role === decision.role &&
+    suggestion.target === decision.target &&
+    suggestion.transform === decision.transform
+  );
+}
+
 function isSourceJob(type: JobType): type is SourceJobType {
   return SOURCE_JOBS.has(type);
 }
@@ -133,7 +143,11 @@ export function createJobService({
     return failed;
   }
 
-  /** Standardise needs every column's mapping decided (the worker checks again). */
+  /**
+   * Standardise needs every column's mapping decided, and every accept still matching the
+   * suggestion the reviewer saw (role, target, transform snapshot on the decision): a mapping
+   * re-run that changed it means the column must be reviewed again. The worker checks again.
+   */
   async function checkMappingReviewed(project: Project, sourceId: string): Promise<void> {
     const [suggestions, decisions] = await Promise.all([
       repos.mappings.listSuggestions(project.id, sourceId),
@@ -142,10 +156,22 @@ export function createJobService({
     if (suggestions.length === 0) {
       throw AppError.conflict(MAPPING_NOT_RUN, { reason: 'MAPPING_NOT_RUN' });
     }
-    const decided = new Set(decisions.map((d) => d.column));
-    const pending = suggestions.filter((s) => !decided.has(s.column)).length;
+    const byColumn = new Map(decisions.map((d) => [d.column, d]));
+    const pending = suggestions.filter((s) => !byColumn.has(s.column)).length;
     if (pending > 0) {
       throw AppError.conflict(pendingMessage(pending), { reason: 'MAPPING_NOT_APPROVED', pending });
+    }
+    const outdated = suggestions
+      .filter((s) => {
+        const decision = byColumn.get(s.column);
+        return decision?.decision === 'accept' && !acceptedAsShown(s.suggestion, decision);
+      })
+      .map((s) => s.column);
+    if (outdated.length > 0) {
+      throw AppError.conflict(
+        `Mapping changed after review for: ${outdated.join(', ')}. Review these columns again.`,
+        { reason: 'DECISION_OUTDATED', columns: outdated },
+      );
     }
   }
 

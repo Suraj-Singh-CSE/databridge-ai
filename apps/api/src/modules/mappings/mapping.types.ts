@@ -61,6 +61,10 @@ export interface MappingChoice {
   transform: string | null;
 }
 
+/**
+ * For `accept`, the choice fields are a snapshot of the suggestion as accepted; standardise
+ * refuses the accept once a mapping re-run changed that suggestion (ADR 0014).
+ */
 export interface MappingDecision extends MappingChoice {
   column: string;
   decision: Decision;

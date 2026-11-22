@@ -45,10 +45,10 @@ SUGGESTIONS = [
 
 def test_effective_mapping_follows_the_decisions() -> None:
     decisions = [
-        decision("cust_id"),
-        decision("cust_nm"),
+        accepted("cust_id"),
+        accepted("cust_nm"),
         decision("ph", "reject"),
-        decision("gender"),  # accepted "ignore"
+        accepted("gender"),  # accepted "ignore"
         decision("dob", "override", role="field", target="date_of_birth", transform=None),
         decision("city", "override", role="ignore", target=None, transform=None),
     ]
@@ -61,20 +61,59 @@ def test_effective_mapping_follows_the_decisions() -> None:
     ]
 
 
-def test_accept_uses_the_current_suggestion_not_the_copy_on_the_decision() -> None:
-    stale_copy = decision("ph", target="email", role="field", transform="lowercase")
-    [choice] = effective_choices([SUGGESTIONS[2]], [stale_copy])
+def accepted(column: str) -> dict[str, Any]:
+    """An accept with the snapshot the api stores: the suggestion as the reviewer saw it."""
+    shown = next(s["suggestion"] for s in SUGGESTIONS if s["column"] == column)
+    return decision(column, "accept", **shown)
+
+
+def test_accept_after_a_rerun_with_the_same_suggestion_still_counts() -> None:
+    [choice] = effective_choices([SUGGESTIONS[2]], [accepted("ph")])
     assert (choice.target, choice.transform) == ("phone", "to_e164_in")
+
+
+def test_accept_after_a_rerun_that_changed_the_suggestion_needs_review_again() -> None:
+    rerun = [
+        suggestion("ph", 2, "email", "lowercase"),  # target changed since the accept
+        suggestion("dob", 4, "date_of_birth", "parse_date:DD-MM-YYYY"),  # transform changed
+        SUGGESTIONS[1],
+    ]
+    with pytest.raises(PlanError) as error:
+        effective_choices(rerun, [accepted("ph"), accepted("dob"), accepted("cust_nm")])
+
+    assert error.value.code == "MAPPING_NOT_APPROVED"
+    assert error.value.details == {"reason": "DECISION_OUTDATED", "columns": ["ph", "dob"]}
+    assert error.value.message == (
+        "Mapping changed after review for: ph, dob. Review these columns again."
+    )
+
+
+def test_an_accept_without_a_snapshot_is_outdated() -> None:
+    with pytest.raises(PlanError) as error:
+        effective_choices([SUGGESTIONS[2]], [decision("ph")])
+    assert error.value.details == {"reason": "DECISION_OUTDATED", "columns": ["ph"]}
+
+
+def test_override_and_reject_ignore_later_suggestion_changes() -> None:
+    rerun = [suggestion("ph", 2, "email", "lowercase"), suggestion("dob", 4, "city", "city")]
+    choices = effective_choices(
+        rerun,
+        [
+            decision("ph", "override", role="field", target="phone", transform="to_e164_in"),
+            decision("dob", "reject"),
+        ],
+    )
+    assert [(c.column, c.target, c.transform) for c in choices] == [("ph", "phone", "to_e164_in")]
 
 
 def test_every_column_needs_a_decision() -> None:
     with pytest.raises(PlanError) as error:
-        effective_choices(SUGGESTIONS, [decision("cust_id")])
+        effective_choices(SUGGESTIONS, [accepted("cust_id")])
     assert error.value.code == "MAPPING_NOT_APPROVED"
     assert "5 columns still need a decision" in error.value.message
 
     with pytest.raises(PlanError, match="1 column still needs"):
-        effective_choices(SUGGESTIONS[:2], [decision("cust_id")])
+        effective_choices(SUGGESTIONS[:2], [accepted("cust_id")])
 
     with pytest.raises(PlanError) as error:
         effective_choices([], [])

@@ -201,6 +201,96 @@ export function defineStagedSuite(label: string, harness: StagedHarness): void {
         expect(ai.enqueued).toEqual([]);
       });
 
+      it('refuses an accept made on a suggestion that a mapping re-run changed', async () => {
+        // Accepted as "ph -> phone" (the snapshot stored on the decision) ...
+        await mapped();
+        // ... then the mapping re-runs with the same suggestion: still fine.
+        await harness.workerSuggest(repos, {
+          projectId,
+          sourceId,
+          suggestions: [
+            suggested('cust_id', 0, null, 'High', 'source_record_id'),
+            suggested('ph', 1, 'phone', 'High'),
+            suggested('gender', 2, null, 'Low'),
+          ],
+        });
+        await startJob(owner).expect(202);
+        await repos.jobs.finishIfActive(
+          ai.enqueued[0]?.input.jobId ?? '',
+          { status: 'cancelled', message: 'Cancelled', error: null },
+          new Date(),
+        );
+
+        // A re-run that changes the target: the human never saw "ph -> email".
+        await repos.mappings.deleteBySource(projectId, sourceId);
+        await harness.workerSuggest(repos, {
+          projectId,
+          sourceId,
+          suggestions: [
+            suggested('cust_id', 0, null, 'High', 'source_record_id'),
+            suggested('ph', 1, 'email', 'High'),
+            suggested('gender', 2, null, 'Low'),
+          ],
+        });
+        for (const column of ['cust_id', 'ph', 'gender']) {
+          await repos.mappings.saveDecision(projectId, sourceId, {
+            column,
+            decision: column === 'gender' ? 'reject' : 'accept',
+            target: column === 'ph' ? 'phone' : null,
+            role: column === 'ph' ? 'field' : column === 'cust_id' ? 'source_record_id' : 'ignore',
+            transform: null,
+            schemaVersion: 1,
+            decidedBy: owner.id,
+            decidedAt: new Date(),
+          });
+        }
+
+        const res = await startJob(owner);
+
+        expect(res.status).toBe(409);
+        expect(res.body.error).toMatchObject({
+          code: 'CONFLICT',
+          message: 'Mapping changed after review for: ph. Review these columns again.',
+          details: { reason: 'DECISION_OUTDATED', columns: ['ph'] },
+        });
+
+        // Overriding the column is a fresh human decision: allowed again.
+        await request(app)
+          .patch(`/api/v1/projects/${projectId}/sources/${sourceId}/mappings/ph`)
+          .set(bearer(owner))
+          .send({ decision: 'override', role: 'field', target: 'phone', transform: 'to_e164_in' })
+          .expect(200);
+        await startJob(owner).expect(202);
+      });
+
+      it('stores the accepted suggestion as a snapshot on the decision', async () => {
+        await mapped([]);
+        await request(app)
+          .patch(`/api/v1/projects/${projectId}/sources/${sourceId}/mappings/ph`)
+          .set(bearer(owner))
+          .send({ decision: 'accept' })
+          .expect(200);
+        await request(app)
+          .post(`/api/v1/projects/${projectId}/sources/${sourceId}/mappings/accept-high`)
+          .set(bearer(owner))
+          .expect(200);
+
+        const decisions = await repos.mappings.listDecisions(projectId, sourceId);
+        const byColumn = Object.fromEntries(decisions.map((d) => [d.column, d]));
+        expect(byColumn.ph).toMatchObject({
+          decision: 'accept',
+          role: 'field',
+          target: 'phone',
+          transform: null,
+        });
+        expect(byColumn.cust_id).toMatchObject({
+          decision: 'accept',
+          role: 'source_record_id',
+          target: null,
+          transform: null,
+        });
+      });
+
       it('refuses before profiling and before the mapping has run', async () => {
         const notProfiled = await startJob(owner);
         expect(notProfiled.status).toBe(409);

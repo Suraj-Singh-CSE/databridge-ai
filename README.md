@@ -228,10 +228,11 @@ curl -s http://localhost:8080/api/v1/projects/$PROJECT/sources/$SOURCE/mappings 
 
 - **Start**: `409` (`details.reason`) unless the source is profiled (`SOURCE_NOT_PROFILED`), the
   mapping has run (`MAPPING_NOT_RUN`) and no column is pending (`MAPPING_NOT_APPROVED`, with the
-  count), and while another standardise job works on it. The worker checks again and also fails
+  count), no accept is outdated (`DECISION_OUTDATED`: a mapping re-run changed the accepted
+  suggestion; those columns need review again), and while another standardise job works on it. The worker checks again and also fails
   with `MAPPING_STALE`, `MAPPING_CONFLICT`, `NOTHING_MAPPED`, `SOURCE_CHANGED` or the file errors
   of profiling. Running it again replaces the staged rows.
-- **Effective mapping**: accepted -> the suggestion's target and cleaning step; changed -> the
+- **Effective mapping**: accepted -> the suggestion's target and cleaning step, only while it is the one accepted; changed -> the
   reviewer's; rejected or "Not mapped" -> left out; Record ID -> kept as `sourceRecordId`.
 - **Cleaning steps**: `to_e164_in` (`+91XXXXXXXXXX`), `lowercase` (emails validated),
   `title_case` (names: `SHROFF, RUDRA` -> `Rudra Shroff`), `city` (Bombay -> Mumbai, Bangalore ->
