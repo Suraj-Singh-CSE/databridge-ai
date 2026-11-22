@@ -1,6 +1,6 @@
 # ADR 0018: Clusters and golden records with provenance
 
-- Status: Accepted
+- Status: Accepted (decisions on clusters: see ADR 0019)
 - Date: 2026-11-22
 
 ## Context

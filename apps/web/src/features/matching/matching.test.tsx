@@ -1,6 +1,6 @@
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { delay, http } from 'msw';
+import { delay, http, HttpResponse } from 'msw';
 import { describe, expect, it } from 'vitest';
 
 import type {
@@ -125,12 +125,27 @@ const SUMMARY: ClusterSummary = {
   averageSize: 1.2,
   largestCluster: 4,
   decisionCount: 0,
+  staleDecisionCount: 0,
+  cutLinkCount: 0,
+  conflictingDecisionCount: 0,
   settings: { includeAiSuggested: true, maxClusterSize: 50, sourceTrust: ['crm'] },
   finishedAt: '2026-11-22T10:08:00.000Z',
 };
 
-function clustersOf(outdated = false): ClusterSummaryView {
-  return { summary: SUMMARY, outdated };
+const REVIEW: ClusterSummaryView['review'] = {
+  approvedCount: 0,
+  proposedCount: 2986,
+  approvableHighCount: 1,
+  sameDecisionCount: 0,
+  differentDecisionCount: 0,
+};
+
+function clustersOf(
+  outdated = false,
+  review: Partial<ClusterSummaryView['review']> = {},
+  summary: Partial<ClusterSummary> = {},
+): ClusterSummaryView {
+  return { summary: { ...SUMMARY, ...summary }, outdated, review: { ...REVIEW, ...review } };
 }
 
 function record(id: string, source: string, row: number, fields: Record<string, string | null>) {
@@ -157,6 +172,8 @@ const RAHUL: ClusterView = {
   flags: [],
   reasons: [],
   aiSuggested: false,
+  approval: null,
+  membershipChanged: false,
   links: [{ recordA: 'r1', recordB: 'r2', score: 0.97, kind: 'match', tree: true }],
   members: [
     record('r1', 'CRM', 12, { full_name: 'Rahul Sharma', phone: '+919820012345' }),
@@ -603,7 +620,7 @@ describe('matching roles', () => {
     server.use(http.get(`${API}/jobs/:id/events`, () => sseChannel().response()));
     await pipelineReady();
 
-    expect(screen.getByText(/You can view the matching results/)).toBeInTheDocument();
+    expect(screen.getByText(/You can approve, split and merge customers/)).toBeInTheDocument();
     expect(
       screen.queryByRole('button', { name: /^(Run|Re-run|Clean|Re-clean|Cancel):/ }),
     ).not.toBeInTheDocument();
@@ -674,12 +691,25 @@ describe('customers found', () => {
     expect(await screen.findByText('Single record')).toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: 'AI suggested' }));
-    const table = screen.getByRole('table', { name: 'Customers found' });
-    expect(
-      within(table)
-        .getAllByRole('rowheader')
-        .map((c) => c.textContent),
-    ).toEqual(['C0000000000FF']);
+    await waitFor(() => {
+      expect(listRequests.at(-1)).toBe('limit=20&flag=needs_review&aiSuggested=true');
+    });
+    await user.click(screen.getByRole('button', { name: 'Approved' }));
+    await waitFor(() => {
+      expect(listRequests.at(-1)).toBe(
+        'limit=20&flag=needs_review&aiSuggested=true&status=approved',
+      );
+    });
+    await user.click(screen.getByRole('button', { name: 'Not approved' }));
+    expect(screen.getByRole('button', { name: 'Approved' })).toHaveAttribute(
+      'aria-pressed',
+      'false',
+    );
+    await waitFor(() => {
+      expect(listRequests.at(-1)).toBe(
+        'limit=20&flag=needs_review&aiSuggested=true&status=proposed',
+      );
+    });
   });
 
   it('pages with the api cursor', async () => {
@@ -770,8 +800,8 @@ describe('customer details', () => {
       .map((h) => h.textContent);
     expect(headers).toEqual([
       'Field',
-      'CRMRow 12 · ID CRM-12',
-      'BillingRow 40 · ID Billing-40',
+      'CRMRow 12 · ID CRM-12Split out',
+      'BillingRow 40 · ID Billing-40Split out',
       'Golden record',
     ]);
     const name = within(table).getByRole('rowheader', { name: 'full_name' }).closest('tr');
@@ -825,6 +855,288 @@ describe('customer details', () => {
     expect(within(detail).getByText('Needs review')).toBeInTheDocument();
     expect(within(detail).getByText(/AI suggested$/)).toBeInTheDocument();
     expect(within(detail).queryByText('Differs')).not.toBeInTheDocument();
+  });
+});
+
+describe('match review decisions', () => {
+  const CUSTOMER = 'C0123456789AB';
+
+  /** Records every review request as `METHOD path body`. */
+  function recordRequests() {
+    const calls: { method: string; path: string; body: unknown }[] = [];
+    const take = async (request: Request) => {
+      const url = new URL(request.url);
+      const text = request.method === 'DELETE' ? '' : await request.text();
+      calls.push({
+        method: request.method,
+        path: url.pathname.replace(`/api/v1/projects/${PROJECT_ID}/clusters`, ''),
+        body: text ? (JSON.parse(text) as unknown) : null,
+      });
+    };
+    return { calls, take };
+  }
+
+  async function openRahul(member: ProjectRole = 'data_steward', overrides: Setup = {}) {
+    setup({ member, ...overrides });
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: `Details for ${CUSTOMER}` }));
+    return { user, detail: screen.getByRole('region', { name: /Customer C0123456789AB/ }) };
+  }
+
+  it('approves a group and announces it', async () => {
+    const { calls, take } = recordRequests();
+    server.use(
+      http.post(`${API}/projects/:id/clusters/:customerId/approve`, async ({ request }) => {
+        await take(request);
+        return ok({ customerId: CUSTOMER, status: 'approved', approvedAt: '2026-11-23T10:00:00Z' });
+      }),
+    );
+    const { user, detail } = await openRahul();
+    expect(within(detail).getByText('Proposed')).toBeInTheDocument();
+
+    await user.click(within(detail).getByRole('button', { name: 'Approve group' }));
+
+    expect(await screen.findByText(`Approved customer ${CUSTOMER}.`)).toHaveAttribute(
+      'aria-live',
+      'polite',
+    );
+    expect(calls).toEqual([{ method: 'POST', path: `/${CUSTOMER}/approve`, body: {} }]);
+  });
+
+  it('splits a record out after a confirm with a reason, then follows the rebuild job', async () => {
+    const events = sseChannel();
+    const { calls, take } = recordRequests();
+    const job = makeJob({ type: 'clustering', status: 'queued', progress: 0, payload: {} });
+    let rebuilt = false;
+    server.use(
+      http.post(`${API}/projects/:id/clusters/:customerId/split`, async ({ request }) => {
+        await take(request);
+        return ok({ decisionsWritten: 1, job, jobMessage: null });
+      }),
+      http.get(`${API}/jobs/:id/events`, () => events.response()),
+    );
+    const { user, detail } = await openRahul();
+    server.use(
+      http.get(`${API}/projects/:id/clusters`, ({ request }) => {
+        listRequests.push(new URL(request.url).searchParams.toString());
+        return ok({ ...clustersOf(), items: rebuilt ? [PRIYA] : [RAHUL, PRIYA], nextCursor: null });
+      }),
+    );
+
+    const trigger = within(detail).getByRole('button', { name: 'Split out CRM row 12' });
+    await user.click(trigger);
+    const dialog = screen.getByRole('dialog', { name: 'Split this record out?' });
+    expect(dialog).toHaveTextContent('different person from the other 1 record');
+    await user.type(within(dialog).getByLabelText('Reason (optional)'), 'Different birth date');
+    await user.click(within(dialog).getByRole('button', { name: 'Split out' }));
+
+    await waitFor(() => {
+      expect(calls).toEqual([
+        {
+          method: 'POST',
+          path: `/${CUSTOMER}/split`,
+          body: { recordId: 'r1', reason: 'Different birth date' },
+        },
+      ]);
+    });
+    expect(
+      await screen.findByText('Split saved. The groups are being rebuilt.'),
+    ).toBeInTheDocument();
+    expect(await screen.findByText('Waiting to rebuild the groups')).toBeInTheDocument();
+    events.send(jobFrame({ status: 'running', progress: 60 }));
+    expect(await screen.findByText('Rebuilding the groups: 60%')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Approve group' })).toBeDisabled();
+
+    rebuilt = true;
+    const before = listRequests.length;
+    events.send(jobFrame({ status: 'succeeded', progress: 100 }));
+    events.close();
+    await waitFor(() => {
+      expect(listRequests.length).toBeGreaterThan(before);
+    });
+    await waitFor(() => {
+      expect(screen.queryByRole('rowheader', { name: CUSTOMER })).not.toBeInTheDocument();
+    });
+  });
+
+  it('returns focus to the trigger when a split is cancelled', async () => {
+    const { user, detail } = await openRahul();
+    const trigger = within(detail).getByRole('button', { name: 'Split out Billing row 40' });
+    await user.click(trigger);
+    await user.keyboard('{Escape}');
+    await waitFor(() => {
+      expect(trigger).toHaveFocus();
+    });
+  });
+
+  it('merges with another customer found by id, showing both sizes', async () => {
+    const { calls, take } = recordRequests();
+    server.use(
+      http.post(`${API}/projects/:id/clusters/merge`, async ({ request }) => {
+        await take(request);
+        return ok({
+          decisionsWritten: 1,
+          job: null,
+          jobMessage: 'Your decision is saved, but the clusters could not be rebuilt yet: busy.',
+        });
+      }),
+    );
+    const { user, detail } = await openRahul();
+
+    await user.click(within(detail).getByRole('button', { name: 'Merge with…' }));
+    const dialog = screen.getByRole('dialog', { name: 'Merge with another customer' });
+    const box = within(dialog).getByLabelText('Other customer id');
+    expect(within(dialog).getByRole('button', { name: 'Merge customers' })).toBeDisabled();
+    await user.type(box, `${CUSTOMER}{Enter}`);
+    expect(within(dialog).getByText(/Pick a different customer/)).toBeInTheDocument();
+    await user.clear(box);
+    await user.type(box, 'c0000000000ff{Enter}');
+    expect(await within(dialog).findByText(/into one customer of 4 records/)).toHaveTextContent(
+      'Merge C0123456789AB (2 records) with C0000000000FF (2 records)',
+    );
+    await user.click(within(dialog).getByRole('button', { name: 'Merge customers' }));
+
+    await waitFor(() => {
+      expect(calls).toEqual([
+        { method: 'POST', path: '/merge', body: { customerIds: [CUSTOMER, 'C0000000000FF'] } },
+      ]);
+    });
+    expect(await screen.findByText(/Your decision is saved, but/)).toBeInTheDocument();
+  });
+
+  it('approves all High groups after a confirm that shows the count', async () => {
+    const { calls, take } = recordRequests();
+    server.use(
+      http.post(`${API}/projects/:id/clusters/approve-high`, async ({ request }) => {
+        await take(request);
+        return ok({ approved: 3, alreadyApproved: 2 });
+      }),
+    );
+    setup({ clusters: clustersOf(false, { approvableHighCount: 3 }) });
+    const user = userEvent.setup();
+
+    await user.click(await screen.findByRole('button', { name: 'Approve all High' }));
+    const dialog = screen.getByRole('dialog', { name: 'Approve 3 High-confidence groups?' });
+    await user.click(within(dialog).getByRole('button', { name: 'Approve 3' }));
+
+    expect(
+      await screen.findByText('Approved 3 groups. 2 were already approved.'),
+    ).toBeInTheDocument();
+    expect(calls).toEqual([{ method: 'POST', path: '/approve-high', body: {} }]);
+  });
+
+  it('turns Approve all High off when nothing is waiting', async () => {
+    setup({ clusters: clustersOf(false, { approvableHighCount: 0 }) });
+    expect(await screen.findByRole('button', { name: 'Approve all High' })).toBeDisabled();
+    expect(
+      screen.getByText('No High-confidence groups are waiting for approval.'),
+    ).toBeInTheDocument();
+  });
+
+  it('shows approved and membership-changed states, and undoes an approval', async () => {
+    const { calls, take } = recordRequests();
+    const approved: ClusterView = {
+      ...RAHUL,
+      status: 'approved',
+      approval: { approvedBy: USER_ID, approvedAt: '2026-11-23T10:00:00Z' },
+    };
+    const changed: ClusterView = { ...PRIYA, membershipChanged: true };
+    server.use(
+      http.delete(`${API}/projects/:id/clusters/:customerId/approval`, async ({ request }) => {
+        await take(request);
+        return ok({ customerId: CUSTOMER, status: 'proposed' });
+      }),
+    );
+    const { user, detail } = await openRahul('data_steward', {
+      pages: [{ items: [approved, changed], nextCursor: null }],
+    });
+    const table = screen.getByRole('table', { name: 'Customers found' });
+    expect(
+      within(table).getByRole('rowheader', { name: 'C0000000000FF' }).closest('tr'),
+    ).toHaveTextContent('Membership changed');
+    expect(within(detail).getByText('Approved')).toBeInTheDocument();
+    expect(within(detail).queryByRole('button', { name: 'Approve group' })).not.toBeInTheDocument();
+
+    await user.click(within(detail).getByRole('button', { name: 'Undo approval' }));
+    await user.click(
+      within(screen.getByRole('dialog', { name: 'Undo this approval?' })).getByRole('button', {
+        name: 'Undo approval',
+      }),
+    );
+    await waitFor(() => {
+      expect(calls).toEqual([{ method: 'DELETE', path: `/${CUSTOMER}/approval`, body: null }]);
+    });
+
+    await user.click(screen.getByRole('button', { name: 'Details for C0000000000FF' }));
+    expect(screen.getByText(/Membership changed since approval/)).toBeInTheDocument();
+  });
+
+  it('shows the evidence behind each link from the detail', async () => {
+    const evidence = {
+      score: 0.97,
+      band: 'match' as const,
+      reasons: [{ field: 'phone', level: 'exact', weight: 7, text: 'Same phone' }],
+      aiDecision: 'same' as const,
+      aiConfidence: 0.9,
+      aiReason: 'Same phone and name initial',
+      suggestedBand: 'match' as const,
+    };
+    const withEvidence: ClusterView = {
+      ...RAHUL,
+      links: RAHUL.links.map((link) => ({ ...link, evidence })),
+    };
+    const { detail } = await openRahul('viewer', {
+      pages: [{ items: [withEvidence], nextCursor: null }],
+    });
+    await waitFor(() => {
+      expect(within(detail).getByText(/CRM row 12 and Billing row 40/)).toHaveTextContent(
+        'Match · Same phone · AI says same person (90%): “Same phone and name initial”',
+      );
+    });
+  });
+
+  it('keeps viewers read-only', async () => {
+    const { detail } = await openRahul('viewer');
+    for (const name of [/Approve group/, /Split out/, /Merge with/, /Undo approval/]) {
+      expect(within(detail).queryByRole('button', { name })).not.toBeInTheDocument();
+    }
+    expect(screen.queryByRole('button', { name: 'Approve all High' })).not.toBeInTheDocument();
+  });
+
+  it('lets data engineers decide too', async () => {
+    const { detail } = await openRahul('data_engineer');
+    expect(within(detail).getByRole('button', { name: 'Approve group' })).toBeEnabled();
+  });
+
+  it('explains a refused, forbidden or failed decision in plain words', async () => {
+    const answers = [
+      fail(409, 'CONFLICT', 'Clusters are being rebuilt right now. Wait for that to finish.', {
+        reason: 'CLUSTERING_RUNNING',
+      }),
+      fail(403, 'FORBIDDEN', 'You do not have permission to do this.'),
+    ];
+    server.use(
+      http.post(`${API}/projects/:id/clusters/:customerId/approve`, () => answers.shift()),
+    );
+    const { user, detail } = await openRahul();
+    const approve = within(detail).getByRole('button', { name: 'Approve group' });
+
+    await user.click(approve);
+    expect(await screen.findByText(/Clusters are being rebuilt right now/)).toBeInTheDocument();
+    await user.click(approve);
+    expect(
+      await screen.findByText('You do not have permission to review customers in this project.'),
+    ).toBeInTheDocument();
+    server.use(
+      http.post(`${API}/projects/:id/clusters/:customerId/approve`, () => HttpResponse.error()),
+    );
+    await user.click(approve);
+    expect(await screen.findByText(/We could not reach the server/)).toBeInTheDocument();
+  });
+
+  it('says how many earlier decisions no longer apply', async () => {
+    setup({ clusters: clustersOf(false, {}, { staleDecisionCount: 2 }) });
+    expect(await screen.findByText(/2 earlier decisions no longer apply/)).toBeInTheDocument();
   });
 });
 

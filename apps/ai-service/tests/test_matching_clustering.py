@@ -9,10 +9,13 @@ from app.matching.clustering import (
     MemberRecord,
     PairDecision,
     ScoredPair,
+    StoredDecision,
     cluster_records,
+    cluster_with_decisions,
     customer_id,
     label_of,
     links_of,
+    resolve_decisions,
 )
 
 ASHA = {"full_name": "Asha Rao", "phone": "+919820012345", "date_of_birth": "1990-01-02"}
@@ -167,3 +170,106 @@ def test_a_customer_id_collision_is_refused(monkeypatch: pytest.MonkeyPatch) -> 
     monkeypatch.setattr("app.matching.clustering.customer_id", lambda _keys: "C000000000000")
     with pytest.raises(ValueError, match="collision"):
         cluster_records(records(2), [])
+
+
+# --- a person's decisions: split, merge, both, and contradictions (M4.6b) ---
+
+
+def same(a: str, b: str) -> PairDecision:
+    return PairDecision(a, b, "same")
+
+
+def different(a: str, b: str) -> PairDecision:
+    return PairDecision(a, b, "different")
+
+
+def test_split_a_record_out_by_marking_it_different_from_every_member() -> None:
+    pairs = [match("r1", "r2"), match("r2", "r3"), match("r1", "r3")]
+
+    clusters = cluster_records(records(3), pairs, [different("r3", "r1"), different("r3", "r2")])
+
+    assert [c.member_ids for c in clusters] == [("r1", "r2"), ("r3",)]
+
+
+def test_different_keeps_two_records_apart_through_other_paths() -> None:
+    # r1 and r3 are only joined through r2; the weakest link on that path is cut.
+    pairs = [match("r1", "r2", 0.99), match("r2", "r3", 0.95)]
+
+    clusters, separation = cluster_with_decisions(records(3), pairs, [different("r1", "r3")])
+
+    assert by_member(clusters, "r1").member_ids == ("r1", "r2")
+    assert by_member(clusters, "r3").member_ids == ("r3",)
+    assert (separation.cut_links, separation.conflicting) == (1, 0)
+
+
+def test_cutting_repeats_until_no_path_is_left() -> None:
+    # Two independent paths from r1 to r4: both must be cut.
+    pairs = [
+        match("r1", "r2", 0.99),
+        match("r2", "r4", 0.96),
+        match("r1", "r3", 0.98),
+        match("r3", "r4", 0.97),
+    ]
+
+    clusters, separation = cluster_with_decisions(records(4), pairs, [different("r1", "r4")])
+
+    assert by_member(clusters, "r1").member_ids == ("r1", "r2", "r3")
+    assert by_member(clusters, "r4").member_ids == ("r4",)
+    assert separation.cut_links == 2
+
+
+def test_merge_two_clusters_with_one_same_decision() -> None:
+    pairs = [match("r1", "r2"), match("r3", "r4")]
+
+    (merged,) = cluster_records(records(4), pairs, [same("r2", "r3")])
+
+    assert merged.member_ids == ("r1", "r2", "r3", "r4")
+    assert {link.kind for link in merged.links} == {"match", "human"}
+
+
+def test_split_and_merge_together() -> None:
+    pairs = [match("r1", "r2"), match("r2", "r3"), match("r4", "r5")]
+    decisions = [different("r3", "r1"), different("r3", "r2"), same("r3", "r4")]
+
+    clusters = cluster_records(records(5), pairs, decisions)
+
+    assert [c.member_ids for c in clusters] == [("r3", "r4", "r5"), ("r1", "r2")]
+
+
+def test_contradicting_decisions_cut_a_persons_link_only_when_nothing_else_is_left() -> None:
+    # A person joined r1-r2 and r2-r3 but also said r1 and r3 differ: the direct decision wins.
+    decisions = [same("r1", "r2"), same("r2", "r3"), different("r1", "r3")]
+
+    clusters, separation = cluster_with_decisions(records(3), [], decisions)
+
+    assert by_member(clusters, "r1").member_ids != by_member(clusters, "r3").member_ids
+    assert (separation.cut_links, separation.conflicting) == (1, 1)
+
+
+def test_a_machine_link_is_cut_before_a_persons_link() -> None:
+    pairs = [match("r2", "r3", 0.999)]
+    decisions = [same("r1", "r2"), different("r1", "r3")]
+
+    clusters, separation = cluster_with_decisions(records(3), pairs, decisions)
+
+    assert by_member(clusters, "r1").member_ids == ("r1", "r2")
+    assert separation.conflicting == 0
+
+
+def test_resolve_decisions_follows_keys_and_counts_the_ones_that_no_longer_apply() -> None:
+    members = [MemberRecord(f"new{i}", f"src:{i}", "crm", 0, i, dict(ASHA)) for i in (1, 2, 3)]
+    stored = [
+        StoredDecision("old1", "old2", "same", "src:1", "src:2"),
+        StoredDecision("old1", "old2", "different", "src:1", "src:2"),  # later: wins
+        StoredDecision("new2", "new3", "same"),  # no keys: by id
+        StoredDecision("old1", "old9", "different", "src:1", "src:9"),  # record gone
+        StoredDecision("gone", "new3", "same"),
+    ]
+
+    resolved, stale = resolve_decisions(stored, members)
+
+    assert sorted(resolved, key=lambda d: d.record_a) == [
+        PairDecision("new1", "new2", "different"),
+        PairDecision("new2", "new3", "same"),
+    ]
+    assert stale == 2

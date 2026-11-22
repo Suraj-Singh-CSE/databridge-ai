@@ -24,7 +24,7 @@ from pymongo import ASCENDING
 from pymongo.database import Database
 
 from app.mapping.models import TargetSchema
-from app.matching.clustering import Cluster, MemberRecord, PairDecision, ScoredPair
+from app.matching.clustering import Cluster, MemberRecord, ScoredPair, StoredDecision
 from app.matching.review_store import TARGET_SCHEMAS_COLLECTION
 from app.matching.scoring_store import ScoreStore
 from app.matching.survivorship import FieldChoice, GoldenRecord
@@ -124,14 +124,24 @@ class ClusterStore(ScoreStore):
             for doc in cursor
         ]
 
-    def decisions(self, project_id: str) -> list[PairDecision]:
-        """A person's decisions on pairs (``recordA``, ``recordB``, ``decision``)."""
+    def decisions(self, project_id: str) -> list[StoredDecision]:
+        """A person's decisions on pairs, oldest first (written by apps/api, ADR 0019).
+
+        ``recordA``/``recordB`` are the staged record ids when decided, ``keyA``/``keyB`` the
+        records' stable keys; clustering resolves the keys to today's records.
+        """
         cursor = self._decisions.find(
             {"projectId": ObjectId(project_id), "decision": {"$in": ["same", "different"]}},
-            {"recordA": 1, "recordB": 1, "decision": 1},
-        )
+            {"recordA": 1, "recordB": 1, "keyA": 1, "keyB": 1, "decision": 1},
+        ).sort([("decidedAt", ASCENDING), ("_id", ASCENDING)])
         return [
-            PairDecision(str(doc["recordA"]), str(doc["recordB"]), doc["decision"])
+            StoredDecision(
+                str(doc["recordA"]),
+                str(doc["recordB"]),
+                doc["decision"],
+                doc.get("keyA"),
+                doc.get("keyB"),
+            )
             for doc in cursor
         ]
 

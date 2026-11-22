@@ -1,6 +1,7 @@
 import { createMongoAuditRepository } from './modules/audit/audit.repository.js';
 import { createMongoClusterRepository } from './modules/clusters/cluster.repository.js';
-import type { ClusterRepository } from './modules/clusters/cluster.types.js';
+import type { ClusterRepository, ReviewRepository } from './modules/clusters/cluster.types.js';
+import { createMongoReviewRepository } from './modules/clusters/review.repository.js';
 import { createMongoCandidateRepository } from './modules/candidates/candidate.repository.js';
 import type { CandidateRepository } from './modules/candidates/candidate.types.js';
 import type { AuditRepository } from './modules/audit/audit.types.js';
@@ -39,6 +40,8 @@ export interface Repositories {
   candidates: CandidateRepository;
   scores: ScoreRepository;
   clusters: ClusterRepository;
+  /** Review decisions on clusters: pair decisions and approvals (ADR 0019). */
+  review: ReviewRepository;
   audit: AuditRepository;
 }
 
@@ -56,6 +59,7 @@ export function createMongoRepositories(): Repositories {
     candidates: createMongoCandidateRepository(),
     scores: createMongoScoreRepository(),
     clusters: createMongoClusterRepository(),
+    review: createMongoReviewRepository(),
     audit: createMongoAuditRepository(),
   };
 }

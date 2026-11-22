@@ -37,3 +37,9 @@ export const canRunMatching = canManageSources;
 
 export const READ_ONLY_MATCHING_NOTE =
   'You can view the matching results. Only the project owner, an admin or a data engineer can run the matching steps.';
+
+/** Approve, split and merge proposed customers: those who review mappings (stewards and up). */
+export const canReviewMatches = canReviewMappings;
+
+export const STEWARD_MATCHING_NOTE =
+  'You can approve, split and merge customers. Only the project owner, an admin or a data engineer can run the matching steps.';

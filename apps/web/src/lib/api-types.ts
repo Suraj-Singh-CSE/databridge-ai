@@ -461,6 +461,47 @@ export interface ClusterView extends Cluster {
   /** In `memberRecordIds` order; null when a record is gone. */
   members: (CandidateRecord | null)[];
   goldenRecord: GoldenRecord | null;
+  /** Set while a person's approval matches this exact membership (ADR 0019). */
+  approval: { approvedBy: string; approvedAt: string } | null;
+  /** Not approved, but some member was in a group a person approved: the membership changed. */
+  membershipChanged: boolean;
+}
+
+/** The scored pair behind a link; null for a link a person made. */
+export interface LinkEvidence {
+  score: number;
+  band: ScoreBand;
+  reasons: { field: string; level: string; weight: number; text: string }[];
+  aiDecision: 'same' | 'different' | 'unsure' | null;
+  aiConfidence: number | null;
+  aiReason: string | null;
+  suggestedBand: ScoreBand;
+}
+
+export interface ClusterDetailView extends ClusterView {
+  links: (ClusterLink & { evidence: LinkEvidence | null })[];
+}
+
+export interface ClusterReviewCounts {
+  approvedCount: number;
+  proposedCount: number;
+  /** What "Approve all High" would approve now. */
+  approvableHighCount: number;
+  sameDecisionCount: number;
+  differentDecisionCount: number;
+}
+
+export interface ApproveHighResult {
+  approved: number;
+  alreadyApproved: number;
+}
+
+/** Split and merge: the decision is saved, and a clustering job applies it. */
+export interface ReclusterResult {
+  decisionsWritten: number;
+  job: Job | null;
+  /** Why the job did not start; null when it did. */
+  jobMessage: string | null;
 }
 
 export interface ClusterSummary {
@@ -478,6 +519,10 @@ export interface ClusterSummary {
   averageSize: number;
   largestCluster: number;
   decisionCount: number;
+  /** Decisions naming a record that no longer exists: they no longer apply. */
+  staleDecisionCount: number;
+  cutLinkCount: number;
+  conflictingDecisionCount: number;
   settings: { includeAiSuggested: boolean; maxClusterSize: number; sourceTrust: string[] };
   finishedAt: string;
 }
@@ -486,6 +531,7 @@ export interface ClusterSummaryView {
   summary: ClusterSummary;
   /** True when the pairs were scored or reviewed again, or the scores are themselves outdated. */
   outdated: boolean;
+  review: ClusterReviewCounts;
 }
 
 export interface ClusterPage extends ClusterSummaryView {
@@ -495,5 +541,5 @@ export interface ClusterPage extends ClusterSummaryView {
 }
 
 export interface ClusterDetail extends ClusterSummaryView {
-  cluster: ClusterView;
+  cluster: ClusterDetailView;
 }

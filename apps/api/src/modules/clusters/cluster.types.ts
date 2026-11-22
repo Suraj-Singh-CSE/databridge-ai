@@ -105,16 +105,25 @@ export interface ClusterSummary {
   aiSuggestedCount: number;
   averageSize: number;
   largestCluster: number;
+  /** A person's decisions the run applied. */
   decisionCount: number;
+  /** Decisions naming a record that no longer exists (its source was deleted or changed). */
+  staleDecisionCount: number;
+  /** Links cut to keep records marked `different` apart (ADR 0019). */
+  cutLinkCount: number;
+  /** Of those, links a person had marked `same` (two decisions contradict each other). */
+  conflictingDecisionCount: number;
   settings: { includeAiSuggested: boolean; maxClusterSize: number; sourceTrust: string[] };
   finishedAt: Date;
 }
 
 export interface ClusterPageQuery {
   runId: string;
-  status?: ClusterStatus | undefined;
   flag?: ClusterFlag | undefined;
   minSize?: number | undefined;
+  aiSuggested?: boolean | undefined;
+  /** Only these customer ids (`in`) or all but these (`notIn`): the approval filter. */
+  customerIds?: { in: string[] } | { notIn: string[] } | undefined;
   afterPosition: number;
   limit: number;
 }
@@ -125,6 +134,66 @@ export interface ClusterRepository {
   listClusters(projectId: string, query: ClusterPageQuery): Promise<Cluster[]>;
   findCluster(projectId: string, runId: string, customerId: string): Promise<Cluster | null>;
   findGolden(projectId: string, runId: string, customerIds: string[]): Promise<GoldenRecord[]>;
+  /** How many clusters of the run have one of these customer ids. */
+  countWithIds(projectId: string, runId: string, customerIds: string[]): Promise<number>;
+  /** Clusters "Approve all High" may approve: 2+ records, label High, no `needs_review`. */
+  listApprovable(projectId: string, runId: string): Promise<Cluster[]>;
+  /** How many of those are not among these (already approved) customer ids. */
+  countApprovable(projectId: string, runId: string, exceptIds: string[]): Promise<number>;
   /** Clusters, golden records and summary: on project deletion, and when a source is deleted. */
+  deleteByProject(projectId: string): Promise<void>;
+}
+
+/* ---------- Review decisions (M4.6b, ADR 0019) ---------- */
+
+export const PAIR_DECISIONS = ['same', 'different'] as const;
+export type PairDecisionValue = (typeof PAIR_DECISIONS)[number];
+export const DECISION_ACTIONS = ['approve', 'split', 'merge'] as const;
+export type DecisionAction = (typeof DECISION_ACTIONS)[number];
+
+/**
+ * A person's decision on two staged records (`match_decisions`), the source of truth the
+ * clustering job applies. Keys are `<sourceId>:<sourceRecordId>` (or `#<row>`), the same keys
+ * as customer ids, so a decision survives re-standardisation; one decision per key pair.
+ */
+export interface PairDecision {
+  recordA: string;
+  recordB: string;
+  keyA: string;
+  keyB: string;
+  decision: PairDecisionValue;
+  /** Which review action wrote it, and on which customer id. */
+  action: DecisionAction;
+  customerId: string;
+  reason: string | null;
+  decidedBy: string;
+  decidedAt: Date;
+  /** The clustering run the reviewer was looking at. */
+  runId: string;
+}
+
+/** An approved cluster (`cluster_approvals`), keyed by its membership (= its customer id). */
+export interface ClusterApproval {
+  customerId: string;
+  memberKeys: string[];
+  approvedBy: string;
+  approvedAt: Date;
+  runId: string;
+}
+
+export interface ReviewRepository {
+  /** Upserts by (keyA, keyB): a later decision on the same two records replaces the earlier. */
+  savePairDecisions(projectId: string, decisions: PairDecision[]): Promise<void>;
+  countPairDecisions(projectId: string): Promise<Record<PairDecisionValue, number>>;
+  /** Removes the `same` decisions an approval of this customer id wrote. */
+  deleteApprovalDecisions(projectId: string, customerId: string): Promise<void>;
+  /** Saves approvals; approvals sharing a member with a new one are replaced (superseded). */
+  saveApprovals(projectId: string, approvals: ClusterApproval[]): Promise<void>;
+  /** Every approval of the project (stale ones too: they explain "membership changed"). */
+  listApprovals(projectId: string): Promise<ClusterApproval[]>;
+  /** Approvals holding any of these member keys. */
+  findApprovalsByKeys(projectId: string, keys: string[]): Promise<ClusterApproval[]>;
+  deleteApproval(projectId: string, customerId: string): Promise<ClusterApproval | null>;
+  /** On project deletion only: decisions outlive a deleted source (they are counted stale). */
   deleteByProject(projectId: string): Promise<void>;
 }

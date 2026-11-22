@@ -130,6 +130,8 @@ export interface ScoreRepository {
   findSummary(projectId: string): Promise<ScoreSummary | null>;
   /** One run's scores in position order (highest score first). */
   listScores(projectId: string, query: ScorePageQuery): Promise<PairScore[]>;
+  /** One run's scored pairs whose two records are both among these ids (a cluster's links). */
+  findAmong(projectId: string, runId: string, recordIds: readonly string[]): Promise<PairScore[]>;
   /** Scores and summary: on project deletion, and when a source is deleted. */
   deleteByProject(projectId: string): Promise<void>;
 }

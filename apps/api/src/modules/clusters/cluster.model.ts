@@ -1,6 +1,13 @@
 import { Schema, model, type InferSchemaType } from 'mongoose';
 
-import { CLUSTER_FLAGS, CLUSTER_STATUSES, CONFIDENCE_LABELS, LINK_KINDS } from './cluster.types.js';
+import {
+  CLUSTER_FLAGS,
+  CLUSTER_STATUSES,
+  CONFIDENCE_LABELS,
+  DECISION_ACTIONS,
+  LINK_KINDS,
+  PAIR_DECISIONS,
+} from './cluster.types.js';
 
 /** Written by the clustering worker (apps/ai-service/app/matching/cluster_store.py); the api reads. */
 const clusterSchema = new Schema(
@@ -75,6 +82,10 @@ const clusterSummarySchema = new Schema(
     averageSize: { type: Number, required: true },
     largestCluster: { type: Number, required: true },
     decisionCount: { type: Number, required: true },
+    // Written since M4.6b; summaries of earlier runs have none.
+    staleDecisionCount: { type: Number, default: 0 },
+    cutLinkCount: { type: Number, default: 0 },
+    conflictingDecisionCount: { type: Number, default: 0 },
     settings: {
       type: new Schema(
         {
@@ -92,6 +103,45 @@ const clusterSummarySchema = new Schema(
 );
 clusterSummarySchema.index({ projectId: 1 }, { unique: true });
 
+/** A person's same / different decision on two records; written here, read by the worker. */
+const matchDecisionSchema = new Schema(
+  {
+    projectId: { type: Schema.Types.ObjectId, ref: 'Project', required: true },
+    recordA: { type: Schema.Types.ObjectId, ref: 'StagedRecord', required: true },
+    recordB: { type: Schema.Types.ObjectId, ref: 'StagedRecord', required: true },
+    keyA: { type: String, required: true },
+    keyB: { type: String, required: true },
+    decision: { type: String, enum: PAIR_DECISIONS, required: true },
+    action: { type: String, enum: DECISION_ACTIONS, required: true },
+    customerId: { type: String, required: true },
+    reason: { type: String, default: null },
+    decidedBy: { type: Schema.Types.ObjectId, ref: 'User', required: true },
+    decidedAt: { type: Date, required: true },
+    runId: { type: String, required: true },
+  },
+  { collection: 'match_decisions' },
+);
+matchDecisionSchema.index({ projectId: 1, keyA: 1, keyB: 1 }, { unique: true });
+matchDecisionSchema.index({ projectId: 1, decidedAt: 1 });
+
+const clusterApprovalSchema = new Schema(
+  {
+    projectId: { type: Schema.Types.ObjectId, ref: 'Project', required: true },
+    customerId: { type: String, required: true },
+    memberKeys: { type: [String], default: [] },
+    approvedBy: { type: Schema.Types.ObjectId, ref: 'User', required: true },
+    approvedAt: { type: Date, required: true },
+    runId: { type: String, required: true },
+  },
+  { collection: 'cluster_approvals' },
+);
+clusterApprovalSchema.index({ projectId: 1, customerId: 1 }, { unique: true });
+clusterApprovalSchema.index({ projectId: 1, memberKeys: 1 });
+
+export type MatchDecisionDoc = InferSchemaType<typeof matchDecisionSchema>;
+export type ClusterApprovalDoc = InferSchemaType<typeof clusterApprovalSchema>;
+export const MatchDecisionModel = model('MatchDecision', matchDecisionSchema);
+export const ClusterApprovalModel = model('ClusterApproval', clusterApprovalSchema);
 export type ClusterDoc = InferSchemaType<typeof clusterSchema>;
 export type GoldenRecordDoc = InferSchemaType<typeof goldenRecordSchema>;
 export type ClusterSummaryDoc = InferSchemaType<typeof clusterSummarySchema>;

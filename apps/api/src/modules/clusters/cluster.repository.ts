@@ -25,6 +25,9 @@ interface StoredProvenance {
   alternatives: { value: string; count: number; recordIds: Types.ObjectId[]; sources: string[] }[];
 }
 
+/** Summaries written before M4.6b lack the decision counts (lean reads skip defaults). */
+const orZero = (count: number | undefined): number => count ?? 0;
+
 function toSummary(doc: ClusterSummaryDoc): ClusterSummary {
   return {
     jobId: doc.jobId.toHexString(),
@@ -41,6 +44,9 @@ function toSummary(doc: ClusterSummaryDoc): ClusterSummary {
     averageSize: doc.averageSize,
     largestCluster: doc.largestCluster,
     decisionCount: doc.decisionCount,
+    staleDecisionCount: orZero(doc.staleDecisionCount),
+    cutLinkCount: orZero(doc.cutLinkCount),
+    conflictingDecisionCount: orZero(doc.conflictingDecisionCount),
     settings: {
       includeAiSuggested: doc.settings.includeAiSuggested,
       maxClusterSize: doc.settings.maxClusterSize,
@@ -98,19 +104,39 @@ function toGolden(doc: GoldenRecordDoc): GoldenRecord {
   };
 }
 
+/** What "Approve all High" approves: 2+ records, label High, not flagged for review. */
+function approvable(projectId: string, runId: string) {
+  return {
+    projectId,
+    runId,
+    size: { $gte: 2 },
+    label: 'High' as const,
+    flags: { $ne: 'needs_review' as const },
+  };
+}
+
 export function createMongoClusterRepository(): ClusterRepository {
   return {
     async findSummary(projectId) {
       const doc = await ClusterSummaryModel.findOne({ projectId }).lean<ClusterSummaryDoc>();
       return doc ? toSummary(doc) : null;
     },
-    async listClusters(projectId, { runId, status, flag, minSize, afterPosition, limit }) {
+    async listClusters(
+      projectId,
+      { runId, flag, minSize, aiSuggested, customerIds, afterPosition, limit },
+    ) {
       const docs = await ClusterModel.find({
         projectId,
         runId,
-        ...(status ? { status } : {}),
         ...(flag ? { flags: flag } : {}),
         ...(minSize ? { size: { $gte: minSize } } : {}),
+        ...(aiSuggested === undefined ? {} : { aiSuggested }),
+        ...(customerIds
+          ? {
+              customerId:
+                'in' in customerIds ? { $in: customerIds.in } : { $nin: customerIds.notIn },
+            }
+          : {}),
         position: { $gt: afterPosition },
       })
         .sort({ position: 1 })
@@ -129,6 +155,22 @@ export function createMongoClusterRepository(): ClusterRepository {
         customerId: { $in: customerIds },
       }).lean<GoldenRecordDoc[]>();
       return docs.map(toGolden);
+    },
+    async countWithIds(projectId, runId, customerIds) {
+      if (customerIds.length === 0) return 0;
+      return ClusterModel.countDocuments({ projectId, runId, customerId: { $in: customerIds } });
+    },
+    async listApprovable(projectId, runId) {
+      const docs = await ClusterModel.find(approvable(projectId, runId))
+        .sort({ position: 1 })
+        .lean<ClusterDoc[]>();
+      return docs.map(toCluster);
+    },
+    async countApprovable(projectId, runId, exceptIds) {
+      return ClusterModel.countDocuments({
+        ...approvable(projectId, runId),
+        customerId: { $nin: exceptIds },
+      });
     },
     async deleteByProject(projectId) {
       await ClusterModel.deleteMany({ projectId });
