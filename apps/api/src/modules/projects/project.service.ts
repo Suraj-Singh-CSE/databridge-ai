@@ -52,6 +52,7 @@ export function createProjectService(
     | 'targetSchemas'
     | 'mappings'
     | 'stagedRecords'
+    | 'candidates'
     | 'audit'
   >,
   audit: AuditService,
@@ -116,6 +117,7 @@ export function createProjectService(
       await repos.columnProfiles.deleteByProject(project.id);
       await repos.mappings.deleteByProject(project.id);
       await repos.stagedRecords.deleteByProject(project.id);
+      await repos.candidates.deleteByProject(project.id);
       await repos.targetSchemas.deleteByProject(project.id);
       await repos.sources.deleteByProject(project.id);
       await repos.jobs.deleteByProject(project.id);

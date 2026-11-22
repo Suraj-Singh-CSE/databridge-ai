@@ -461,6 +461,29 @@ jobs:
           test "$code" = 400
           echo "ok: reviewed mapping applied to all 143 rows; phones are E.164"
 
+          # Candidate pairs: a project-level job (payload {}) over every standardised source.
+          job=$(curl -sS --fail-with-body -X POST "$api/projects/$project/jobs" -H "$auth" \
+            -H 'Content-Type: application/json' -d '{"type":"candidates","payload":{}}' | jq -r '.data.job.id')
+          curl -sSN --fail --max-time 90 "$api/jobs/$job/events" -H "$auth" | sed -n 's/^data: //p' > "/tmp/candidates-$job"
+          echo "candidates job $job: $(jq -r '"\(.status) \(.progress)% \(.message)"' "/tmp/candidates-$job" | paste -sd ',' -)"
+          jq -s -e 'last | .status == "succeeded" and .result.recordCount == 143' "/tmp/candidates-$job" > /dev/null
+          candidates="$api/projects/$project/candidates"
+          curl -sS --fail-with-body "$candidates/summary" -H "$auth" > /tmp/candidates-summary
+          jq -c '.data | {outdated, summary: .summary | {recordCount, pairCount, reductionRatio, oversizeBlocksSkipped, pairsByKey}}' /tmp/candidates-summary
+          jq -e '.data.outdated == false and .data.summary.recordCount == 143
+            and .data.summary.pairCount > 0 and .data.summary.reductionRatio > 0.99' /tmp/candidates-summary > /dev/null
+          curl -sS --fail-with-body "$candidates?limit=100" -H "$auth" > /tmp/candidates
+          # Shape and formats only: no record value is printed.
+          jq -c '{pairs: (.data.items | length), keys: [.data.items[].keys], nextCursor: .data.nextCursor}' /tmp/candidates
+          jq -e '(.data.items | length) > 0
+            and all(.data.items[]; (.keys | length) > 0 and .recordA.id < .recordB.id
+              and .recordA.sourceName == "crm_customers" and (.recordA.fields | type) == "object"
+              and (.recordB.fields.phone == null or (.recordB.fields.phone | test("^\\+91[6-9][0-9]{9}$"))))' \
+            /tmp/candidates > /dev/null
+          code=$(curl -s -o /dev/null -w '%{http_code}' "$candidates?limit=101" -H "$auth")
+          test "$code" = 400
+          echo "ok: candidate pairs found and listed side by side"
+
       - name: AI service is not published to the host
         run: |
           if curl -s --max-time 3 http://localhost:8000/internal/v1/health; then

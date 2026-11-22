@@ -30,6 +30,9 @@ const mappingPayload = z.strictObject({ sourceId: objectId });
 /** `standardise`: apply the reviewed mapping to every row (handlers/standardise.py). */
 const standardisePayload = z.strictObject({ sourceId: objectId });
 
+/** `candidates`: project-level, every standardised source together (handlers/candidates.py). */
+const candidatesPayload = z.strictObject({});
+
 /**
  * One entry per job type that can be started. A new type adds its payload schema here and its
  * handler in apps/ai-service/app/worker/handlers (the ai-service validates the payload again).
@@ -41,6 +44,7 @@ export const createJobBody = z.discriminatedUnion(
     z.strictObject({ type: z.literal('profile'), payload: profilePayload }),
     z.strictObject({ type: z.literal('mapping'), payload: mappingPayload }),
     z.strictObject({ type: z.literal('standardise'), payload: standardisePayload }),
+    z.strictObject({ type: z.literal('candidates'), payload: candidatesPayload }),
   ],
   { error: 'unknown job type' },
 );

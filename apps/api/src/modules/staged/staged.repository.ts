@@ -1,5 +1,9 @@
+import type { Types } from 'mongoose';
+
 import { StagedRecordModel, type StagedRecordDoc } from './staged.model.js';
-import type { StagedRecord, StagedRecordRepository } from './staged.types.js';
+import type { StagedRecord, StagedRecordRef, StagedRecordRepository } from './staged.types.js';
+
+type StagedRecordWithId = StagedRecordDoc & { _id: Types.ObjectId };
 
 export function toStagedRecord(doc: StagedRecordDoc): StagedRecord {
   return {
@@ -25,6 +29,17 @@ export function createMongoStagedRecordRepository(): StagedRecordRepository {
         .limit(limit)
         .lean<StagedRecordDoc[]>();
       return docs.map(toStagedRecord);
+    },
+    async findByIds(projectId, ids) {
+      if (ids.length === 0) return [];
+      const docs = await StagedRecordModel.find({ projectId, _id: { $in: ids } }).lean<
+        StagedRecordWithId[]
+      >();
+      return docs.map((doc): StagedRecordRef => ({
+        id: doc._id.toHexString(),
+        sourceId: doc.sourceId.toHexString(),
+        ...toStagedRecord(doc),
+      }));
     },
     async deleteBySource(projectId, sourceId) {
       await StagedRecordModel.deleteMany({ projectId, sourceId });

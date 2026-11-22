@@ -29,6 +29,15 @@ compares each staged field with `answers/golden_records.csv` through `answers/cl
 prints per-field accuracy (rows with a source value), values missing at the source, null rate and
 issue counts. `tests/test_evaluate_standardise.py` holds per-field floors (ADR 0014).
 
+## Blocking quality
+
+`python -m dbeval.evaluate_blocking [--data eval/data] [--max-block-size 200]` standardises the
+three files the same way, runs the ai-service's blocking over all of them together and compares
+the candidate pairs with the true pairs of `answers/clusters.csv` (two records of one person). It
+prints pair completeness (recall), reduction ratio, pairs quality (precision), the candidate
+count, and per key the pairs it found, the pairs only it found and oversize blocks skipped.
+`tests/test_evaluate_blocking.py` holds the floors (ADR 0015).
+
 ## Column-mapping accuracy
 
 `python -m dbeval.evaluate_mapping [--data eval/data]` profiles the three files with the

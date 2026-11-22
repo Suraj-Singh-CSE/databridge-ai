@@ -1,4 +1,6 @@
 import { createMongoAuditRepository } from './modules/audit/audit.repository.js';
+import { createMongoCandidateRepository } from './modules/candidates/candidate.repository.js';
+import type { CandidateRepository } from './modules/candidates/candidate.types.js';
 import type { AuditRepository } from './modules/audit/audit.types.js';
 import { createMongoRefreshTokenRepository } from './modules/auth/refresh-token.repository.js';
 import type { RefreshTokenRepository } from './modules/auth/refresh-token.types.js';
@@ -30,6 +32,7 @@ export interface Repositories {
   targetSchemas: TargetSchemaRepository;
   mappings: MappingRepository;
   stagedRecords: StagedRecordRepository;
+  candidates: CandidateRepository;
   audit: AuditRepository;
 }
 
@@ -44,6 +47,7 @@ export function createMongoRepositories(): Repositories {
     targetSchemas: createMongoTargetSchemaRepository(),
     mappings: createMongoMappingRepository(),
     stagedRecords: createMongoStagedRecordRepository(),
+    candidates: createMongoCandidateRepository(),
     audit: createMongoAuditRepository(),
   };
 }

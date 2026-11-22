@@ -18,6 +18,12 @@ export interface StagedRecord {
   issues: StagedIssue[];
 }
 
+/** A staged record looked up by id (candidate pairs point at records of several sources). */
+export interface StagedRecordRef extends StagedRecord {
+  id: string;
+  sourceId: string;
+}
+
 export interface StagedPageQuery {
   runId: string;
   /** Rows after this row number. */
@@ -29,6 +35,8 @@ export interface StagedPageQuery {
 export interface StagedRecordRepository {
   /** One run's rows in row order. */
   list(projectId: string, sourceId: string, query: StagedPageQuery): Promise<StagedRecord[]>;
+  /** Records of the project with these ids (any order; unknown ids are left out). */
+  findByIds(projectId: string, ids: readonly string[]): Promise<StagedRecordRef[]>;
   deleteBySource(projectId: string, sourceId: string): Promise<void>;
   deleteByProject(projectId: string): Promise<void>;
 }

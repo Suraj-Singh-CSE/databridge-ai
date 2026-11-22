@@ -248,6 +248,37 @@ curl -s http://localhost:8080/api/v1/projects/$PROJECT/sources/$SOURCE/mappings 
   project's data, as in the preview); they are never logged. `409` before the first run.
 - **Accuracy** against the golden records: `cd eval && python -m dbeval.evaluate_standardise`.
 
+**Candidate pairs (blocking).** Before records are compared in detail, the `candidates` job picks
+the pairs worth comparing: those sharing at least one blocking key across all standardised sources
+of the project. On the full 6,095-record dataset it keeps 1,322 of 18.6 million possible pairs
+and still finds 99.5% of the true duplicate pairs. No LLM is involved. Design notes:
+[ADR 0015](docs/adr/0015-blocking.md).
+
+| Method | Path (under `/api/v1/projects/:projectId`)    | Who                         | Result                                         |
+| ------ | --------------------------------------------- | --------------------------- | ---------------------------------------------- |
+| POST   | `/jobs` `{ type: "candidates", payload: {} }` | owner, admin, data_engineer | 202 `{ job }`                                  |
+| GET    | `/candidates/summary`                         | any member                  | 200 `{ summary, outdated }`                    |
+| GET    | `/candidates?limit=&cursor=`                  | any member                  | 200 `{ summary, outdated, items, nextCursor }` |
+
+- **Start**: project-level (no `sourceId`). `409` (`details.reason`) unless at least one source is
+  standardised (`NO_STANDARDISED_SOURCES`), no source changed after its last standardise run
+  (`STANDARDISATION_OUTDATED`, with `sourceIds`), no standardise job is running
+  (`STANDARDISE_RUNNING`) and no other candidates job (`CANDIDATES_RUNNING`). Sources never
+  standardised are left out. The worker checks again and also fails with `STAGED_ROWS_OUTDATED` or
+  `SOURCES_CHANGED`. Running it again replaces the pairs.
+- **Keys**: exact phone; exact email; email local part (5+ characters); date of birth + first
+  initial + last-name sound code; last-name sound code + first 3 letters + PIN or city; sorted
+  sound codes of every name word + PIN or city. A key value shared by more than
+  `BLOCKING_MAX_BLOCK_SIZE` records (default 200) is skipped and counted.
+- **Pair**: `{ position, keys, recordA, recordB }`, strongest evidence (most keys) first; each
+  record is `{ id, sourceId, sourceName, rowNumber, sourceRecordId, fields, issues }` (`null` if
+  its source was standardised again since). `limit` 1-100 (default 20); pass `nextCursor` as
+  `cursor`. `summary` has record and pair counts, the reduction ratio, pairs by key, pairs only one
+  key found, and oversize blocks skipped. `outdated` is true once a source was standardised again,
+  re-profiled or added. `409` before the first run. Pairs are deleted with the project and when a
+  source is deleted.
+- **Quality**: `cd eval && python -m dbeval.evaluate_blocking`.
+
 **Background jobs.** Long work (profiling, mapping; matching and pipelines later) runs
 in a Celery worker, not in the request. The api owns the job record in MongoDB; the worker moves it
 forward and publishes every change to Redis; the browser watches it live over Server-Sent Events.
@@ -460,6 +491,21 @@ The remaining name, city and address differences are typos, initials, swapped fi
 misspellings and abbreviations in the sources: cleaning keeps them, and entity resolution (the next step)
 is where they are matched. CI holds floors per field (`eval/tests/test_evaluate_standardise.py`).
 
+### Blocking quality
+
+`python -m dbeval.evaluate_blocking` standardises every source with the answer-key mapping, runs
+blocking over all of them together and compares the candidates with the true duplicate pairs of
+`clusters.csv` (`--data <folder>` for a generated set):
+
+| Set            | Records | True pairs | Candidates | Pair completeness | Reduction ratio | Pairs quality |
+| -------------- | ------: | ---------: | ---------: | ----------------: | --------------: | ------------: |
+| samples        |     385 |        103 |        102 |            99.03% |         99.862% |        100.0% |
+| full (seed 42) |   6,095 |      1,294 |      1,322 |            99.54% |        99.9929% |         97.4% |
+
+Pair completeness is the share of true pairs among the candidates (a pair missed here can never be
+matched later); reduction ratio is 1 - candidates / all possible pairs; pairs quality is the share
+of candidates that are true pairs. CI holds floors (`eval/tests/test_evaluate_blocking.py`).
+
 ## CI
 
 GitHub Actions (`.github/workflows/ci.yml`) runs on every pull request and on pushes to `main`:
@@ -478,7 +524,8 @@ never on push or pull request (see "Evaluating mapping accuracy").
   through the proxy, source uploads through the proxy (CSV and XLSX samples, list with row count,
   preview, an `.exe` rejected, the file visible read-only to the AI service), background jobs through
   the proxy (a demo job streamed with `curl -N` until it succeeds with increasing progress, a
-  `failAtStep` job that fails with the handler's code, a long job cancelled mid-run), that the AI service is not
+  `failAtStep` job that fails with the handler's code, a long job cancelled mid-run), profiling,
+  mapping, standardising and finding candidate pairs for the CRM sample, that the AI service is not
   reachable from the host, and that containers run as non-root. Then it runs the Playwright e2e
   tests against the stack and uploads screenshots (`web-screenshots`) and, on failure, the
   Playwright report (`playwright-report`).

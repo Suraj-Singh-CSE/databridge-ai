@@ -1,10 +1,12 @@
 import { defineApiSuite } from './support/api-suite.js';
+import { defineCandidatesSuite } from './support/candidates-suite.js';
 import { defineJobsSuite } from './support/jobs-suite.js';
 import type { Repositories } from '../src/repositories.js';
 
 import {
   createMemoryRepositories,
   type MemoryRepositories,
+  type StagedWrite,
   type SuggestionWrite,
 } from './support/memory-repositories.js';
 import { defineMappingsSuite } from './support/mappings-suite.js';
@@ -47,10 +49,18 @@ const memoryMappings = {
   },
 };
 defineMappingsSuite('in-memory repositories', memoryMappings);
-defineStagedSuite('in-memory repositories', {
+const memoryStaged = {
   ...memoryMappings,
-  async workerStage(repos, write) {
+  async workerStage(repos: Repositories, write: StagedWrite) {
     await Promise.resolve();
     (repos as MemoryRepositories).stagedRecords.workerSave(write);
+  },
+};
+defineStagedSuite('in-memory repositories', memoryStaged);
+defineCandidatesSuite('in-memory repositories', {
+  ...memoryStaged,
+  async workerCandidates(repos, write) {
+    await Promise.resolve();
+    (repos as MemoryRepositories).candidates.workerSave(write);
   },
 });
