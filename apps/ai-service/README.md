@@ -127,7 +127,8 @@ job end to end on mongomock for all three samples). Accuracy: `python -m dbeval.
 ## LLM gateway (`app/llm/`)
 
 All model calls go through `LLMGateway.complete()`; never call a provider or SDK directly. In order
-it masks PII, checks the Redis cache, calls the provider with a timeout and retries, validates
+it masks PII, checks the Redis cache, calls the provider with a timeout and retries (every
+attempt paced to `LLM_MAX_REQUESTS_PER_MINUTE` per process; see ADR 0013), validates
 structured output against a Pydantic schema (one repair retry), and records an `LLMCallRecord`
 (tokens, INR cost, latency, cache hit) in MongoDB `llm_calls`. Details and reasons:
 [ADR 0006](../../docs/adr/0006-llm-gateway-and-pii-masking.md).
@@ -158,7 +159,7 @@ response.parsed  # a Mapping instance
 | Provider | When | Notes |
 |---|---|---|
 | `mock` (default) | development, tests, CI | Deterministic. `MockProvider.register(task, text_or_fn)` sets answers; otherwise echoes or returns schema-shaped placeholder JSON. |
-| `gemini` | `LLM_PROVIDER=gemini` + `GEMINI_API_KEY` | `google-genai` SDK, model from `GEMINI_MODEL` (default `gemini-3.8-flash`). Free tier: synthetic data only. |
+| `gemini` | `LLM_PROVIDER=gemini` + `GEMINI_API_KEY` | `google-genai` SDK, model from `GEMINI_MODEL` (default `gemini-3.5-flash-lite`). Free tier: synthetic data only. |
 
 ## PII masking (`app/privacy/masking.py`)
 

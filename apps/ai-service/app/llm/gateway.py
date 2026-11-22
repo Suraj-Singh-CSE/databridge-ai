@@ -24,6 +24,7 @@ from app.llm.errors import (
     LLMRetryableError,
     LLMTimeoutError,
 )
+from app.llm.pacing import RequestLimiter, SlidingWindowLimiter
 
 logger = structlog.get_logger("app.llm.gateway")
 
@@ -54,6 +55,9 @@ class LLMGateway:
     """Every LLM call in the service goes through ``complete``.
 
     ``sleep``, ``rand`` and ``clock`` are injectable so tests run instantly and deterministically.
+    ``limiter`` paces every provider attempt (retries included); by default a new one built from
+    ``LLM_MAX_REQUESTS_PER_MINUTE``, off for the mock provider (the factory passes one shared by
+    the whole process).
     """
 
     def __init__(
@@ -67,6 +71,7 @@ class LLMGateway:
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
         rand: Callable[[], float] = random.random,
         clock: Callable[[], float] = time.perf_counter,
+        limiter: RequestLimiter | None = None,
     ) -> None:
         self.provider = provider
         self._cache = cache
@@ -76,6 +81,9 @@ class LLMGateway:
         self._sleep = sleep
         self._rand = rand
         self._clock = clock
+        self._limiter = limiter or SlidingWindowLimiter(
+            settings.paced_requests_per_minute, clock=clock, sleep=sleep
+        )
 
     def mask(self, request: LLMRequest) -> LLMRequest:
         """Return a copy of ``request`` with PII masked in the system prompt and every message."""
@@ -251,6 +259,7 @@ class LLMGateway:
     async def _call_with_retry(self, request: LLMRequest, stats: _CallStats) -> LLMResponse:
         max_attempts = self._settings.llm_max_attempts
         for attempt in range(1, max_attempts + 1):
+            await self._pace(request)
             stats.attempts += 1
             try:
                 async with asyncio.timeout(self._settings.llm_timeout_seconds):
@@ -282,18 +291,24 @@ class LLMGateway:
             await self._sleep(delay)
         raise AssertionError("unreachable")  # pragma: no cover - the loop returns or raises
 
+    async def _pace(self, request: LLMRequest) -> None:
+        waited = await self._limiter.acquire()
+        if waited > 0:
+            logger.info("llm_paced", task=request.task, wait_ms=round(waited * 1000))
+
     def _backoff(self, attempt: int, error: LLMRetryableError) -> float:
-        """Exponential backoff (base * multiplier^(attempt-1)) with +/-20% jitter, capped.
-        A rate limit's Retry-After wins when it is longer (still capped)."""
+        """Exponential backoff (base * multiplier^(attempt-1)) with +/-20% jitter, capped at
+        LLM_BACKOFF_MAX_SECONDS. A 429's RetryInfo delay wins when it is longer, capped at
+        LLM_RETRY_AFTER_MAX_SECONDS (the provider knows when its quota window reopens)."""
         settings = self._settings
-        cap = settings.llm_backoff_max_seconds
         exponential = settings.llm_backoff_base_seconds * settings.llm_backoff_multiplier ** (
             attempt - 1
         )
-        delay = exponential * (0.8 + 0.4 * self._rand())
+        delay = min(exponential * (0.8 + 0.4 * self._rand()), settings.llm_backoff_max_seconds)
         if isinstance(error, LLMRateLimitError) and error.retry_after_seconds is not None:
-            delay = max(delay, error.retry_after_seconds)
-        return min(delay, cap)
+            retry_after = min(error.retry_after_seconds, settings.llm_retry_after_max_seconds)
+            delay = max(delay, retry_after)
+        return delay
 
     # ---- helpers
 

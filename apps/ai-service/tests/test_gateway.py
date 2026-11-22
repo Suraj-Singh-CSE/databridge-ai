@@ -299,17 +299,20 @@ async def test_backoff_is_capped_and_honours_retry_after() -> None:
         [
             LLMRateLimitError("429", retry_after_seconds=3),
             LLMUnavailableError("503"),
-            LLMRateLimitError("429", retry_after_seconds=60),
+            LLMRateLimitError("429", retry_after_seconds=45),
+            LLMRateLimitError("429", retry_after_seconds=600),
             "ok",
         ]
     )
+    settings = settings.model_copy(update={"llm_max_attempts": 5})
     gateway, _, sleeps = make_gateway(provider, settings, rand=0.0)
 
     await gateway.complete(ask())
 
-    # rand 0 = -20%: attempt 1: 1.6 but Retry-After 3 -> 3; attempt 2: 5 * 0.8 = 4;
-    # attempt 3: Retry-After 60 is longer than 12.5 * 0.8 but capped at 12
-    assert sleeps.delays == [3, 4, 12]
+    # rand 0 = -20%: attempt 1: 1.6 but RetryInfo 3 -> 3; attempt 2: 5 * 0.8 = 4; attempt 3:
+    # RetryInfo 45 is waited out although longer than the 12 s backoff cap; attempt 4:
+    # RetryInfo 600 is capped by LLM_RETRY_AFTER_MAX_SECONDS (60)
+    assert sleeps.delays == [3, 4, 45, 60]
 
 
 async def test_backoff_jitter_adds_up_to_twenty_percent() -> None:
@@ -526,3 +529,89 @@ async def test_gateway_timeout_is_labelled() -> None:
 
     assert raised.value.label == "LLMTimeoutError GATEWAY_TIMEOUT"
     assert costs.records[0].error_status == "GATEWAY_TIMEOUT"
+
+
+# ---- request pacing
+
+
+class CountingLimiter:
+    def __init__(self, waits: list[float] | None = None) -> None:
+        self.calls = 0
+        self.waits = waits or []
+
+    async def acquire(self) -> float:
+        self.calls += 1
+        return self.waits.pop(0) if self.waits else 0.0
+
+
+async def test_every_provider_attempt_is_paced_including_retries_and_schema_fallback() -> None:
+    provider = ScriptedProvider(
+        [
+            LLMBadRequestError("400", code=400, status="INVALID_ARGUMENT"),
+            LLMRateLimitError("429", retry_after_seconds=1),
+            json.dumps({"target": "email", "confidence": 0.9}),
+        ]
+    )
+    limiter = CountingLimiter()
+    gateway = LLMGateway(
+        provider,
+        InMemoryCache(),
+        InMemoryCostLogger(),
+        PIIMasker(),
+        make_settings(),
+        sleep=Sleeps(),
+        limiter=limiter,
+    )
+
+    await gateway.complete(ask(schema=Mapping))
+
+    assert len(provider.calls) == 3
+    assert limiter.calls == 3
+
+
+async def test_a_paced_wait_is_logged() -> None:
+    import structlog
+
+    limiter = CountingLimiter(waits=[2.5])
+    gateway = LLMGateway(
+        ScriptedProvider(["ok"]),
+        InMemoryCache(),
+        InMemoryCostLogger(),
+        PIIMasker(),
+        make_settings(),
+        limiter=limiter,
+    )
+
+    with structlog.testing.capture_logs() as logs:
+        await gateway.complete(ask())
+
+    paced = [entry for entry in logs if entry["event"] == "llm_paced"]
+    assert paced == [
+        {"event": "llm_paced", "log_level": "info", "task": "map_columns", "wait_ms": 2500}
+    ]
+
+
+async def test_default_limiter_follows_the_setting_and_the_gateway_clock() -> None:
+    now = [0.0]
+    sleeps: list[float] = []
+
+    async def sleep(delay: float) -> None:
+        sleeps.append(delay)
+        now[0] += delay
+
+    gateway = LLMGateway(
+        ScriptedProvider(["a", "b", "c"]),
+        InMemoryCache(),
+        InMemoryCostLogger(),
+        PIIMasker(),
+        make_settings(
+            llm_provider="gemini", llm_max_requests_per_minute=2, llm_cache_ttl_seconds=0
+        ),
+        sleep=sleep,
+        clock=lambda: now[0],
+    )
+
+    for text in ("one", "two", "three"):
+        await gateway.complete(ask(text))
+
+    assert sleeps == [60]  # the third call waited for the first one's slot

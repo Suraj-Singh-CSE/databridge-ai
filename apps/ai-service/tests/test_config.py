@@ -49,7 +49,15 @@ def test_profiler_settings_default_and_validate(settings: Settings) -> None:
 
 
 def test_llm_tuning_settings_default_and_validate(settings: Settings) -> None:
-    assert settings.gemini_thinking_level == "low"
+    assert settings.gemini_model == "gemini-3.5-flash-lite"
+    assert settings.gemini_thinking_level == ""  # the model's default
+    assert settings.llm_max_requests_per_minute == 12
+    assert settings.paced_requests_per_minute == 0  # mock provider: never paced
+    gemini = settings.model_copy(update={"llm_provider": "gemini"})
+    assert gemini.paced_requests_per_minute == 12
+    assert settings.llm_retry_after_max_seconds == 60
+    assert settings.llm_prices_inr_per_1m["gemini-3.5-flash-lite"].input == 0
+    assert settings.llm_prices_inr_per_1m["gemini-3.8-flash"].output == 0
     assert settings.llm_timeout_seconds == 30
     assert (settings.llm_backoff_base_seconds, settings.llm_backoff_multiplier) == (2.0, 2.5)
     assert settings.mapping_max_columns_per_call == 40
@@ -64,6 +72,8 @@ def test_llm_tuning_settings_default_and_validate(settings: Settings) -> None:
             gemini_thinking_level="extreme",
             mapping_max_columns_per_call=41,
             llm_timeout_seconds=0,
+            llm_max_requests_per_minute=-1,
+            llm_retry_after_max_seconds=0,
         )
 
     invalid = {str(error["loc"][0]) for error in exc_info.value.errors()}
@@ -71,4 +81,6 @@ def test_llm_tuning_settings_default_and_validate(settings: Settings) -> None:
         "gemini_thinking_level",
         "mapping_max_columns_per_call",
         "llm_timeout_seconds",
+        "llm_max_requests_per_minute",
+        "llm_retry_after_max_seconds",
     }

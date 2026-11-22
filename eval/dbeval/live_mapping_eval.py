@@ -11,8 +11,8 @@ check: no raw email or phone from the source files may appear in any prompt. The
 before each call (a prompt that fails it is never sent; that source falls back to rules) and
 the run exits non-zero if any prompt failed it.
 
-    GEMINI_API_KEY=... python -m dbeval.live_mapping_eval --model gemini-3.8-flash --max-calls 40 \
-        --thinking-level low --timeout-seconds 90 --columns-per-call 12
+    GEMINI_API_KEY=... python -m dbeval.live_mapping_eval --model gemini-3.5-flash-lite \
+        --max-calls 30 --timeout-seconds 90 --columns-per-call 12 --requests-per-minute 12
     python -m dbeval.live_mapping_eval --provider mock    # dry run, no key, no network
 
 The key is read from the environment only and is never printed or written.
@@ -150,9 +150,10 @@ class SetResult:
 class RunOptions:
     """Effective settings of one run (printed at the top of the report)."""
 
-    thinking_level: ThinkingLevel = "low"
+    thinking_level: ThinkingLevel = ""
     timeout_seconds: float = 30.0
     columns_per_call: int = MAX_COLUMNS_PER_CALL
+    requests_per_minute: int = 12
 
 
 def settings_for(
@@ -170,6 +171,7 @@ def settings_for(
         gemini_thinking_level=options.thinking_level,
         llm_timeout_seconds=options.timeout_seconds,
         mapping_max_columns_per_call=options.columns_per_call,
+        llm_max_requests_per_minute=options.requests_per_minute,
     )
 
 
@@ -284,6 +286,7 @@ async def run(provider: LLMProvider, settings: Settings, max_calls: int) -> dict
             "timeout_seconds": settings.llm_timeout_seconds,
             "max_attempts": settings.llm_max_attempts,
             "columns_per_call": settings.mapping_max_columns_per_call,
+            "requests_per_minute": settings.paced_requests_per_minute,
             "max_output_tokens": settings.mapping_max_output_tokens,
         },
         "max_calls": max_calls,
@@ -341,7 +344,8 @@ def markdown(report: dict[str, Any]) -> str:
         f"Settings: model `{config['model']}`, thinking level {config['thinking_level']}, "
         f"timeout {config['timeout_seconds']:g} s, {config['max_attempts']} attempts per call, "
         f"{config['columns_per_call']} columns per call, "
-        f"{config['max_output_tokens']} max output tokens, budget {report['max_calls']} calls.",
+        f"{config['max_output_tokens']} max output tokens, budget {report['max_calls']} calls, "
+        f"paced at {config['requests_per_minute'] or 'no limit'} requests/min.",
         "",
         "| Set | Path | Columns | Accuracy | Accuracy at High | High-confidence wrong | "
         "Null precision | Null recall |",
@@ -374,7 +378,7 @@ def markdown(report: dict[str, Any]) -> str:
             for label, messages in report["error_details"].items()
         ),
         f"- Tokens: {report['tokens']['input']} in / {report['tokens']['output']} out; "
-        f"estimated cost: {'not priced' if cost is None else f'INR {cost:.4f}'} "
+        f"estimated cost: {_cost_label(cost)} "
         f"({report['cost_assumption']})",
         f"- Latency of {latency['successful_calls']} successful calls: p50 {_ms(latency['p50'])}, "
         f"p95 {_ms(latency['p95'])}, max {_ms(latency['max'])}",
@@ -390,6 +394,12 @@ def markdown(report: dict[str, Any]) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _cost_label(cost: float | None) -> str:
+    if cost is None:
+        return "not priced"
+    return "INR 0 (free tier)" if cost == 0 else f"INR {cost:.4f}"
+
+
 def _ms(value: float | None) -> str:
     return "n/a" if value is None else f"{value:.0f} ms"
 
@@ -399,12 +409,18 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--provider", choices=("gemini", "mock"), default="gemini")
     parser.add_argument("--model", default=os.environ.get("GEMINI_MODEL") or DEFAULT_GEMINI_MODEL)
     parser.add_argument(
-        "--max-calls", type=int, default=40, help="provider calls at most (retries count)"
+        "--max-calls", type=int, default=30, help="provider calls at most (retries count)"
+    )
+    parser.add_argument(
+        "--requests-per-minute",
+        type=int,
+        default=int(os.environ.get("LLM_MAX_REQUESTS_PER_MINUTE") or 12),
+        help="pace provider calls (retries count) to this many per minute; 0 = off",
     )
     parser.add_argument(
         "--thinking-level",
         choices=THINKING_LEVELS,
-        default=os.environ.get("GEMINI_THINKING_LEVEL", "low"),
+        default=os.environ.get("GEMINI_THINKING_LEVEL", ""),
         help='Gemini thinking level; "" = the model default',
     )
     parser.add_argument(
@@ -425,6 +441,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         parser.error("--max-calls must be at least 1")
     if not 1 <= args.columns_per_call <= MAX_COLUMNS_PER_CALL:
         parser.error(f"--columns-per-call must be 1-{MAX_COLUMNS_PER_CALL}")
+    if args.requests_per_minute < 0:
+        parser.error("--requests-per-minute must be 0 (off) or more")
     if not 0 < args.timeout_seconds <= 600:
         parser.error("--timeout-seconds must be above 0 and at most 600")
     api_key = os.environ.get("GEMINI_API_KEY", "").strip() or None
@@ -432,7 +450,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         raise SystemExit(MISSING_KEY)
 
     configure_logging("WARNING")  # retries and fallbacks only; never prompt text or the key
-    options = RunOptions(args.thinking_level, args.timeout_seconds, args.columns_per_call)
+    options = RunOptions(
+        args.thinking_level, args.timeout_seconds, args.columns_per_call, args.requests_per_minute
+    )
     settings = settings_for(args.provider, args.model, api_key, options)
     report = asyncio.run(run(build_provider(settings), settings, args.max_calls))
     args.out.mkdir(parents=True, exist_ok=True)
