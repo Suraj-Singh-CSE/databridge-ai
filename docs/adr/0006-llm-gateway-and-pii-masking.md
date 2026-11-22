@@ -105,6 +105,13 @@ from the table costs 0 and logs `llm_price_missing`.
   for different raw values that mask to the same text. That is intended for deterministic tasks
   (temperature 0); features that need variety must not use the cache for that call.
 
+## Notes
+
+- 2026-11-22: provider errors now carry `code`, `status` and a cleaned `detail`, which the gateway
+  logs on `llm_call` (`error_code`, `error_status`, `error_detail`); a 400 on a request with a
+  response schema is resent once without the schema (`schema_fallback`); backoff is
+  base * multiplier^(attempt-1) with +/-20% jitter. See ADR 0013 "Live run findings".
+
 ## Follow-ups
 
 - Feature endpoints (mapping, ER explanations, SQL agent) replace the demo `/internal/v1/llm/echo`.

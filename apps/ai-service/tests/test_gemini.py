@@ -10,14 +10,16 @@ from pydantic import BaseModel
 
 from app.llm.base import LLMRequest, Message
 from app.llm.errors import (
+    LLMBadRequestError,
     LLMConfigError,
     LLMError,
     LLMRateLimitError,
     LLMResponseError,
     LLMTimeoutError,
     LLMUnavailableError,
+    safe_detail,
 )
-from app.llm.gemini import GeminiProvider
+from app.llm.gemini import GeminiProvider, ThinkingLevelName
 
 
 class Answer(BaseModel):
@@ -92,7 +94,12 @@ async def test_sends_masked_request_in_sdk_shape_and_reads_usage() -> None:
     assert config.temperature == 0.2
     assert config.max_output_tokens == 256
     assert config.response_mime_type == "application/json"
-    assert config.response_json_schema == Answer.model_json_schema()
+    assert config.response_json_schema == {
+        "properties": {"label": {"type": "string"}},
+        "required": ["label"],
+        "type": "object",
+    }
+    assert config.thinking_config is None  # no level set: the model default
     assert response.text == '{"label": "email"}'
     assert response.model == "gemini-test-001"
     assert (response.input_tokens, response.output_tokens) == (120, 42)
@@ -123,8 +130,12 @@ async def test_missing_usage_and_model_version_fall_back() -> None:
 async def test_empty_answer_is_a_response_error_with_finish_reason() -> None:
     fake = FakeModels(reply(None, finish=types.FinishReason.SAFETY))
 
-    with pytest.raises(LLMResponseError, match="SAFETY"):
+    with pytest.raises(LLMResponseError, match="SAFETY") as raised:
         await GeminiProvider("m", models=fake).complete(request())
+
+    assert raised.value.status == "NO_TEXT"
+    assert raised.value.detail == "finish reason: SAFETY"
+    assert raised.value.label == "LLMResponseError NO_TEXT"
 
 
 async def test_blocked_prompt_is_a_response_error() -> None:
@@ -157,7 +168,8 @@ def api_error(code: int, details: dict[str, Any] | None = None) -> genai_errors.
         (401, LLMConfigError),
         (403, LLMConfigError),
         (404, LLMConfigError),
-        (400, LLMResponseError),
+        (400, LLMBadRequestError),
+        (422, LLMResponseError),
     ],
 )
 async def test_api_errors_map_to_typed_errors(code: int, expected: type[LLMError]) -> None:
@@ -237,3 +249,88 @@ def test_real_client_is_built_without_network_and_sdk_retries_off() -> None:
 
     assert provider.model == "gemini-3.8-flash"
     assert provider.name == "gemini"
+
+
+@pytest.mark.parametrize(
+    ("code", "status", "message", "label", "detail"),
+    [
+        (
+            400,
+            "INVALID_ARGUMENT",
+            'Invalid JSON payload received. Unknown name "additionalProperties"',
+            "400 INVALID_ARGUMENT",
+            'Invalid JSON payload received. Unknown name "additionalProperties"',
+        ),
+        (
+            429,
+            "RESOURCE_EXHAUSTED",
+            "Quota exceeded for project 123456789012, contact ops@example.com",
+            "429 RESOURCE_EXHAUSTED",
+            "Quota exceeded for project [NUM], contact [EMAIL]",
+        ),
+        (
+            503,
+            "UNAVAILABLE",
+            "The model is overloaded.",
+            "503 UNAVAILABLE",
+            "The model is overloaded.",
+        ),
+    ],
+)
+async def test_api_errors_keep_code_status_and_cleaned_message(
+    code: int, status: str, message: str, label: str, detail: str
+) -> None:
+    body = {"error": {"code": code, "message": message, "status": status}}
+    provider = GeminiProvider("m", models=FakeModels(api_error(code, body)))
+
+    with pytest.raises(LLMError) as raised:
+        await provider.complete(request())
+
+    assert (raised.value.code, raised.value.status) == (code, status)
+    assert raised.value.detail == detail
+    assert raised.value.label == label
+
+
+async def test_http_timeout_is_labelled() -> None:
+    provider = GeminiProvider("m", models=FakeModels(httpx.ReadTimeout("slow")))
+
+    with pytest.raises(LLMTimeoutError) as raised:
+        await provider.complete(request())
+
+    assert raised.value.code is None
+    assert raised.value.label == "LLMTimeoutError HTTP_TIMEOUT"
+
+
+def test_safe_detail_removes_emails_long_numbers_and_truncates() -> None:
+    assert safe_detail(None) is None
+    assert safe_detail("   ") is None
+    assert safe_detail("a\n b  call 98200 12345 me@x.io id 1234567") == (
+        "a b call 98200 12345 [EMAIL] id [NUM]"
+    )
+    long = safe_detail("x" * 500)
+    assert long is not None
+    assert len(long) == 200
+    assert long.endswith("...")
+
+
+@pytest.mark.parametrize("level", ["minimal", "low", "medium", "high"])
+async def test_thinking_level_is_passed_to_the_sdk(level: ThinkingLevelName) -> None:
+    fake = FakeModels(reply("ok"))
+
+    await GeminiProvider("m", thinking_level=level, models=fake).complete(request())
+
+    config: types.GenerateContentConfig = fake.kwargs["config"]
+    assert config.thinking_config is not None
+    assert config.thinking_config.thinking_level == types.ThinkingLevel(level.upper())
+    assert config.thinking_config.thinking_budget is None
+
+
+async def test_schema_can_be_left_out_for_plain_json_mode() -> None:
+    fake = FakeModels(reply('{"label": "email"}'))
+    plain = request(Answer).model_copy(update={"enforce_schema": False})
+
+    await GeminiProvider("m", models=fake).complete(plain)
+
+    config: types.GenerateContentConfig = fake.kwargs["config"]
+    assert config.response_mime_type == "application/json"
+    assert config.response_json_schema is None

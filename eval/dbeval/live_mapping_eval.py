@@ -11,7 +11,8 @@ check: no raw email or phone from the source files may appear in any prompt. The
 before each call (a prompt that fails it is never sent; that source falls back to rules) and
 the run exits non-zero if any prompt failed it.
 
-    GEMINI_API_KEY=... python -m dbeval.live_mapping_eval --model gemini-3.8-flash --max-calls 20
+    GEMINI_API_KEY=... python -m dbeval.live_mapping_eval --model gemini-3.8-flash --max-calls 40 \
+        --thinking-level low --timeout-seconds 90 --columns-per-call 12
     python -m dbeval.live_mapping_eval --provider mock    # dry run, no key, no network
 
 The key is read from the environment only and is never printed or written.
@@ -24,8 +25,9 @@ import math
 import os
 import re
 import sys
+import time
 from collections import Counter
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Literal
@@ -33,12 +35,13 @@ from typing import Any, Literal
 from app.config import DEFAULT_GEMINI_MODEL, Settings
 from app.llm.base import LLMProvider, LLMRequest, LLMResponse
 from app.llm.cache import InMemoryCache
-from app.llm.cost import InMemoryCostLogger, cost_inr
+from app.llm.cost import InMemoryCostLogger, LLMCallRecord, cost_inr
 from app.llm.errors import LLMError
 from app.llm.factory import build_provider
 from app.llm.gateway import LLMGateway
 from app.logging import configure_logging
-from app.mapping.engine import suggest, suggest_with_rules
+from app.mapping.engine import MappingSettings, suggest, suggest_with_rules
+from app.mapping.prompt import MAX_COLUMNS_PER_CALL
 from app.privacy.masking import PIIMasker
 from pydantic import SecretStr
 
@@ -56,6 +59,10 @@ from dbeval.evaluate_mapping import (
 from dbeval.loaders import read_csv, read_xlsx
 
 ProviderName = Literal["gemini", "mock"]
+ThinkingLevel = Literal["", "minimal", "low", "medium", "high"]
+THINKING_LEVELS: tuple[ThinkingLevel, ...] = ("", "minimal", "low", "medium", "high")
+# A provider call cut off by the gateway's timeout ends in cancellation, not an LLMError.
+CANCELLED_BY_TIMEOUT = "LLMTimeoutError GATEWAY_TIMEOUT"
 REPORT_JSON = "live_mapping_report.json"
 REPORT_MD = "live_mapping_report.md"
 MISSING_KEY = (
@@ -78,11 +85,23 @@ NOT_SENT = frozenset({CallBudgetExhaustedError.__name__, PrivacyGuardError.__nam
 
 
 class GuardedProvider(LLMProvider):
-    """Wraps the real provider, after the gateway's masking: enforces the call budget and
-    refuses any prompt that still contains a raw email or phone. Prompts stay in memory."""
+    """Wraps the real provider, after the gateway's masking: enforces the call budget (every
+    attempt counts, retries and repairs included) and refuses any prompt that still contains a
+    raw email or phone. Prompts stay in memory. Counts each attempt's outcome and the latency
+    of successful ones."""
 
-    def __init__(self, inner: LLMProvider, max_calls: int, sensitive: set[str]) -> None:
+    def __init__(
+        self,
+        inner: LLMProvider,
+        max_calls: int,
+        sensitive: set[str],
+        *,
+        clock: Callable[[], float] = time.perf_counter,
+    ) -> None:
         self.inner = inner
+        self.clock = clock
+        self.outcomes: Counter[str] = Counter()
+        self.ok_latencies_ms: list[float] = []
         self.name = inner.name
         self.model = inner.model
         self.max_calls = max_calls
@@ -103,7 +122,19 @@ class GuardedProvider(LLMProvider):
             self.prompts_blocked += 1
             raise PrivacyGuardError(f"{leaks} raw contact values in the prompt; not sent")
         self.calls += 1
-        return await self.inner.complete(request)
+        started = self.clock()
+        outcome = CANCELLED_BY_TIMEOUT
+        try:
+            response = await self.inner.complete(request)
+        except LLMError as error:
+            outcome = error.label
+            raise
+        else:
+            outcome = "ok"
+            self.ok_latencies_ms.append(round((self.clock() - started) * 1000, 3))
+            return response
+        finally:
+            self.outcomes[outcome] += 1
 
 
 @dataclass
@@ -115,7 +146,18 @@ class SetResult:
     hybrid: list[Scored] = field(default_factory=list)
 
 
-def settings_for(provider: ProviderName, model: str, api_key: str | None) -> Settings:
+@dataclass(frozen=True)
+class RunOptions:
+    """Effective settings of one run (printed at the top of the report)."""
+
+    thinking_level: ThinkingLevel = "low"
+    timeout_seconds: float = 30.0
+    columns_per_call: int = MAX_COLUMNS_PER_CALL
+
+
+def settings_for(
+    provider: ProviderName, model: str, api_key: str | None, options: RunOptions = RunOptions()
+) -> Settings:
     return Settings(
         _env_file=None,
         ai_service_token=SecretStr("evaluation-only-token"),
@@ -125,6 +167,9 @@ def settings_for(provider: ProviderName, model: str, api_key: str | None) -> Set
         gemini_api_key=SecretStr(api_key) if api_key else None,
         gemini_model=model,
         llm_cache_ttl_seconds=0,  # measure the model, not the cache
+        gemini_thinking_level=options.thinking_level,
+        llm_timeout_seconds=options.timeout_seconds,
+        mapping_max_columns_per_call=options.columns_per_call,
     )
 
 
@@ -138,16 +183,19 @@ def sensitive_values(names: Sequence[SetName]) -> set[str]:
     return values
 
 
-async def evaluate_set(name: SetName, gateway: LLMGateway) -> SetResult:
+async def evaluate_set(
+    name: SetName, gateway: LLMGateway, mapping: MappingSettings | None = None
+) -> SetResult:
     """Rules and hybrid suggestions for every source of one set, scored against its key."""
     data, files = SETS[name]
     answers = data / "answers"
     schema, key = load_schema(answers), load_key(answers)
     result = SetResult(name)
+    mapping = mapping or MappingSettings()
     for source in files:
         profiles = profile_source(data, source, files)
         rules = suggest_with_rules(profiles, schema)
-        hybrid = await suggest(profiles, schema, gateway, project_id="0" * 24)
+        hybrid = await suggest(profiles, schema, gateway, project_id="0" * 24, settings=mapping)
         result.sources += 1
         result.fallbacks += hybrid.method != "hybrid"
         result.rules += score_suggestions(source, rules.suggestions, key)
@@ -195,28 +243,58 @@ def _metrics(m: Metrics) -> dict[str, Any]:
     }
 
 
+def error_label(record: LLMCallRecord) -> str:
+    """Grouping key of a failed call, e.g. ``400 INVALID_ARGUMENT`` or ``LLMTimeoutError``."""
+    if record.error_code is not None:
+        return f"{record.error_code} {record.error_status or ''}".strip()
+    name = record.error_type or "unknown"
+    return f"{name} {record.error_status}" if record.error_status else name
+
+
 async def run(provider: LLMProvider, settings: Settings, max_calls: int) -> dict[str, Any]:
     names: tuple[SetName, ...] = ("samples", "unseen")
     sensitive = sensitive_values(names)
     guard = GuardedProvider(provider, max_calls, sensitive)
     costs = InMemoryCostLogger()
     gateway = LLMGateway(guard, InMemoryCache(), costs, PIIMasker(), settings)
-    results = [await evaluate_set(name, gateway) for name in names]
+    mapping = MappingSettings(
+        temperature=settings.mapping_temperature,
+        max_output_tokens=settings.mapping_max_output_tokens,
+        max_columns_per_call=settings.mapping_max_columns_per_call,
+    )
+    results = [await evaluate_set(name, gateway, mapping) for name in names]
 
     calls = [r for r in costs.records if r.error_type not in NOT_SENT]
     input_tokens = sum(r.input_tokens for r in calls)
     output_tokens = sum(r.output_tokens for r in calls)
     priced = cost_inr(settings.llm_prices_inr_per_1m, provider.model, input_tokens, output_tokens)
-    latencies = [r.latency_ms for r in calls]
+    ok_latencies = [r.latency_ms for r in calls if r.outcome == "ok"]
+    failed = [r for r in costs.records if r.error_type]
+    details: dict[str, list[str]] = {}
+    for record in failed:
+        found = details.setdefault(error_label(record), [])
+        if record.error_detail and record.error_detail not in found and len(found) < 3:
+            found.append(record.error_detail)
     return {
         "provider": provider.name,
         "model": provider.model,
+        "settings": {
+            "model": provider.model,
+            "thinking_level": settings.gemini_thinking_level or "model default",
+            "timeout_seconds": settings.llm_timeout_seconds,
+            "max_attempts": settings.llm_max_attempts,
+            "columns_per_call": settings.mapping_max_columns_per_call,
+            "max_output_tokens": settings.mapping_max_output_tokens,
+        },
         "max_calls": max_calls,
         "provider_calls": guard.calls,
+        "provider_calls_by_outcome": dict(guard.outcomes),
         "budget_exhausted": any(
             r.error_type == CallBudgetExhaustedError.__name__ for r in costs.records
         ),
-        "errors": dict(Counter(r.error_type for r in costs.records if r.error_type)),
+        "errors": dict(Counter(error_label(r) for r in failed)),
+        "error_details": {label: found for label, found in details.items() if found},
+        "schema_fallbacks": sum(r.schema_fallback for r in costs.records),
         "sets": {
             r.name: {
                 "sources": r.sources,
@@ -233,9 +311,15 @@ async def run(provider: LLMProvider, settings: Settings, max_calls: int) -> dict
             "default, which prices the free tier at 0). null: the model is not in the table."
         ),
         "latency_ms": {
-            "p50": percentile(latencies, 0.5),
-            "p95": percentile(latencies, 0.95),
-            "note": "per gateway call, including retries and a repair attempt if any",
+            "successful_calls": len(ok_latencies),
+            "p50": percentile(ok_latencies, 0.5),
+            "p95": percentile(ok_latencies, 0.95),
+            "max": max(ok_latencies, default=None),
+            "provider_attempts_ok": guard.ok_latencies_ms,
+            "note": (
+                "successful gateway calls only, including retries and a repair attempt if any; "
+                "provider_attempts_ok lists each successful provider attempt"
+            ),
         },
         "privacy": {
             "prompts_checked": guard.prompts_checked,
@@ -248,10 +332,16 @@ async def run(provider: LLMProvider, settings: Settings, max_calls: int) -> dict
 
 
 def markdown(report: dict[str, Any]) -> str:
+    config = report["settings"]
     lines = [
         f"## Live mapping evaluation: {report['provider']} / `{report['model']}`",
         "",
         "Synthetic data only (committed samples + unseen-header holdout).",
+        "",
+        f"Settings: model `{config['model']}`, thinking level {config['thinking_level']}, "
+        f"timeout {config['timeout_seconds']:g} s, {config['max_attempts']} attempts per call, "
+        f"{config['columns_per_call']} columns per call, "
+        f"{config['max_output_tokens']} max output tokens, budget {report['max_calls']} calls.",
         "",
         "| Set | Path | Columns | Accuracy | Accuracy at High | High-confidence wrong | "
         "Null precision | Null recall |",
@@ -276,11 +366,18 @@ def markdown(report: dict[str, Any]) -> str:
         f"- Provider calls: {report['provider_calls']} (budget {report['max_calls']}"
         f"{', exhausted' if report['budget_exhausted'] else ''}); "
         f"fallbacks to rules: {fallbacks} of {sources} sources",
-        f"- Errors: {report['errors'] or 'none'}",
+        f"- Provider calls by outcome: {report['provider_calls_by_outcome'] or 'none'}",
+        f"- Errors (per gateway call): {report['errors'] or 'none'}; "
+        f"schema fallbacks (retried without the response schema): {report['schema_fallbacks']}",
+        *(
+            f"  - {label}: {'; '.join(messages)}"
+            for label, messages in report["error_details"].items()
+        ),
         f"- Tokens: {report['tokens']['input']} in / {report['tokens']['output']} out; "
         f"estimated cost: {'not priced' if cost is None else f'INR {cost:.4f}'} "
         f"({report['cost_assumption']})",
-        f"- Latency per call: p50 {_ms(latency['p50'])}, p95 {_ms(latency['p95'])}",
+        f"- Latency of {latency['successful_calls']} successful calls: p50 {_ms(latency['p50'])}, "
+        f"p95 {_ms(latency['p95'])}, max {_ms(latency['max'])}",
         f"- Privacy: {privacy['leaks']} raw emails/phones found in {privacy['prompts_checked']} "
         f"prompts ({privacy['sensitive_values_checked']} values checked, "
         f"{privacy['prompts_blocked']} prompts blocked before sending): "
@@ -301,17 +398,42 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--provider", choices=("gemini", "mock"), default="gemini")
     parser.add_argument("--model", default=os.environ.get("GEMINI_MODEL") or DEFAULT_GEMINI_MODEL)
-    parser.add_argument("--max-calls", type=int, default=20, help="provider calls at most")
+    parser.add_argument(
+        "--max-calls", type=int, default=40, help="provider calls at most (retries count)"
+    )
+    parser.add_argument(
+        "--thinking-level",
+        choices=THINKING_LEVELS,
+        default=os.environ.get("GEMINI_THINKING_LEVEL", "low"),
+        help='Gemini thinking level; "" = the model default',
+    )
+    parser.add_argument(
+        "--timeout-seconds",
+        type=float,
+        default=float(os.environ.get("LLM_TIMEOUT_SECONDS") or 30),
+        help="per provider attempt",
+    )
+    parser.add_argument(
+        "--columns-per-call",
+        type=int,
+        default=MAX_COLUMNS_PER_CALL,
+        help=f"columns per mapping call, 1-{MAX_COLUMNS_PER_CALL}",
+    )
     parser.add_argument("--out", type=Path, default=Path("live-eval-report"))
     args = parser.parse_args(argv)
     if args.max_calls < 1:
         parser.error("--max-calls must be at least 1")
+    if not 1 <= args.columns_per_call <= MAX_COLUMNS_PER_CALL:
+        parser.error(f"--columns-per-call must be 1-{MAX_COLUMNS_PER_CALL}")
+    if not 0 < args.timeout_seconds <= 600:
+        parser.error("--timeout-seconds must be above 0 and at most 600")
     api_key = os.environ.get("GEMINI_API_KEY", "").strip() or None
     if args.provider == "gemini" and api_key is None:
         raise SystemExit(MISSING_KEY)
 
     configure_logging("WARNING")  # retries and fallbacks only; never prompt text or the key
-    settings = settings_for(args.provider, args.model, api_key)
+    options = RunOptions(args.thinking_level, args.timeout_seconds, args.columns_per_call)
+    settings = settings_for(args.provider, args.model, api_key, options)
     report = asyncio.run(run(build_provider(settings), settings, args.max_calls))
     args.out.mkdir(parents=True, exist_ok=True)
     (args.out / REPORT_JSON).write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")

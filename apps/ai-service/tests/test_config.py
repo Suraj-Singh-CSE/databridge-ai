@@ -46,3 +46,29 @@ def test_profiler_settings_default_and_validate(settings: Settings) -> None:
         "xlsx_max_uncompressed_bytes",
         "xlsx_max_compression_ratio",
     }
+
+
+def test_llm_tuning_settings_default_and_validate(settings: Settings) -> None:
+    assert settings.gemini_thinking_level == "low"
+    assert settings.llm_timeout_seconds == 30
+    assert (settings.llm_backoff_base_seconds, settings.llm_backoff_multiplier) == (2.0, 2.5)
+    assert settings.mapping_max_columns_per_call == 40
+    assert settings.model_copy(update={"gemini_thinking_level": ""}).gemini_thinking_level == ""
+
+    with pytest.raises(ValidationError) as exc_info:
+        Settings(  # type: ignore[call-arg]
+            _env_file=None,
+            ai_service_token="x" * 16,
+            redis_url="redis://r",
+            mongodb_uri="mongodb://m",
+            gemini_thinking_level="extreme",
+            mapping_max_columns_per_call=41,
+            llm_timeout_seconds=0,
+        )
+
+    invalid = {str(error["loc"][0]) for error in exc_info.value.errors()}
+    assert invalid == {
+        "gemini_thinking_level",
+        "mapping_max_columns_per_call",
+        "llm_timeout_seconds",
+    }

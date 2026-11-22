@@ -12,10 +12,23 @@ on:
         default: gemini-3.8-flash
         required: true
       max_calls:
-        description: Most provider calls this run may make (8 cover every source once)
+        description: Most provider calls this run may make, retries included
         type: number
-        default: 20
+        default: 40
         required: true
+      thinking_level:
+        description: Gemini thinking level (default = the model's own, medium on 3 Flash)
+        type: choice
+        options: [low, minimal, medium, high, default]
+        default: low
+      timeout_seconds:
+        description: Timeout per provider attempt, in seconds
+        type: number
+        default: 90
+      columns_per_call:
+        description: Columns per mapping call (1-40); smaller calls answer faster
+        type: number
+        default: 12
 
 concurrency:
   group: live-eval
@@ -28,7 +41,8 @@ jobs:
   live-eval:
     name: Live mapping eval (${{ inputs.model }})
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # Worst case: every one of max_calls attempts runs into the timeout.
+    timeout-minutes: 60
     defaults:
       run:
         working-directory: eval
@@ -48,15 +62,21 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           MODEL: ${{ inputs.model }}
           MAX_CALLS: ${{ inputs.max_calls }}
+          THINKING_LEVEL: ${{ inputs.thinking_level }}
+          TIMEOUT_SECONDS: ${{ inputs.timeout_seconds }}
+          COLUMNS_PER_CALL: ${{ inputs.columns_per_call }}
         run: |
           set -euo pipefail
           if [ -z "${GEMINI_API_KEY:-}" ]; then
             echo "::error::Repository secret GEMINI_API_KEY is missing. Add it under Settings > Secrets and variables > Actions."
             exit 1
           fi
+          if [ "$THINKING_LEVEL" = "default" ]; then THINKING_LEVEL=""; fi
           status=0
           python -m dbeval.live_mapping_eval --provider gemini --model "$MODEL" \
-            --max-calls "$MAX_CALLS" --out "$RUNNER_TEMP/live-eval-report" || status=$?
+            --max-calls "$MAX_CALLS" --thinking-level "$THINKING_LEVEL" \
+            --timeout-seconds "$TIMEOUT_SECONDS" --columns-per-call "$COLUMNS_PER_CALL" \
+            --out "$RUNNER_TEMP/live-eval-report" || status=$?
           if [ -f "$RUNNER_TEMP/live-eval-report/live_mapping_report.md" ]; then
             cat "$RUNNER_TEMP/live-eval-report/live_mapping_report.md" >> "$GITHUB_STEP_SUMMARY"
           fi

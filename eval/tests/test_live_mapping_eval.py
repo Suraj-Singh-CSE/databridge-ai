@@ -3,8 +3,13 @@ import json
 from pathlib import Path
 
 import pytest
-from app.llm.base import LLMRequest, LLMResponse, Message
+from app.llm.base import LLMProvider, LLMRequest, LLMResponse, Message
+from app.llm.cache import InMemoryCache
+from app.llm.cost import InMemoryCostLogger
+from app.llm.errors import LLMBadRequestError, LLMError, LLMUnavailableError
+from app.llm.gateway import LLMGateway
 from app.llm.mock import MockProvider
+from app.privacy.masking import PIIMasker
 
 from dbeval.live_mapping_eval import (
     MISSING_KEY,
@@ -13,10 +18,14 @@ from dbeval.live_mapping_eval import (
     CallBudgetExhaustedError,
     GuardedProvider,
     PrivacyGuardError,
+    RunOptions,
     find_leaks,
     main,
+    markdown,
     percentile,
     raw_contact_values,
+    run,
+    settings_for,
 )
 
 SAMPLES = Path(__file__).resolve().parents[1] / "samples"
@@ -45,9 +54,40 @@ def test_mock_dry_run_writes_both_reports(tmp_path: Path) -> None:
     assert sets["samples"]["rules"]["columns"] == 25
     assert sets["unseen"]["hybrid"]["columns"] == 44
     assert sets["unseen"]["fallbacks_to_rules"] == 0
+    assert report["provider_calls_by_outcome"] == {"ok": 8}
+    assert report["settings"] == {
+        "model": "mock",
+        "thinking_level": "low",
+        "timeout_seconds": 30.0,
+        "max_attempts": 3,
+        "columns_per_call": 40,
+        "max_output_tokens": 4096,
+    }
+    latency = report["latency_ms"]
+    assert isinstance(latency, dict)
+    assert latency["successful_calls"] == 8
+    assert len(latency["provider_attempts_ok"]) == 8
     summary = (tmp_path / REPORT_MD).read_text(encoding="utf-8")
     assert "| unseen | hybrid | 44 |" in summary
     assert "PASSED" in summary
+    assert summary.splitlines()[4].startswith("Settings: model `mock`, thinking level low")
+
+
+def test_run_settings_come_from_the_command_line(tmp_path: Path) -> None:
+    args = ["--provider", "mock", "--thinking-level", "", "--timeout-seconds", "90"]
+    assert main([*args, "--columns-per-call", "5", "--out", str(tmp_path)]) == 0
+
+    report = _report(tmp_path)
+    assert report["settings"]["thinking_level"] == "model default"  # type: ignore[index]
+    assert report["settings"]["timeout_seconds"] == 90  # type: ignore[index]
+    assert report["settings"]["columns_per_call"] == 5  # type: ignore[index]
+    calls = report["provider_calls"]
+    assert isinstance(calls, int)
+    assert calls > 8  # wide sources now need several calls
+    sets = report["sets"]
+    assert isinstance(sets, dict)
+    assert sets["unseen"]["hybrid"]["columns"] == 44
+    assert sets["samples"]["fallbacks_to_rules"] + sets["unseen"]["fallbacks_to_rules"] == 0
 
 
 def test_call_budget_falls_back_to_rules(tmp_path: Path) -> None:
@@ -70,9 +110,19 @@ def test_gemini_without_key_fails_fast(monkeypatch: pytest.MonkeyPatch, tmp_path
     assert not (tmp_path / REPORT_JSON).exists()
 
 
-def test_max_calls_must_be_positive(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "bad",
+    [
+        ["--max-calls", "0"],
+        ["--columns-per-call", "0"],
+        ["--columns-per-call", "41"],
+        ["--timeout-seconds", "0"],
+        ["--thinking-level", "extreme"],
+    ],
+)
+def test_bad_arguments_are_refused(bad: list[str], tmp_path: Path) -> None:
     with pytest.raises(SystemExit):
-        main(["--provider", "mock", "--max-calls", "0", "--out", str(tmp_path)])
+        main(["--provider", "mock", *bad, "--out", str(tmp_path)])
 
 
 def _request(text: str) -> LLMRequest:
@@ -111,3 +161,89 @@ def test_find_leaks_and_percentile() -> None:
     assert percentile([], 0.5) is None
     assert percentile([5.0, 1.0, 3.0, 2.0], 0.5) == 2.0
     assert percentile([5.0, 1.0, 3.0, 2.0], 0.95) == 5.0
+
+
+class Scripted(LLMProvider):
+    """Raises each scripted error in turn, then answers "{}"; with ``always`` raises forever."""
+
+    name = "scripted"
+    model = "scripted-1"
+
+    def __init__(self, errors: list[LLMError], *, always: bool = False) -> None:
+        self.errors = errors
+        self.always = always
+
+    async def complete(self, request: LLMRequest) -> LLMResponse:
+        if self.always:
+            raise self.errors[0]
+        if self.errors:
+            raise self.errors.pop(0)
+        return LLMResponse(
+            text="{}", model=self.model, input_tokens=1, output_tokens=1, latency_ms=1
+        )
+
+
+def test_retries_count_toward_the_budget_and_outcomes_are_counted() -> None:
+    unavailable = LLMUnavailableError("503", code=503, status="UNAVAILABLE")
+    ticks = iter([0.0, 0.25, 1.0])  # failed attempt: start only
+    guard = GuardedProvider(
+        Scripted([unavailable]), max_calls=2, sensitive=set(), clock=lambda: next(ticks)
+    )
+
+    async def no_sleep(_delay: float) -> None:
+        return None
+
+    settings = settings_for("mock", "scripted-1", None)
+    gateway = LLMGateway(
+        guard, InMemoryCache(), InMemoryCostLogger(), PIIMasker(), settings, sleep=no_sleep
+    )
+
+    asyncio.run(gateway.complete(_request("hi")))
+
+    assert guard.calls == 2
+    assert dict(guard.outcomes) == {"503 UNAVAILABLE": 1, "ok": 1}
+    assert guard.ok_latencies_ms == [750.0]
+    with pytest.raises(CallBudgetExhaustedError):
+        asyncio.run(gateway.complete(_request("again")))
+
+
+def test_a_call_cut_off_by_the_gateway_timeout_is_counted() -> None:
+    class Hangs(Scripted):
+        async def complete(self, request: LLMRequest) -> LLMResponse:
+            await asyncio.sleep(5)
+            raise AssertionError("not reached")
+
+    guard = GuardedProvider(Hangs([]), max_calls=1, sensitive=set())
+
+    async def call() -> None:
+        async with asyncio.timeout(0.01):
+            await guard.complete(_request("hi"))
+
+    with pytest.raises(TimeoutError):
+        asyncio.run(call())
+    assert dict(guard.outcomes) == {"LLMTimeoutError GATEWAY_TIMEOUT": 1}
+
+
+def test_report_groups_errors_by_status_and_lists_cleaned_details() -> None:
+    rejected = LLMBadRequestError(
+        "Gemini API error 400 INVALID_ARGUMENT",
+        code=400,
+        status="INVALID_ARGUMENT",
+        detail="Unknown name additionalProperties at generation_config",
+    )
+    settings = settings_for("mock", "scripted-1", None, RunOptions(columns_per_call=40))
+
+    report = asyncio.run(run(Scripted([rejected], always=True), settings, max_calls=40))
+
+    assert report["errors"] == {"400 INVALID_ARGUMENT": 8}
+    assert report["error_details"] == {
+        "400 INVALID_ARGUMENT": ["Unknown name additionalProperties at generation_config"]
+    }
+    assert report["schema_fallbacks"] == 8  # each source retried once without the schema
+    assert report["provider_calls"] == 16
+    assert report["provider_calls_by_outcome"] == {"400 INVALID_ARGUMENT": 16}
+    assert report["latency_ms"]["successful_calls"] == 0
+    summary = markdown(report)
+    assert "- 400 INVALID_ARGUMENT: Unknown name additionalProperties" in summary
+    assert "Latency of 0 successful calls: p50 n/a" in summary
+    assert "Every source fell back to rules" in summary

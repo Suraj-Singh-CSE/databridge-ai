@@ -88,3 +88,43 @@ now also covers the first five digits in parentheses (`app/privacy/masking.py`, 
 2. Live: add the repository secret `GEMINI_API_KEY` (Settings, Secrets and variables, Actions,
    New repository secret), then Actions, "Live mapping eval", Run workflow (change the model name
    if needed). Locally: `GEMINI_API_KEY=... python -m dbeval.live_mapping_eval --out /tmp/report`.
+
+## Live run findings (2026-11-22)
+
+Two manual runs of the live workflow with `gemini-3.8-flash` (a GA model whose default thinking
+level is medium) never produced a usable answer; every source fell back to rules.
+
+- **Run 1:** all 8 calls failed in about 0.2 s with 0 tokens and `LLMResponseError`. That type
+  meant an HTTP status other than 401/403/404/408/429/5xx, most likely 400 INVALID_ARGUMENT for
+  the response schema: Pydantic's `model_json_schema()` holds `$defs`/`$ref`, `title`, `default`
+  and `additionalProperties`. The log kept only the error type, so the exact cause was lost.
+- **Run 2:** requests were accepted, but attempts took 20-30 s and ended in `LLMTimeoutError`
+  (30 s limit) or 503 `LLMUnavailableError`; retries used up the 20-call budget.
+
+What changed:
+
+- **Diagnosable errors.** Provider errors keep the HTTP code, Google's status and its message
+  (emails and digit runs of 6+ removed, at most 200 characters) as `error_code`, `error_status`
+  and `error_detail` on the `llm_call` log event and the `llm_calls` record. Empty answers record
+  the finish reason (`NO_TEXT`). The report groups errors by them, e.g. `{"400 INVALID_ARGUMENT": 8}`,
+  lists up to three messages per group and counts every provider attempt by outcome.
+- **Schema compatibility.** Gemini gets a cleaned schema (`app/llm/schema.py`): refs inlined, only
+  `type`, `properties`, `required`, `items`, `anyOf`, `enum`, `description`, `format`,
+  `minimum`/`maximum` and `minItems`/`maxItems` kept. If a call with a schema still gets a 400,
+  the gateway resends it once in plain JSON mode (`schema_fallback: true` on the log event); the
+  answer is still validated against the full Pydantic model and repaired once if needed.
+- **Thinking level.** `GEMINI_THINKING_LEVEL` (`minimal`/`low`/`medium`/`high`, empty = model
+  default; default `low`) is sent as `ThinkingConfig(thinking_level=...)` (google-genai 3.x).
+  Thought tokens still count as output tokens and against `MAPPING_MAX_OUTPUT_TOKENS`.
+- **Timeouts and retries.** `LLM_TIMEOUT_SECONDS` stays 30 for the app; the workflow uses 90.
+  Backoff is now base 2 s times 2.5 per attempt (about 2 s, 5 s, 12.5 s) with +/-20% jitter,
+  capped at 30 s; a 429's RetryInfo delay wins when longer. Every attempt (retries, the schema
+  fallback and repairs) counts toward `--max-calls`, now 40 by default.
+- **Smaller requests.** `MAPPING_MAX_COLUMNS_PER_CALL` (default 40) splits wide sources; the
+  workflow uses 12. Suggestions have the same structure whatever the batch size.
+- **Report.** The Markdown summary starts with the effective settings (model, thinking level,
+  timeout, attempts, columns per call, output tokens, budget); latency percentiles cover
+  successful calls only.
+
+To re-run: Actions, "Live mapping eval", Run workflow (defaults: `low`, 90 s, 12 columns, 40
+calls). If errors remain, the run summary now names the status and Google's message.

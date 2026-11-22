@@ -25,6 +25,9 @@ class LLMRequest(BaseModel):
     system: str | None = None
     messages: list[Message] = Field(min_length=1)
     response_schema: type[BaseModel] | None = None
+    # Send ``response_schema`` to the provider for constrained decoding. False: JSON mode only
+    # (the gateway's fallback after a 400); the gateway validates the answer either way.
+    enforce_schema: bool = True
     temperature: float = Field(default=0.0, ge=0.0, le=2.0)
     max_output_tokens: int = Field(default=1024, ge=1, le=65_536)
 

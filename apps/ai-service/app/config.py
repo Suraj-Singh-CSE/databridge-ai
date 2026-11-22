@@ -42,14 +42,19 @@ class Settings(BaseSettings):
     llm_provider: Literal["mock", "gemini"] = "mock"
     gemini_api_key: SecretStr | None = None
     gemini_model: str = Field(default=DEFAULT_GEMINI_MODEL, min_length=1)
+    # How much the model "thinks" before answering. "" = the model's default (medium on Gemini 3
+    # Flash, which made mapping calls slow). Thought tokens count as output tokens.
+    gemini_thinking_level: Literal["", "minimal", "low", "medium", "high"] = "low"
     # Seconds a cached LLM response stays valid; 0 turns the cache off.
     llm_cache_ttl_seconds: int = Field(default=86_400, ge=0)
     # Total provider attempts per call for retryable errors (rate limit, timeout, unavailable).
     llm_max_attempts: int = Field(default=3, ge=1, le=10)
-    # Exponential backoff: base * 2^(attempt-1), capped at max, then jittered.
-    llm_backoff_base_seconds: float = Field(default=1.0, gt=0)
-    llm_backoff_max_seconds: float = Field(default=16.0, gt=0)
-    # Hard limit for one provider attempt.
+    # Exponential backoff: base * multiplier^(attempt-1), jittered by +/-20%, capped at max
+    # (defaults: about 2 s, 5 s, 12.5 s). A 429's Retry-After is honoured up to the cap.
+    llm_backoff_base_seconds: float = Field(default=2.0, gt=0)
+    llm_backoff_multiplier: float = Field(default=2.5, ge=1, le=10)
+    llm_backoff_max_seconds: float = Field(default=30.0, gt=0)
+    # Hard limit for one provider attempt (the live evaluation uses 90).
     llm_timeout_seconds: float = Field(default=30.0, gt=0, le=600)
     # JSON, e.g. {"gemini-3.8-flash": {"input": 66, "output": 330}}. Unknown models cost 0.
     llm_prices_inr_per_1m: dict[str, ModelPrice] = Field(default_factory=_default_prices)
@@ -78,8 +83,10 @@ class Settings(BaseSettings):
     mapping_llm_enabled: bool = True
     # 0 keeps answers repeatable (and cacheable) for the same masked profile.
     mapping_temperature: float = Field(default=0.0, ge=0.0, le=1.0)
-    # Per call; one call covers up to 40 columns.
+    # Per call; one call covers up to MAPPING_MAX_COLUMNS_PER_CALL columns.
     mapping_max_output_tokens: int = Field(default=4096, ge=256, le=65_536)
+    # Columns per LLM call; smaller batches answer faster, larger ones make fewer calls.
+    mapping_max_columns_per_call: int = Field(default=40, ge=1, le=40)
 
     @model_validator(mode="after")
     def _hard_limit_after_soft_limit(self) -> Self:

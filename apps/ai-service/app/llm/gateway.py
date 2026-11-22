@@ -17,6 +17,7 @@ from app.llm.base import LLMProvider, LLMRequest, LLMResponse, Message
 from app.llm.cache import LLMCache
 from app.llm.cost import CostLogger, LLMCallRecord, cost_inr
 from app.llm.errors import (
+    LLMBadRequestError,
     LLMError,
     LLMRateLimitError,
     LLMResponseError,
@@ -41,6 +42,7 @@ class _CallStats:
     attempts: int = 0
     input_tokens: int = 0
     output_tokens: int = 0
+    schema_fallback: bool = False
 
 
 class _CachedAnswer(BaseModel):
@@ -193,7 +195,7 @@ class LLMGateway:
     # ---- provider calls
 
     async def _call_validated(self, masked: LLMRequest, stats: _CallStats) -> LLMResponse:
-        response = await self._call_with_retry(masked, stats)
+        response = await self._call_with_schema_fallback(masked, stats)
         schema = masked.response_schema
         if schema is None:
             return response
@@ -213,7 +215,7 @@ class LLMGateway:
                 }
             )
         )
-        response = await self._call_with_retry(repair, stats)
+        response = await self._call_with_schema_fallback(repair, stats)
         try:
             return response.model_copy(update={"parsed": self._parse(response.text, schema)})
         except ValidationError as error:
@@ -221,6 +223,30 @@ class LLMGateway:
                 f"Model output did not match {schema.__name__} after one repair attempt: "
                 f"{_describe(error)}"
             ) from None
+
+    async def _call_with_schema_fallback(
+        self, request: LLMRequest, stats: _CallStats
+    ) -> LLMResponse:
+        """If the provider rejects a request that carried a response schema (HTTP 400), resend it
+        once in plain JSON mode; the answer is still validated (and repaired) against the schema."""
+        if stats.schema_fallback:
+            request = request.model_copy(update={"enforce_schema": False})
+        try:
+            return await self._call_with_retry(request, stats)
+        except LLMBadRequestError as error:
+            if request.response_schema is None or not request.enforce_schema:
+                raise
+            stats.schema_fallback = True
+            logger.warning(
+                "llm_schema_fallback",
+                task=request.task,
+                error_code=error.code,
+                error_status=error.status,
+                error_detail=error.detail,
+            )
+        return await self._call_with_retry(
+            request.model_copy(update={"enforce_schema": False}), stats
+        )
 
     async def _call_with_retry(self, request: LLMRequest, stats: _CallStats) -> LLMResponse:
         max_attempts = self._settings.llm_max_attempts
@@ -231,7 +257,8 @@ class LLMGateway:
                     response = await self.provider.complete(request)
             except TimeoutError:
                 error: LLMRetryableError = LLMTimeoutError(
-                    f"LLM call timed out after {self._settings.llm_timeout_seconds}s"
+                    f"LLM call timed out after {self._settings.llm_timeout_seconds}s",
+                    status="GATEWAY_TIMEOUT",
                 )
             except LLMRetryableError as retryable:
                 error = retryable
@@ -247,16 +274,23 @@ class LLMGateway:
                 task=request.task,
                 attempt=attempt,
                 error_type=type(error).__name__,
+                error_code=error.code,
+                error_status=error.status,
+                error_detail=error.detail,
                 delay_s=round(delay, 3),
             )
             await self._sleep(delay)
         raise AssertionError("unreachable")  # pragma: no cover - the loop returns or raises
 
     def _backoff(self, attempt: int, error: LLMRetryableError) -> float:
-        """Exponential backoff with "equal jitter": half fixed, half random. Honors Retry-After."""
-        cap = self._settings.llm_backoff_max_seconds
-        exponential = min(cap, self._settings.llm_backoff_base_seconds * 2.0 ** (attempt - 1))
-        delay = exponential / 2 + self._rand() * exponential / 2
+        """Exponential backoff (base * multiplier^(attempt-1)) with +/-20% jitter, capped.
+        A rate limit's Retry-After wins when it is longer (still capped)."""
+        settings = self._settings
+        cap = settings.llm_backoff_max_seconds
+        exponential = settings.llm_backoff_base_seconds * settings.llm_backoff_multiplier ** (
+            attempt - 1
+        )
+        delay = exponential * (0.8 + 0.4 * self._rand())
         if isinstance(error, LLMRateLimitError) and error.retry_after_seconds is not None:
             delay = max(delay, error.retry_after_seconds)
         return min(delay, cap)
@@ -305,6 +339,10 @@ class LLMGateway:
             attempts=stats.attempts,
             outcome="ok" if error is None else "error",
             error_type=type(error).__name__ if error is not None else None,
+            error_code=error.code if error is not None else None,
+            error_status=error.status if error is not None else None,
+            error_detail=error.detail if error is not None else None,
+            schema_fallback=stats.schema_fallback,
             project_id=project_id,
             request_id=request_id if isinstance(request_id, str) else None,
         )

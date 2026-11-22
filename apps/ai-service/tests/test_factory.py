@@ -44,6 +44,11 @@ def test_gemini_with_key_uses_configured_model(settings: Settings) -> None:
 
     assert isinstance(provider, GeminiProvider)
     assert provider.model == "gemini-x-flash"
+    assert provider.thinking_level == "low"  # GEMINI_THINKING_LEVEL default
+
+    default_level = build_provider(gemini.model_copy(update={"gemini_thinking_level": ""}))
+    assert isinstance(default_level, GeminiProvider)
+    assert default_level.thinking_level is None
 
 
 def test_app_refuses_to_start_with_gemini_and_no_key(settings: Settings) -> None:

@@ -375,10 +375,16 @@ The mapping engine is scored against known answers on synthetic data
   2. On GitHub: **Settings → Secrets and variables → Actions → New repository secret**, name
      `GEMINI_API_KEY`, paste the key, **Add secret**.
   3. **Actions → "Live mapping eval" → Run workflow**. Keep or change `model` (default
-     `gemini-3.8-flash`) and `max_calls` (default 20; 8 calls cover every source once).
-  4. Read the results in the run's summary; the JSON and Markdown report are in the
-     `live-eval-report` artifact. The run fails if the model cannot be reached (see the error
-     types) or if any prompt still held a raw email or phone (such a prompt is never sent).
+     `gemini-3.8-flash`), `max_calls` (default 40; retries count), `thinking_level` (default
+     `low`; `default` = the model's own), `timeout_seconds` (default 90) and `columns_per_call`
+     (default 12).
+  4. Read the results in the run's summary: it starts with the effective settings, counts every
+     provider call by outcome, groups errors by status (e.g. `400 INVALID_ARGUMENT`) with
+     Google's message, and gives the latency of successful calls. The JSON and Markdown report
+     are in the `live-eval-report` artifact. The run fails if any prompt still held a raw email
+     or phone (such a prompt is never sent).
+  5. To re-run after a change (or with other settings), run the workflow again; each run is
+     independent and uses no cache. Findings from earlier runs: ADR 0013 "Live run findings".
 
 Only synthetic files are sent, after the gateway's masking. Dry run without a key:
 `cd eval && python -m dbeval.live_mapping_eval --provider mock --out /tmp/live-report`.

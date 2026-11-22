@@ -23,7 +23,10 @@ def build_provider(settings: Settings) -> LLMProvider:
             "LLM_PROVIDER=gemini requires GEMINI_API_KEY. Set the key, or use LLM_PROVIDER=mock."
         )
     return GeminiProvider(
-        settings.gemini_model, api_key=api_key, timeout_seconds=settings.llm_timeout_seconds
+        settings.gemini_model,
+        api_key=api_key,
+        timeout_seconds=settings.llm_timeout_seconds,
+        thinking_level=settings.gemini_thinking_level or None,
     )
 
 

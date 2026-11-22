@@ -5,7 +5,7 @@ Only the gateway calls this, with already-masked requests. The SDK's own retries
 """
 
 import time
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
 import httpx
 from google import genai
@@ -14,6 +14,7 @@ from google.genai import types
 
 from app.llm.base import LLMProvider, LLMRequest, LLMResponse
 from app.llm.errors import (
+    LLMBadRequestError,
     LLMConfigError,
     LLMError,
     LLMRateLimitError,
@@ -21,6 +22,9 @@ from app.llm.errors import (
     LLMTimeoutError,
     LLMUnavailableError,
 )
+from app.llm.schema import gemini_schema
+
+ThinkingLevelName = Literal["minimal", "low", "medium", "high"]
 
 
 class GenerateContent(Protocol):
@@ -44,9 +48,12 @@ class GeminiProvider(LLMProvider):
         *,
         api_key: str | None = None,
         timeout_seconds: float = 30.0,
+        thinking_level: ThinkingLevelName | None = None,
         models: GenerateContent | None = None,
     ) -> None:
+        """``thinking_level`` None leaves the model's default (``medium`` on Gemini 3 Flash)."""
         self.model = model
+        self.thinking_level = thinking_level
         if models is None:
             if not api_key:
                 raise LLMConfigError("GeminiProvider needs an API key (set GEMINI_API_KEY).")
@@ -66,9 +73,14 @@ class GeminiProvider(LLMProvider):
             temperature=request.temperature,
             max_output_tokens=request.max_output_tokens,
         )
+        if self.thinking_level is not None:
+            config.thinking_config = types.ThinkingConfig(
+                thinking_level=types.ThinkingLevel(self.thinking_level.upper())
+            )
         if request.response_schema is not None:
             config.response_mime_type = "application/json"
-            config.response_json_schema = request.response_schema.model_json_schema()
+            if request.enforce_schema:
+                config.response_json_schema = gemini_schema(request.response_schema)
         contents = [
             types.Content(
                 role="model" if message.role == "assistant" else "user",
@@ -84,14 +96,19 @@ class GeminiProvider(LLMProvider):
         except genai_errors.APIError as error:
             raise _map_api_error(error) from None
         except httpx.TimeoutException:
-            raise LLMTimeoutError("Gemini request timed out") from None
+            raise LLMTimeoutError("Gemini request timed out", status="HTTP_TIMEOUT") from None
         except httpx.TransportError as error:
             raise LLMUnavailableError(f"Gemini unreachable ({type(error).__name__})") from None
         latency_ms = (time.perf_counter() - started) * 1000
 
         text = response.text
         if not text:
-            raise LLMResponseError(f"Gemini returned no text (finish reason: {_finish(response)})")
+            finish = _finish(response)
+            raise LLMResponseError(
+                f"Gemini returned no text (finish reason: {finish})",
+                status="NO_TEXT",
+                detail=f"finish reason: {finish}",
+            )
         usage = response.usage_metadata
         input_tokens = (usage.prompt_token_count or 0) if usage else 0
         output_tokens = (
@@ -115,18 +132,23 @@ def _finish(response: types.GenerateContentResponse) -> str:
 
 
 def _map_api_error(error: genai_errors.APIError) -> LLMError:
-    """Translate an SDK error by HTTP status. Messages carry the status, never request content."""
+    """Translate an SDK error by HTTP status, keeping the code, Google's status and its message
+    (cleaned by ``safe_detail``). Google's messages describe the request's shape, never its text."""
     code = error.code
-    label = f"Gemini API error {code} {error.status or ''}".strip()
+    status = error.status or None
+    fields: dict[str, Any] = {"code": code, "status": status, "detail": error.message}
+    label = f"Gemini API error {code} {status or ''}".strip()
     if code == 429:
-        return LLMRateLimitError(label, retry_after_seconds=_retry_after(error))
+        return LLMRateLimitError(label, retry_after_seconds=_retry_after(error), **fields)
     if code in (408, 504):
-        return LLMTimeoutError(label)
+        return LLMTimeoutError(label, **fields)
     if code in (500, 502, 503):
-        return LLMUnavailableError(label)
+        return LLMUnavailableError(label, **fields)
     if code in (401, 403, 404):
-        return LLMConfigError(f"{label}: check GEMINI_API_KEY and GEMINI_MODEL")
-    return LLMResponseError(label)
+        return LLMConfigError(f"{label}: check GEMINI_API_KEY and GEMINI_MODEL", **fields)
+    if code == 400:
+        return LLMBadRequestError(label, **fields)
+    return LLMResponseError(label, **fields)
 
 
 def _retry_after(error: genai_errors.APIError) -> float | None:
