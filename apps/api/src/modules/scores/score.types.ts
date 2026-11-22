@@ -15,7 +15,32 @@ export interface ScoreReason {
   text: string;
 }
 
-export interface PairScore {
+export const AI_DECISIONS = ['same', 'different', 'unsure'] as const;
+export type AiDecision = (typeof AI_DECISIONS)[number];
+/** `reviewed`: the AI answered; `unavailable`: it was asked but gave no usable answer. */
+export const AI_STATUSES = ['reviewed', 'unavailable'] as const;
+export type AiStatus = (typeof AI_STATUSES)[number];
+
+/**
+ * The AI's suggestion for a `maybe` pair, written by the `pair_review` job
+ * (apps/ai-service/app/matching/review.py, ADR 0017). It never changes `band`; a person decides.
+ * All null on pairs the AI has not been asked about.
+ */
+export interface AiSuggestionFields {
+  aiStatus: AiStatus | null;
+  aiDecision: AiDecision | null;
+  /** 0-1. */
+  aiConfidence: number | null;
+  /** Short plain-language sentence; never contains record values. */
+  aiReason: string | null;
+  aiModel: string | null;
+  aiPromptVersion: string | null;
+  reviewedAt: Date | null;
+  /** The AI decision when its confidence clears the threshold, else `band` (`maybe`). */
+  suggestedBand: ScoreBand;
+}
+
+export interface PairScore extends AiSuggestionFields {
   /** 1-based, highest score first. */
   position: number;
   /** Staged record ids, recordA < recordB. */
@@ -55,6 +80,26 @@ export interface BandCount {
   count: number;
 }
 
+/** Counts of the last `pair_review` run on this scoring run. */
+export interface AiReviewSummary {
+  jobId: string;
+  promptVersion: string;
+  /** null when no call answered. */
+  model: string | null;
+  confidenceThreshold: number;
+  pairCount: number;
+  reviewed: number;
+  same: number;
+  different: number;
+  unsure: number;
+  unavailable: number;
+  suggestedMatch: number;
+  suggestedNonMatch: number;
+  calls: number;
+  failedCalls: number;
+  finishedAt: Date;
+}
+
 /** One per project: the last successful run. */
 export interface ScoreSummary {
   jobId: string;
@@ -67,12 +112,16 @@ export interface ScoreSummary {
   thresholds: { match: number; maybe: number };
   model: ScoreModel;
   finishedAt: Date;
+  /** null until the AI has reviewed this run's maybe pairs. */
+  aiReview: AiReviewSummary | null;
 }
 
 export interface ScorePageQuery {
   runId: string;
   /** Only this band; every band when absent. */
   band?: ScoreBand | undefined;
+  /** Only pairs with this suggested band (`band` when the AI has not moved it). */
+  suggestedBand?: ScoreBand | undefined;
   afterPosition: number;
   limit: number;
 }

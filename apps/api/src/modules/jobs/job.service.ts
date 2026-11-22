@@ -28,7 +28,7 @@ export interface JobService {
 }
 
 export interface JobServiceDeps {
-  repos: Pick<Repositories, 'jobs' | 'sources' | 'mappings' | 'candidates'>;
+  repos: Pick<Repositories, 'jobs' | 'sources' | 'mappings' | 'candidates' | 'scores'>;
   /** Mapping jobs need the project's target schema stored (the default is seeded here). */
   targetSchemas: TargetSchemaService;
   audit: AuditService;
@@ -82,6 +82,16 @@ const SCORING = {
   outdated:
     'The candidate pairs are out of date: a source changed after they were found. Find candidate pairs again first.',
   finding: 'Candidate pairs are being found. Wait for that job to finish, then score them.',
+};
+
+const PAIR_REVIEW = {
+  busy: 'The AI is already reviewing the maybe pairs. Wait for that job to finish, or cancel it first.',
+  notRun: 'Score the candidate pairs before asking the AI to review them.',
+  outdated:
+    'The scores are out of date: the candidate pairs or a source changed after scoring. Score the candidate pairs again first.',
+  scoring:
+    'The candidate pairs are being scored. Wait for that job to finish, then start the review.',
+  none: 'There are no “maybe” pairs to review: every pair was already decided by its score.',
 };
 
 function pendingMessage(count: number): string {
@@ -249,6 +259,32 @@ export function createJobService({
   }
 
   /**
+   * `pair_review` is project-level (payload `{}`): it asks the AI about the maybe pairs of the
+   * current scores, so they must exist (409 SCORES_NOT_RUN), be current (SCORES_OUTDATED) and
+   * hold at least one maybe pair (NO_MAYBE_PAIRS), with no scoring job (SCORING_RUNNING) or other
+   * review (PAIR_REVIEW_RUNNING) active. The worker checks the scores again.
+   */
+  async function checkPairReviewJob(project: Project): Promise<void> {
+    const scores = await repos.scores.findSummary(project.id);
+    if (!scores) throw AppError.conflict(PAIR_REVIEW.notRun, { reason: 'SCORES_NOT_RUN' });
+    const candidates = await repos.candidates.findSummary(project.id);
+    if (
+      candidates?.runId !== scores.candidatesRunId ||
+      candidatesOutdated(candidates, await repos.sources.listByProject(project.id))
+    ) {
+      throw AppError.conflict(PAIR_REVIEW.outdated, { reason: 'SCORES_OUTDATED' });
+    }
+    if (await isActive(project, 'scoring')) {
+      throw AppError.conflict(PAIR_REVIEW.scoring, { reason: 'SCORING_RUNNING' });
+    }
+    const maybe = scores.bandCounts.find((b) => b.band === 'maybe')?.count ?? 0;
+    if (maybe === 0) throw AppError.conflict(PAIR_REVIEW.none, { reason: 'NO_MAYBE_PAIRS' });
+    if (await isActive(project, 'pair_review')) {
+      throw AppError.conflict(PAIR_REVIEW.busy, { reason: 'PAIR_REVIEW_RUNNING' });
+    }
+  }
+
+  /**
    * Source jobs need a source of this project (404 otherwise) that no other job of the same
    * type is working on (409). Mapping and standardise also need the source profiled (409);
    * mapping needs the project's target schema stored, standardise a fully reviewed mapping.
@@ -279,6 +315,7 @@ export function createJobService({
       if (isSourceJob(type)) await checkSourceJob(project, type, payload);
       if (type === 'candidates') await checkCandidatesJob(project);
       if (type === 'scoring') await checkScoringJob(project);
+      if (type === 'pair_review') await checkPairReviewJob(project);
       const job = await repos.jobs.create({
         projectId: project.id,
         type,

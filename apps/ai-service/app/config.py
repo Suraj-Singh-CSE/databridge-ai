@@ -108,6 +108,16 @@ class Settings(BaseSettings):
     # "defaults": the hand-set m/u only.
     scoring_model: Literal["em", "defaults"] = "em"
 
+    # ---- AI review of maybe pairs (ADR 0017)
+    # false = no LLM call: every maybe pair is saved with aiStatus "unavailable".
+    pair_review_llm_enabled: bool = True
+    # Maybe pairs per LLM call.
+    pair_review_pairs_per_call: int = Field(default=10, ge=1, le=25)
+    # An AI decision at or above this confidence sets suggestedBand (match / non_match).
+    pair_review_confidence_threshold: float = Field(default=0.8, gt=0, le=1)
+    pair_review_temperature: float = Field(default=0.0, ge=0.0, le=1.0)
+    pair_review_max_output_tokens: int = Field(default=4096, ge=256, le=65_536)
+
     @property
     def paced_requests_per_minute(self) -> int:
         """The pacing limit in force: 0 for the mock provider, which has no quota to respect."""

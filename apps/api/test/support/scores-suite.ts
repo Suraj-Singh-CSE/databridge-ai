@@ -5,7 +5,13 @@ import request from 'supertest';
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import { CANDIDATE_KEY_TYPES } from '../../src/modules/candidates/candidate.types.js';
-import type { PairScore, ScoreBand, ScoreSummary } from '../../src/modules/scores/score.types.js';
+import type {
+  AiReviewSummary,
+  AiSuggestionFields,
+  PairScore,
+  ScoreBand,
+  ScoreSummary,
+} from '../../src/modules/scores/score.types.js';
 import type { Repositories } from '../../src/repositories.js';
 
 import { buildTestApp, fastPasswords } from './build-app.js';
@@ -27,6 +33,53 @@ const PASSWORD = 'correct horse battery';
 const bearer = (s: Session) => ({ Authorization: `Bearer ${s.token}` });
 const newId = () => randomBytes(12).toString('hex');
 const FIELDS = ['full_name', 'phone', 'email', 'date_of_birth', 'city', 'pin_code', 'address'];
+const REVIEWED_AT = new Date('2026-11-22T13:00:00Z');
+
+/** The AI fields of a pair the AI has not been asked about. */
+function notReviewed(band: ScoreBand): AiSuggestionFields {
+  return {
+    aiStatus: null,
+    aiDecision: null,
+    aiConfidence: null,
+    aiReason: null,
+    aiModel: null,
+    aiPromptVersion: null,
+    reviewedAt: null,
+    suggestedBand: band,
+  };
+}
+
+/** What the pair_review job writes on a maybe pair it got a confident "same" for. */
+const REVIEWED_SAME: AiSuggestionFields = {
+  aiStatus: 'reviewed',
+  aiDecision: 'same',
+  aiConfidence: 0.9,
+  aiReason: 'Same phone or email.',
+  aiModel: 'mock',
+  aiPromptVersion: 'pair_review.v1',
+  reviewedAt: REVIEWED_AT,
+  suggestedBand: 'match',
+};
+
+function aiReview(jobId: string): AiReviewSummary {
+  return {
+    jobId,
+    promptVersion: 'pair_review.v1',
+    model: 'mock',
+    confidenceThreshold: 0.8,
+    pairCount: 1,
+    reviewed: 1,
+    same: 1,
+    different: 0,
+    unsure: 0,
+    unavailable: 0,
+    suggestedMatch: 1,
+    suggestedNonMatch: 0,
+    calls: 1,
+    failedCalls: 0,
+    finishedAt: REVIEWED_AT,
+  };
+}
 
 /** Starting the scoring job and reading pair scores, against memory and MongoDB. */
 export function defineScoresSuite(label: string, harness: ScoresHarness): void {
@@ -181,11 +234,17 @@ export function defineScoresSuite(label: string, harness: ScoresHarness): void {
             ? { field: 'phone', level: 'different', weight: -11.5, text: 'Different phones' }
             : { field: 'phone', level: 'exact', weight: 7.1, text: 'Same phone' },
         ],
+        ...notReviewed(band),
       };
     }
 
-    /** Scores the three pairs: one match, one maybe, one non-match. */
-    async function scorePairs(): Promise<{ crm: string; billing: string }> {
+    /**
+     * Scores the three pairs: one match, one maybe (or a second non-match with `noMaybe`), one
+     * non-match; with `reviewed`, the maybe pair carries a confident AI "same".
+     */
+    async function scorePairs(
+      options: { noMaybe?: boolean; reviewed?: boolean } = {},
+    ): Promise<{ crm: string; billing: string }> {
       const { crm, billing, candidatesRun } = await prepare();
       const pairs = await repos.candidates.listPairs(projectId, {
         runId: candidatesRun,
@@ -202,8 +261,8 @@ export function defineScoresSuite(label: string, harness: ScoresHarness): void {
         pairCount: 3,
         bandCounts: [
           { band: 'match', count: 1 },
-          { band: 'maybe', count: 1 },
-          { band: 'non_match', count: 1 },
+          { band: 'maybe', count: options.noMaybe ? 0 : 1 },
+          { band: 'non_match', count: options.noMaybe ? 2 : 1 },
         ],
         thresholds: { match: 0.9, maybe: 0.5 },
         model: {
@@ -224,13 +283,17 @@ export function defineScoresSuite(label: string, harness: ScoresHarness): void {
           ],
         },
         finishedAt: new Date('2026-11-22T12:00:00Z'),
+        aiReview: options.reviewed ? aiReview(newId()) : null,
       };
+      const middle = options.noMaybe
+        ? score(2, p2.recordA, p2.recordB, 0.2, 'non_match')
+        : score(2, p2.recordA, p2.recordB, 0.7, 'maybe');
       await harness.workerScores(repos, {
         projectId,
         summary,
         scores: [
           score(1, p1.recordA, p1.recordB, 0.999, 'match'),
-          score(2, p2.recordA, p2.recordB, 0.7, 'maybe'),
+          options.reviewed ? { ...middle, ...REVIEWED_SAME } : middle,
           score(3, p3.recordA, p3.recordB, 0.01, 'non_match'),
         ],
       });
@@ -347,6 +410,95 @@ export function defineScoresSuite(label: string, harness: ScoresHarness): void {
       });
     });
 
+    describe('POST /projects/:projectId/jobs (pair_review)', () => {
+      const startReview = (session: Session | null, payload: object = {}) => {
+        const req = request(app)
+          .post(`/api/v1/projects/${projectId}/jobs`)
+          .send({ type: 'pair_review', payload });
+        return session ? req.set(bearer(session)) : req;
+      };
+
+      it('starts the project-level job for the owner, an admin and a data engineer', async () => {
+        await scorePairs();
+        const engineer = await memberWith('data_engineer');
+
+        for (const session of [owner, admin, engineer]) {
+          const res = await startReview(session);
+          expect(res.status).toBe(202);
+          expect(res.body.data.job).toMatchObject({
+            type: 'pair_review',
+            status: 'queued',
+            payload: {},
+          });
+          await finish((res.body as { data: { job: { id: string } } }).data.job.id);
+        }
+        expect(ai.enqueued.map(({ input }) => [input.type, input.payload])).toEqual(
+          [0, 1, 2].map(() => ['pair_review', {}]),
+        );
+      });
+
+      it('answers 409 with a plain reason before the pairs are scored', async () => {
+        await prepare();
+        const before = await startReview(owner);
+        expect(before.status).toBe(409);
+        expect(before.body.error).toMatchObject({
+          code: 'CONFLICT',
+          message: 'Score the candidate pairs before asking the AI to review them.',
+          details: { reason: 'SCORES_NOT_RUN' },
+        });
+        expect(ai.enqueued).toEqual([]);
+      });
+
+      it('answers 409 without maybe pairs, and once the scores are outdated', async () => {
+        const { crm, billing } = await scorePairs({ noMaybe: true });
+        const none = await startReview(owner);
+        expect(none.status).toBe(409);
+        expect(none.body.error.message).toContain('no \u201cmaybe\u201d pairs to review');
+        expect(none.body.error.details).toEqual({ reason: 'NO_MAYBE_PAIRS' });
+
+        await findCandidates(crm, billing); // pairs found again: the scores are outdated
+        const outdated = await startReview(owner);
+        expect(outdated.status).toBe(409);
+        expect(outdated.body.error.message).toContain('Score the candidate pairs again');
+        expect(outdated.body.error.details).toEqual({ reason: 'SCORES_OUTDATED' });
+        expect(ai.enqueued).toEqual([]);
+      });
+
+      it('answers 409 while scoring or another review is active', async () => {
+        await scorePairs();
+        const running = await repos.jobs.create({
+          projectId,
+          type: 'scoring',
+          payload: {},
+          createdBy: owner.id,
+        });
+        const blocked = await startReview(owner);
+        expect(blocked.status).toBe(409);
+        expect(blocked.body.error.details).toEqual({ reason: 'SCORING_RUNNING' });
+
+        await finish(running.id);
+        await startReview(owner).expect(202);
+        const busy = await startReview(owner);
+        expect(busy.status).toBe(409);
+        expect(busy.body.error.details).toEqual({ reason: 'PAIR_REVIEW_RUNNING' });
+      });
+
+      it('refuses viewers and stewards (403), outsiders (404), bad payloads (400), no token (401)', async () => {
+        await scorePairs();
+        for (const role of ['viewer', 'data_steward'] as const) {
+          const res = await startReview(await memberWith(role));
+          expect(res.status, role).toBe(403);
+          expect(res.body.error.code).toBe('FORBIDDEN');
+        }
+        expect((await startReview(await register('outsider@example.com'))).status).toBe(404);
+        const bad = await startReview(owner, { threshold: 0.9 });
+        expect(bad.status).toBe(400);
+        expect(bad.body.error.code).toBe('VALIDATION_ERROR');
+        expect((await startReview(null)).status).toBe(401);
+        expect(ai.enqueued).toEqual([]);
+      });
+    });
+
     describe('GET .../scores/summary', () => {
       it('returns band counts, thresholds and the model to any member', async () => {
         await scorePairs();
@@ -371,6 +523,29 @@ export function defineScoresSuite(label: string, harness: ScoresHarness): void {
           m: 0.99,
           u: 0.007,
           weight: 7.1,
+        });
+      });
+
+      it('carries the AI review counts once the maybe pairs were reviewed', async () => {
+        await scorePairs();
+        const plain = await request(app).get(summaryUrl()).set(bearer(owner)).expect(200);
+        expect(plain.body.data.summary.aiReview).toBeNull();
+
+        records = {};
+        await scorePairs({ reviewed: true });
+        const res = await request(app).get(summaryUrl()).set(bearer(owner)).expect(200);
+
+        expect(res.body.data.summary.aiReview).toMatchObject({
+          promptVersion: 'pair_review.v1',
+          model: 'mock',
+          confidenceThreshold: 0.8,
+          reviewed: 1,
+          same: 1,
+          different: 0,
+          unsure: 0,
+          unavailable: 0,
+          suggestedMatch: 1,
+          finishedAt: REVIEWED_AT.toISOString(),
         });
       });
 
@@ -416,7 +591,7 @@ export function defineScoresSuite(label: string, harness: ScoresHarness): void {
         sourceName: string;
         fields: Record<string, string | null>;
       }
-      interface Item {
+      interface Item extends Partial<AiSuggestionFields> {
         position: number;
         score: number;
         band: ScoreBand;
@@ -454,6 +629,47 @@ export function defineScoresSuite(label: string, harness: ScoresHarness): void {
         expect(itemsOf(none.body).map((i) => i.reasons[0]?.text)).toEqual(['Different phones']);
       });
 
+      it('shows the AI suggestion beside the score and filters by suggested band', async () => {
+        await scorePairs({ reviewed: true });
+        const viewer = await memberWith('viewer');
+
+        const maybe = await request(app).get(`${listUrl()}?band=maybe`).set(bearer(viewer));
+        expect(maybe.status).toBe(200);
+        const [reviewed] = itemsOf(maybe.body);
+        expect(reviewed).toMatchObject({
+          band: 'maybe',
+          aiStatus: 'reviewed',
+          aiDecision: 'same',
+          aiConfidence: 0.9,
+          aiReason: 'Same phone or email.',
+          aiModel: 'mock',
+          aiPromptVersion: 'pair_review.v1',
+          reviewedAt: REVIEWED_AT.toISOString(),
+          suggestedBand: 'match',
+        });
+
+        const suggested = await request(app)
+          .get(`${listUrl()}?suggestedBand=match`)
+          .set(bearer(viewer))
+          .expect(200);
+        expect(itemsOf(suggested.body).map((i) => [i.position, i.band])).toEqual([
+          [1, 'match'],
+          [2, 'maybe'],
+        ]);
+        const match = itemsOf(suggested.body)[0];
+        expect(match).toMatchObject({ aiStatus: null, aiDecision: null, suggestedBand: 'match' });
+        const still = await request(app)
+          .get(`${listUrl()}?suggestedBand=maybe`)
+          .set(bearer(viewer))
+          .expect(200);
+        expect(itemsOf(still.body)).toEqual([]);
+        const both = await request(app)
+          .get(`${listUrl()}?band=maybe&suggestedBand=match`)
+          .set(bearer(viewer))
+          .expect(200);
+        expect(itemsOf(both.body).map((i) => i.position)).toEqual([2]);
+      });
+
       it('pages through every band by score, highest first', async () => {
         await scorePairs();
 
@@ -482,7 +698,14 @@ export function defineScoresSuite(label: string, harness: ScoresHarness): void {
 
       it('validates band, limit and cursor (at most 100 scores)', async () => {
         await scorePairs();
-        for (const query of ['band=yes', 'limit=0', 'limit=101', 'cursor=abc', 'other=1']) {
+        for (const query of [
+          'band=yes',
+          'suggestedBand=same',
+          'limit=0',
+          'limit=101',
+          'cursor=abc',
+          'other=1',
+        ]) {
           const res = await request(app).get(`${listUrl()}?${query}`).set(bearer(owner));
           expect(res.status, query).toBe(400);
           expect(res.body.error.code).toBe('VALIDATION_ERROR');

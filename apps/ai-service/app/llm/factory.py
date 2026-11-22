@@ -12,6 +12,7 @@ from app.llm.gemini import GeminiProvider
 from app.llm.mock import MockProvider
 from app.llm.pacing import SlidingWindowLimiter
 from app.mapping.prompt import MAPPING_TASK, mock_mapping_answer
+from app.matching.review import REVIEW_TASK, mock_pair_review_answer
 from app.privacy.masking import PIIMasker
 
 
@@ -19,7 +20,9 @@ def build_provider(settings: Settings) -> LLMProvider:
     """``LLM_PROVIDER=mock`` (default) or ``gemini``. Raises LLMConfigError on a bad setup."""
     if settings.llm_provider == "mock":
         # Feature prompts get deterministic, schema-valid answers (tests, CI, local runs).
-        return MockProvider({MAPPING_TASK: mock_mapping_answer})
+        return MockProvider(
+            {MAPPING_TASK: mock_mapping_answer, REVIEW_TASK: mock_pair_review_answer}
+        )
     api_key = settings.gemini_api_key.get_secret_value() if settings.gemini_api_key else ""
     if not api_key.strip():
         raise LLMConfigError(

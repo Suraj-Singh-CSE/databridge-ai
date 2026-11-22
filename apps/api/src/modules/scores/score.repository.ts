@@ -4,7 +4,13 @@ import {
   type PairScoreDoc,
   type ScoreSummaryDoc,
 } from './score.model.js';
-import type { PairScore, ScoreRepository, ScoreSummary } from './score.types.js';
+import type {
+  AiReviewSummary,
+  PairScore,
+  ScoreBand,
+  ScoreRepository,
+  ScoreSummary,
+} from './score.types.js';
 
 export function toScoreSummary(doc: ScoreSummaryDoc): ScoreSummary {
   const { model } = doc;
@@ -28,6 +34,27 @@ export function toScoreSummary(doc: ScoreSummaryDoc): ScoreSummary {
       })),
     },
     finishedAt: doc.finishedAt,
+    aiReview: doc.aiReview ? toAiReview(doc.aiReview) : null,
+  };
+}
+
+function toAiReview(review: NonNullable<ScoreSummaryDoc['aiReview']>): AiReviewSummary {
+  return {
+    jobId: review.jobId.toHexString(),
+    promptVersion: review.promptVersion,
+    model: review.model ?? null,
+    confidenceThreshold: review.confidenceThreshold,
+    pairCount: review.pairCount,
+    reviewed: review.reviewed,
+    same: review.same,
+    different: review.different,
+    unsure: review.unsure,
+    unavailable: review.unavailable,
+    suggestedMatch: review.suggestedMatch,
+    suggestedNonMatch: review.suggestedNonMatch,
+    calls: review.calls,
+    failedCalls: review.failedCalls,
+    finishedAt: review.finishedAt,
   };
 }
 
@@ -42,7 +69,21 @@ function toPairScore(doc: PairScoreDoc): PairScore {
     // Shape owned by the worker: field -> level.
     fieldLevels: doc.fieldLevels as Record<string, string>,
     reasons: doc.reasons.map(({ field, level, weight, text }) => ({ field, level, weight, text })),
+    aiStatus: doc.aiStatus ?? null,
+    aiDecision: doc.aiDecision ?? null,
+    aiConfidence: doc.aiConfidence ?? null,
+    aiReason: doc.aiReason ?? null,
+    aiModel: doc.aiModel ?? null,
+    aiPromptVersion: doc.aiPromptVersion ?? null,
+    reviewedAt: doc.reviewedAt ?? null,
+    // Pairs scored but never reviewed have no suggestedBand stored: it is their band.
+    suggestedBand: doc.suggestedBand ?? doc.band,
   };
+}
+
+/** `suggestedBand`, or `band` where the pair has none stored. */
+function suggestedBandFilter(band: ScoreBand) {
+  return { $or: [{ suggestedBand: band }, { suggestedBand: { $exists: false }, band }] };
 }
 
 export function createMongoScoreRepository(): ScoreRepository {
@@ -51,11 +92,12 @@ export function createMongoScoreRepository(): ScoreRepository {
       const doc = await ScoreSummaryModel.findOne({ projectId }).lean<ScoreSummaryDoc>();
       return doc ? toScoreSummary(doc) : null;
     },
-    async listScores(projectId, { runId, band, afterPosition, limit }) {
+    async listScores(projectId, { runId, band, suggestedBand, afterPosition, limit }) {
       const docs = await PairScoreModel.find({
         projectId,
         runId,
         ...(band ? { band } : {}),
+        ...(suggestedBand ? suggestedBandFilter(suggestedBand) : {}),
         position: { $gt: afterPosition },
       })
         .sort({ position: 1 })

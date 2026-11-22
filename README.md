@@ -311,6 +311,41 @@ dataset and on two unseen holdout sets: no false match, 99.2-99.9% of the true c
   `SCORING_MODEL` (`em` or `defaults`).
 - **Quality**: `cd eval && python -m dbeval.evaluate_scoring`.
 
+**AI review of maybe pairs.** The `pair_review` job asks the LLM (through the gateway) about every
+`maybe` pair, without showing it any personal value: it gets _evidence_ instead (comparison levels
+and similarities, which name words agree exactly, by sound or as an initial, name shapes such as
+`Xxxxx X.`, phone equal / last four digits equal, email local-part edit distance and free-provider
+domain, birth dates equal / day-month swapped / year difference, address word overlap, and the
+values of fields the target schema marks as not personal, such as city and PIN). The evidence is
+scanned for every personal value of the two records before it is sent. The AI answers `same`,
+`different` or `unsure` with a confidence and a short reason; it only _suggests_ (`suggestedBand`),
+the score's `band` never changes, and a person decides. Design notes:
+[ADR 0017](docs/adr/0017-ai-pair-review.md).
+
+| Method | Path (under `/api/v1/projects/:projectId`)     | Who                         | Result                       |
+| ------ | ---------------------------------------------- | --------------------------- | ---------------------------- |
+| POST   | `/jobs` `{ type: "pair_review", payload: {} }` | owner, admin, data_engineer | 202 `{ job }`                |
+| GET    | `/scores?band=&suggestedBand=&limit=&cursor=`  | any member                  | as above, with the AI fields |
+
+- **Start**: project-level. `409` (`details.reason`) unless the pairs were scored
+  (`SCORES_NOT_RUN`), the scores are current (`SCORES_OUTDATED`), there is at least one maybe pair
+  (`NO_MAYBE_PAIRS`), and no scoring (`SCORING_RUNNING`) or other review (`PAIR_REVIEW_RUNNING`) is
+  active. The worker checks again and fails with `SCORES_CHANGED` if the pairs are scored again
+  while it runs. Running it again on the same scores replaces every AI field. An LLM failure does
+  not fail the job: the pairs keep `aiStatus: "unavailable"` and stay `maybe`.
+- **AI fields** on every score: `aiStatus` (`reviewed`, `unavailable`, or null when not asked),
+  `aiDecision`, `aiConfidence`, `aiReason`, `aiModel`, `aiPromptVersion`, `reviewedAt` and
+  `suggestedBand` (the AI decision when its confidence is at least the threshold, else the band).
+  `suggestedBand=` filters on it. The summary gains `aiReview` (null until a review ran): counts
+  reviewed / same / different / unsure / unavailable, suggested matches and non-matches, model,
+  prompt version, threshold and calls.
+- **Settings**: `PAIR_REVIEW_LLM_ENABLED` (true), `PAIR_REVIEW_PAIRS_PER_CALL` (10),
+  `PAIR_REVIEW_CONFIDENCE_THRESHOLD` (0.8), `PAIR_REVIEW_TEMPERATURE` (0),
+  `PAIR_REVIEW_MAX_OUTPUT_TOKENS` (4096); pacing and retries are the gateway's
+  (`LLM_MAX_REQUESTS_PER_MINUTE`, ...).
+- **Quality**: `cd eval && python -m dbeval.evaluate_pair_review` (Mock provider); the real model
+  with the live eval below, task `pair_review`.
+
 **Background jobs.** Long work (profiling, mapping, standardising, matching; pipelines later) runs
 in a Celery worker, not in the request. The api owns the job record in MongoDB; the worker moves it
 forward and publishes every change to Redis; the browser watches it live over Server-Sent Events.
@@ -468,8 +503,8 @@ The mapping engine is scored against known answers on synthetic data
   1. Create an API key in Google AI Studio. Never paste it into code, chat or a commit.
   2. On GitHub: **Settings → Secrets and variables → Actions → New repository secret**, name
      `GEMINI_API_KEY`, paste the key, **Add secret**.
-  3. **Actions → "Live mapping eval" → Run workflow**. Keep or change `model` (default
-     `gemini-3.5-flash-lite`), `max_calls` (default 30; retries count), `thinking_level`
+  3. **Actions → "Live eval" → Run workflow**, task `mapping`. Keep or change `model` (default
+     `gemini-3.5-flash-lite`), `max_calls` (empty = 30; retries count), `thinking_level`
      (default `default` = the model's own; use `low` for Gemini 3 Flash models),
      `timeout_seconds` (default 90), `columns_per_call` (default 12) and `requests_per_minute`
      (default 12).
@@ -483,6 +518,13 @@ The mapping engine is scored against known answers on synthetic data
 
 Only synthetic files are sent, after the gateway's masking. Dry run without a key:
 `cd eval && python -m dbeval.live_mapping_eval --provider mock --out /tmp/live-report`.
+
+**Live AI review of hard pairs (manual, opt-in):** the same workflow with task `pair_review`
+(`max_calls` empty = 15, `pairs_per_call` default 10). It generates the seed 42, 2027 and 2028
+sets, sends their hard pairs as evidence (never values) and reports FS-only accuracy, AI accuracy
+on decided pairs, coverage, wrong "same" decisions, tokens, latency and the privacy check (a
+prompt holding a personal value is never sent, and the run fails). Dry run:
+`cd eval && python -m dbeval.live_mapping_eval --task pair_review --provider mock --out /tmp/lpr`.
 
 ### Mapping accuracy
 
@@ -555,6 +597,21 @@ Precision and recall are for the `match` band over the true pairs among the cand
 end-to-end recall also counts the pairs blocking missed. CI holds floors on all three sets
 (`eval/tests/test_evaluate_scoring.py`).
 
+### AI pair review
+
+`python -m dbeval.evaluate_pair_review` builds _hard pairs_ (FS score in [0.2, 0.97], the `maybe`
+pairs, and the 10 highest-scoring pairs of two different people per set, so there are non-matches
+to grade) on seeds 42, 2027 and 2028, asks the model about them through the gateway and grades the
+suggestions. In CI it uses the Mock provider (fixed rules), so only "it runs and privacy passes" is
+checked; `live_mapping_eval --task pair_review` measures the real model.
+
+| Set       | Hard pairs (true) | FS accuracy | AI decided (coverage) | AI accuracy | Wrong same | same / different / unsure | Privacy |
+| --------- | ----------------: | ----------: | --------------------: | ----------: | ---------: | ------------------------: | ------- |
+| seed 42   |            18 (8) |      100.0% |              0 (0.0%) |         n/a |          0 |                0 / 0 / 18 | passed  |
+| seed 2027 |           21 (11) |       95.2% |              1 (4.8%) |      100.0% |          0 |                1 / 0 / 20 | passed  |
+| seed 2028 |           21 (11) |       95.2% |              0 (0.0%) |         n/a |          0 |                0 / 0 / 21 | passed  |
+| pooled    |           60 (30) |       96.7% |              1 (1.7%) |      100.0% |          0 |                1 / 0 / 59 | passed  |
+
 ## CI
 
 GitHub Actions (`.github/workflows/ci.yml`) runs on every pull request and on pushes to `main`:
@@ -565,8 +622,8 @@ GitHub Actions (`.github/workflows/ci.yml`) runs on every pull request and on pu
   including a real in-process Celery worker against Redis and MongoDB service containers.
 - **eval**: the same checks for the ground-truth data generator in `eval/` ([eval/README](eval/README.md)).
 
-The **Live mapping eval** workflow (`.github/workflows/live-eval.yml`) is separate: manual only,
-never on push or pull request (see "Evaluating mapping accuracy").
+The **Live eval** workflow (`.github/workflows/live-eval.yml`, task `mapping` or `pair_review`) is
+separate: manual only, never on push or pull request (see "Evaluating mapping accuracy").
 
 - **docker**: builds every image, starts the full stack with throwaway secrets, and smoke-tests the
   web root, the api health route (direct and through the nginx proxy), register and `/auth/me`
@@ -574,7 +631,8 @@ never on push or pull request (see "Evaluating mapping accuracy").
   preview, an `.exe` rejected, the file visible read-only to the AI service), background jobs through
   the proxy (a demo job streamed with `curl -N` until it succeeds with increasing progress, a
   `failAtStep` job that fails with the handler's code, a long job cancelled mid-run), profiling,
-  mapping, standardising, finding and scoring candidate pairs for the CRM sample, that the AI service is not
+  mapping, standardising, finding and scoring candidate pairs for the CRM sample, the AI review of
+  maybe pairs (or its `NO_MAYBE_PAIRS` refusal when there are none), that the AI service is not
   reachable from the host, and that containers run as non-root. Then it runs the Playwright e2e
   tests against the stack and uploads screenshots (`web-screenshots`) and, on failure, the
   Playwright report (`playwright-report`).

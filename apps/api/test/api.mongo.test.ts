@@ -9,6 +9,7 @@ import {
 } from '../src/modules/candidates/candidate.model.js';
 import { JobModel } from '../src/modules/jobs/job.model.js';
 import { PairScoreModel, ScoreSummaryModel } from '../src/modules/scores/score.model.js';
+import type { PairScore } from '../src/modules/scores/score.types.js';
 import { RefreshTokenModel } from '../src/modules/auth/refresh-token.model.js';
 import {
   MappingDecisionModel,
@@ -37,6 +38,21 @@ import type {
 import { clearDb, connectTestDb } from './support/mongo.js';
 
 const available = await connectTestDb();
+
+/** A score as the scoring job writes it: no AI fields at all. */
+function withoutAiFields(score: Omit<PairScore, 'aiStatus'>) {
+  const {
+    aiDecision: _decision,
+    aiConfidence: _confidence,
+    aiReason: _reason,
+    aiModel: _model,
+    aiPromptVersion: _version,
+    reviewedAt: _reviewedAt,
+    suggestedBand: _suggested,
+    ...scored
+  } = score;
+  return scored;
+}
 
 afterAll(async () => {
   if (available) await disconnectDb();
@@ -148,8 +164,9 @@ describe.skipIf(!available)('MongoDB', () => {
       // What apps/ai-service/app/matching/scoring_store.py writes (then drops the older runs).
       const { jobId, runId, candidatesRunId } = summary;
       await PairScoreModel.insertMany(
-        scores.map((score) => ({
-          ...score,
+        // The scoring job writes no AI fields; only pair_review adds them to maybe pairs.
+        scores.map(({ aiStatus, ...score }) => ({
+          ...(aiStatus ? { ...score, aiStatus } : withoutAiFields(score)),
           projectId,
           jobId,
           runId,
@@ -157,9 +174,10 @@ describe.skipIf(!available)('MongoDB', () => {
           createdAt: new Date(),
         })),
       );
+      const { aiReview, ...scored } = summary;
       await ScoreSummaryModel.replaceOne(
         { projectId },
-        { ...summary, projectId },
+        { ...scored, ...(aiReview ? { aiReview } : {}), projectId },
         { upsert: true },
       );
       await PairScoreModel.deleteMany({ projectId, runId: { $ne: runId } });

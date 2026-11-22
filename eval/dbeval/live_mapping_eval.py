@@ -15,6 +15,9 @@ the run exits non-zero if any prompt failed it.
         --max-calls 30 --timeout-seconds 90 --columns-per-call 12 --requests-per-minute 12
     python -m dbeval.live_mapping_eval --provider mock    # dry run, no key, no network
 
+``--task pair_review`` runs the AI review of hard pairs instead (``live_pair_review_eval``,
+ADR 0017; default budget 15 calls, ``--pairs-per-call`` pairs per call).
+
 The key is read from the environment only and is never printed or written.
 """
 
@@ -42,6 +45,7 @@ from app.llm.gateway import LLMGateway
 from app.logging import configure_logging
 from app.mapping.engine import MappingSettings, suggest, suggest_with_rules
 from app.mapping.prompt import MAX_COLUMNS_PER_CALL
+from app.matching.review import MAX_PAIRS_PER_CALL
 from app.privacy.masking import PIIMasker
 from pydantic import SecretStr
 
@@ -59,6 +63,8 @@ from dbeval.evaluate_mapping import (
 from dbeval.loaders import read_csv, read_xlsx
 
 ProviderName = Literal["gemini", "mock"]
+TASKS = ("mapping", "pair_review")
+DEFAULT_MAX_CALLS = {"mapping": 30, "pair_review": 15}
 ThinkingLevel = Literal["", "minimal", "low", "medium", "high"]
 THINKING_LEVELS: tuple[ThinkingLevel, ...] = ("", "minimal", "low", "medium", "high")
 # A provider call cut off by the gateway's timeout ends in cancellation, not an LLMError.
@@ -154,6 +160,7 @@ class RunOptions:
     timeout_seconds: float = 30.0
     columns_per_call: int = MAX_COLUMNS_PER_CALL
     requests_per_minute: int = 12
+    pairs_per_call: int = 10
 
 
 def settings_for(
@@ -172,6 +179,7 @@ def settings_for(
         llm_timeout_seconds=options.timeout_seconds,
         mapping_max_columns_per_call=options.columns_per_call,
         llm_max_requests_per_minute=options.requests_per_minute,
+        pair_review_pairs_per_call=options.pairs_per_call,
     )
 
 
@@ -406,10 +414,14 @@ def _ms(value: float | None) -> str:
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    parser.add_argument("--task", choices=TASKS, default="mapping")
     parser.add_argument("--provider", choices=("gemini", "mock"), default="gemini")
     parser.add_argument("--model", default=os.environ.get("GEMINI_MODEL") or DEFAULT_GEMINI_MODEL)
     parser.add_argument(
-        "--max-calls", type=int, default=30, help="provider calls at most (retries count)"
+        "--max-calls",
+        type=int,
+        default=None,
+        help="provider calls at most (retries count); default 30 for mapping, 15 for pair_review",
     )
     parser.add_argument(
         "--requests-per-minute",
@@ -435,8 +447,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         default=MAX_COLUMNS_PER_CALL,
         help=f"columns per mapping call, 1-{MAX_COLUMNS_PER_CALL}",
     )
+    parser.add_argument(
+        "--pairs-per-call",
+        type=int,
+        default=10,
+        help=f"pair_review only: pairs per call, 1-{MAX_PAIRS_PER_CALL}",
+    )
     parser.add_argument("--out", type=Path, default=Path("live-eval-report"))
     args = parser.parse_args(argv)
+    if args.max_calls is None:
+        args.max_calls = DEFAULT_MAX_CALLS[args.task]
+    if not 1 <= args.pairs_per_call <= MAX_PAIRS_PER_CALL:
+        parser.error(f"--pairs-per-call must be 1-{MAX_PAIRS_PER_CALL}")
     if args.max_calls < 1:
         parser.error("--max-calls must be at least 1")
     if not 1 <= args.columns_per_call <= MAX_COLUMNS_PER_CALL:
@@ -451,14 +473,26 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     configure_logging("WARNING")  # retries and fallbacks only; never prompt text or the key
     options = RunOptions(
-        args.thinking_level, args.timeout_seconds, args.columns_per_call, args.requests_per_minute
+        args.thinking_level,
+        args.timeout_seconds,
+        args.columns_per_call,
+        args.requests_per_minute,
+        args.pairs_per_call,
     )
     settings = settings_for(args.provider, args.model, api_key, options)
-    report = asyncio.run(run(build_provider(settings), settings, args.max_calls))
+    provider = build_provider(settings)
+    if args.task == "pair_review":
+        # Imported here: live_pair_review_eval builds on this module's guard and settings.
+        from dbeval import live_pair_review_eval as live
+
+        report = asyncio.run(live.run(provider, settings, args.max_calls))
+        summary, names = live.markdown(report), (live.REPORT_JSON, live.REPORT_MD)
+    else:
+        report = asyncio.run(run(provider, settings, args.max_calls))
+        summary, names = markdown(report), (REPORT_JSON, REPORT_MD)
     args.out.mkdir(parents=True, exist_ok=True)
-    (args.out / REPORT_JSON).write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
-    summary = markdown(report)
-    (args.out / REPORT_MD).write_text(summary, encoding="utf-8")
+    (args.out / names[0]).write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+    (args.out / names[1]).write_text(summary, encoding="utf-8")
     print(summary)
     return 0 if report["privacy"]["passed"] else 1
 

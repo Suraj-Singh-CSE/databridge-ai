@@ -1,6 +1,6 @@
 import { Schema, model, type InferSchemaType } from 'mongoose';
 
-import { SCORE_BANDS } from './score.types.js';
+import { AI_DECISIONS, AI_STATUSES, SCORE_BANDS } from './score.types.js';
 
 /** Written by the scoring worker (apps/ai-service/app/matching/scoring_store.py); the api reads. */
 const pairScoreSchema = new Schema(
@@ -32,6 +32,16 @@ const pairScoreSchema = new Schema(
       default: [],
     },
     createdAt: { type: Date, required: true },
+    // Set on maybe pairs by the pair_review job (apps/ai-service/app/matching/review_store.py).
+    aiStatus: { type: String, enum: AI_STATUSES },
+    aiDecision: { type: String, enum: AI_DECISIONS },
+    aiConfidence: { type: Number },
+    aiReason: { type: String },
+    aiModel: { type: String },
+    aiPromptVersion: { type: String },
+    aiJobId: { type: Schema.Types.ObjectId, ref: 'Job' },
+    reviewedAt: { type: Date },
+    suggestedBand: { type: String, enum: SCORE_BANDS },
   },
   { collection: 'pair_scores' },
 );
@@ -102,6 +112,29 @@ const scoreSummarySchema = new Schema(
       required: true,
     },
     finishedAt: { type: Date, required: true },
+    aiReview: {
+      type: new Schema(
+        {
+          jobId: { type: Schema.Types.ObjectId, ref: 'Job', required: true },
+          promptVersion: { type: String, required: true },
+          model: { type: String, default: null },
+          confidenceThreshold: { type: Number, required: true },
+          pairCount: { type: Number, required: true },
+          reviewed: { type: Number, required: true },
+          same: { type: Number, required: true },
+          different: { type: Number, required: true },
+          unsure: { type: Number, required: true },
+          unavailable: { type: Number, required: true },
+          suggestedMatch: { type: Number, required: true },
+          suggestedNonMatch: { type: Number, required: true },
+          calls: { type: Number, required: true },
+          failedCalls: { type: Number, required: true },
+          finishedAt: { type: Date, required: true },
+        },
+        { _id: false },
+      ),
+      default: null,
+    },
   },
   { collection: 'score_summaries' },
 );

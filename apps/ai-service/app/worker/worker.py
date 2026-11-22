@@ -16,6 +16,8 @@ from app.logging import configure_logging
 from app.mapping.engine import MappingSettings
 from app.mapping.store import MappingStore
 from app.matching.blocking import BlockingConfig
+from app.matching.review import ReviewSettings
+from app.matching.review_store import PairReviewStore
 from app.matching.scoring import ScoringConfig
 from app.matching.scoring_store import ScoreStore
 from app.matching.store import CandidateStore
@@ -26,6 +28,7 @@ from app.worker.celery_config import create_celery
 from app.worker.handlers import build_registry
 from app.worker.handlers.candidates import CandidatesHandler
 from app.worker.handlers.mapping import MappingHandler, MappingHandlerSettings
+from app.worker.handlers.pair_review import PairReviewHandler, PairReviewHandlerSettings
 from app.worker.handlers.profile import ProfileHandler, ProfilerSettings
 from app.worker.handlers.scoring import ScoringHandler
 from app.worker.handlers.standardise import StandardiseHandler
@@ -41,8 +44,7 @@ def build_runner(settings: Settings) -> JobRunner:
     """Production collaborators: MongoDB (``jobs``, ``sources``, ``column_profiles``,
     ``target_schemas``, ``mapping_suggestions``, ``mapping_decisions``, ``staged_records``,
     ``candidate_pairs``, ``candidate_summaries``, ``pair_scores``, ``score_summaries``,
-    ``llm_calls``), Redis, the uploads folder and
-    the LLM gateway. Clients connect lazily."""
+    ``llm_calls``), Redis, the uploads folder and the LLM gateway. Clients connect lazily."""
     mongo: MongoClient[Document] = MongoClient(
         settings.mongodb_uri, serverSelectionTimeoutMS=CLIENT_TIMEOUT_SECONDS * 1000
     )
@@ -73,7 +75,8 @@ def build_runner(settings: Settings) -> JobRunner:
         CandidateStore(database), BlockingConfig(max_block_size=settings.blocking_max_block_size)
     )
     scorer = ScoringHandler(ScoreStore(database), scoring_config(settings))
-    registry = build_registry(profiler, mapper, standardiser, blocker, scorer)
+    reviewer = PairReviewHandler(PairReviewStore(database), gateway, review_settings(settings))
+    registry = build_registry(profiler, mapper, standardiser, blocker, scorer, reviewer)
     return JobRunner(store, JobSignals(redis), registry, retry)
 
 
@@ -111,4 +114,16 @@ def scoring_config(settings: Settings) -> ScoringConfig:
         match_threshold=settings.scoring_match_threshold,
         maybe_threshold=settings.scoring_maybe_threshold,
         use_em=settings.scoring_model == "em",
+    )
+
+
+def review_settings(settings: Settings) -> PairReviewHandlerSettings:
+    return PairReviewHandlerSettings(
+        llm_enabled=settings.pair_review_llm_enabled,
+        review=ReviewSettings(
+            pairs_per_call=settings.pair_review_pairs_per_call,
+            confidence_threshold=settings.pair_review_confidence_threshold,
+            temperature=settings.pair_review_temperature,
+            max_output_tokens=settings.pair_review_max_output_tokens,
+        ),
     )

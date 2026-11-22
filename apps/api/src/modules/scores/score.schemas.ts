@@ -13,6 +13,8 @@ export const scoreSummaryQuery = z.strictObject({});
 export const scoreQuery = z.strictObject({
   /** Only this band; every band (highest score first) when absent. */
   band: z.enum(SCORE_BANDS, { error: 'must be match, maybe or non_match' }).optional(),
+  /** Only this suggested band (the AI's suggestion, or `band` where it has none). */
+  suggestedBand: z.enum(SCORE_BANDS, { error: 'must be match, maybe or non_match' }).optional(),
   limit: z.coerce.number().int().min(1).max(SCORES_MAX_LIMIT).default(20),
   /** The `nextCursor` of the previous page (a score position). */
   cursor: z
