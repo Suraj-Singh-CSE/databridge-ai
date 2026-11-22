@@ -1,4 +1,6 @@
 import { createMongoAuditRepository } from './modules/audit/audit.repository.js';
+import { createMongoExportRepository } from './modules/exports/export.repository.js';
+import type { ExportRepository } from './modules/exports/export.types.js';
 import { createMongoClusterRepository } from './modules/clusters/cluster.repository.js';
 import type { ClusterRepository, ReviewRepository } from './modules/clusters/cluster.types.js';
 import { createMongoReviewRepository } from './modules/clusters/review.repository.js';
@@ -42,6 +44,8 @@ export interface Repositories {
   clusters: ClusterRepository;
   /** Review decisions on clusters: pair decisions and approvals (ADR 0019). */
   review: ReviewRepository;
+  /** Golden-record export files' metadata (ADR 0020). */
+  exports: ExportRepository;
   audit: AuditRepository;
 }
 
@@ -60,6 +64,7 @@ export function createMongoRepositories(): Repositories {
     scores: createMongoScoreRepository(),
     clusters: createMongoClusterRepository(),
     review: createMongoReviewRepository(),
+    exports: createMongoExportRepository(),
     audit: createMongoAuditRepository(),
   };
 }

@@ -9,3 +9,8 @@ export function projectPrefix(projectId: string): string {
 export function sourceFileKey(projectId: string, sourceId: string, format: SourceFormat): string {
   return `${projectPrefix(projectId)}sources/${sourceId}/original.${format}`;
 }
+
+/** A golden-record export written by the worker (apps/ai-service/app/export/storage.py). */
+export function exportFileKey(projectId: string, exportId: string, format: 'csv' | 'xlsx'): string {
+  return `${projectPrefix(projectId)}exports/${exportId}.${format}`;
+}

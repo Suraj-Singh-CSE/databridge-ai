@@ -78,7 +78,8 @@ class Settings(BaseSettings):
     job_retry_backoff_max_seconds: float = Field(default=60.0, gt=0)
 
     # ---- column profiling (ADR 0011)
-    # Root of the uploads volume written by apps/api (read-only here). Same folder as the api's.
+    # Root of the storage volume shared with apps/api (same folder as the api's UPLOAD_DIR):
+    # uploads are only read here; the export job writes under projects/<id>/exports/.
     upload_dir: str = Field(default="./data/uploads", min_length=1)
     # Most data rows profiled in one file; same variable and default as the api's upload limit.
     max_upload_rows: int = Field(default=200_000, ge=1)
@@ -127,6 +128,10 @@ class Settings(BaseSettings):
     survivorship_source_trust: str = Field(
         default="crm,billing,support", pattern=r"^\s*[\w-]+(\s*,\s*[\w-]+)*\s*$", max_length=500
     )
+
+    # ---- export (ADR 0020)
+    # Most rows in one export file (Excel holds at most 1,048,575 per sheet).
+    export_max_rows: int = Field(default=200_000, ge=1, le=1_000_000)
 
     @property
     def source_trust(self) -> tuple[str, ...]:

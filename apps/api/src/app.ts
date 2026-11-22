@@ -24,6 +24,8 @@ import { createCandidateService } from './modules/candidates/candidate.service.j
 import { createClusterRouter } from './modules/clusters/cluster.routes.js';
 import { createClusterService } from './modules/clusters/cluster.service.js';
 import { createReviewService } from './modules/clusters/review.service.js';
+import { createExportRouter } from './modules/exports/export.routes.js';
+import { createExportService } from './modules/exports/export.service.js';
 import { createScoreRouter } from './modules/scores/score.routes.js';
 import { createScoreService } from './modules/scores/score.service.js';
 import { createMappingRouter } from './modules/mappings/mapping.routes.js';
@@ -98,6 +100,7 @@ export function createApp({
     staleAfterMs: config.JOB_STALE_AFTER_SECONDS * 1000,
   });
   const reviewService = createReviewService(repos, jobService, audit);
+  const exportService = createExportService(repos, files, audit);
   const jobDeps = {
     jobService,
     projects: repos.projects,
@@ -154,6 +157,10 @@ export function createApp({
   app.use(
     '/api/v1/projects/:projectId/clusters',
     createClusterRouter({ clusterService, reviewService, projects: repos.projects, tokens }),
+  );
+  app.use(
+    '/api/v1/projects/:projectId/exports',
+    createExportRouter({ exportService, projects: repos.projects, tokens }),
   );
   app.use(
     '/api/v1/projects/:projectId/target-schema',

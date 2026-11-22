@@ -23,6 +23,7 @@ dependencies = [
   "celery[redis]>=5.4",
   "polars>=2.1",
   "fastexcel>=0.21",
+  "xlsxwriter>=3.2",
 ]
 
 [project.optional-dependencies]
@@ -81,9 +82,9 @@ strict = true
 plugins = ["pydantic.mypy"]
 files = ["app"]
 
-# Celery and kombu ship no type information.
+# Celery, kombu and xlsxwriter ship no type information.
 [[tool.mypy.overrides]]
-module = ["celery.*", "kombu.*"]
+module = ["celery.*", "kombu.*", "xlsxwriter", "xlsxwriter.*"]
 ignore_missing_imports = true
 
 [tool.pydantic-mypy]

@@ -129,7 +129,8 @@ export type JobType =
   | 'candidates'
   | 'scoring'
   | 'pair_review'
-  | 'clustering';
+  | 'clustering'
+  | 'export';
 export type JobStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled';
 
 export interface JobError {

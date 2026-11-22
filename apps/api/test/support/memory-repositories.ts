@@ -28,6 +28,7 @@ import type {
   ClusterApproval,
   PairDecision,
 } from '../../src/modules/clusters/cluster.types.js';
+import type { ExportRecord, ExportRepository } from '../../src/modules/exports/export.types.js';
 import type {
   ColumnProfile,
   ColumnProfileRepository,
@@ -109,6 +110,7 @@ export interface MemoryRepositories extends Repositories {
   candidates: CandidateRepository & { workerSave(write: CandidateWrite): void };
   scores: ScoreRepository & { workerSave(write: ScoreWrite): void };
   clusters: ClusterRepository & { workerSave(write: ClusterWrite): void };
+  exports: ExportRepository & { workerSave(record: ExportRecord): void };
 }
 
 /**
@@ -151,6 +153,8 @@ export function createMemoryRepositories(): MemoryRepositories {
   const dropPrefix = (map: Map<string, unknown>, projectId: string) => {
     for (const key of map.keys()) if (key.startsWith(`${projectId}/`)) map.delete(key);
   };
+  // key: export id (= the export job's id).
+  const exportRecords = new Map<string, ExportRecord>();
   const audit: AuditEntry[] = [];
   let firstAdminClaimed = false;
 
@@ -797,6 +801,37 @@ export function createMemoryRepositories(): MemoryRepositories {
         await Promise.resolve();
         pairDecisions.delete(projectId);
         approvals.delete(projectId);
+      },
+    },
+
+    exports: {
+      async listByProject(projectId, limit) {
+        await Promise.resolve();
+        return structuredClone(
+          [...exportRecords.values()]
+            .filter((e) => e.projectId === projectId)
+            .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
+            .slice(0, limit),
+        );
+      },
+      async findById(projectId, exportId) {
+        await Promise.resolve();
+        const found = exportRecords.get(exportId.toLowerCase());
+        return found?.projectId === projectId ? structuredClone(found) : null;
+      },
+      async delete(projectId, exportId) {
+        await Promise.resolve();
+        const found = exportRecords.get(exportId.toLowerCase());
+        if (found?.projectId !== projectId) return false;
+        return exportRecords.delete(found.id);
+      },
+      async deleteByProject(projectId) {
+        await Promise.resolve();
+        for (const [id, e] of exportRecords)
+          if (e.projectId === projectId) exportRecords.delete(id);
+      },
+      workerSave(record) {
+        exportRecords.set(record.id, structuredClone(record));
       },
     },
 
