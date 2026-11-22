@@ -20,7 +20,7 @@ import type { JobEventBus } from './job.events.js';
 import { createJobBody, jobParams, listJobsQuery, projectJobsParams } from './job.schemas.js';
 import type { JobService } from './job.service.js';
 import { streamJob } from './job.stream.js';
-import type { Job } from './job.types.js';
+import type { Job, JobType } from './job.types.js';
 
 export interface ProjectJobsRouterDeps {
   jobService: JobService;
@@ -35,6 +35,8 @@ export interface JobRouterDeps extends ProjectJobsRouterDeps {
 
 /** Starting and cancelling jobs: owner, admin or a data_engineer member. */
 const WRITE: MinimumAccess = 'data_engineer';
+/** Job types data stewards may start too: an export of the customers they review (ADR 0020). */
+const START: Partial<Record<JobType, MinimumAccess>> = { export: 'data_steward' };
 
 function actorOf(req: Request): Actor {
   return { user: currentUser(req), requestId: requestIdOf(req) };
@@ -59,7 +61,10 @@ export function createProjectJobsRouter({
   router.post(
     '/',
     validate({ params: projectJobsParams, body: createJobBody }),
-    access(WRITE),
+    (req, res, next) => {
+      const { type } = validated(req, 'body', createJobBody);
+      return access(START[type] ?? WRITE)(req, res, next);
+    },
     async (req, res) => {
       const input = validated(req, 'body', createJobBody);
       const job = await jobService.create(actorOf(req), currentProject(req), input);

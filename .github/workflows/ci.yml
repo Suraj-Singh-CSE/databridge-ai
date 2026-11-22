@@ -608,6 +608,53 @@ jobs:
           curl -sS --fail-with-body "$clusters/summary" -H "$auth" | jq -e '.data.summary.decisionCount >= 1' > /dev/null
           echo "ok: split applied by the automatic clustering job"
 
+          # Export golden records (ADR 0020): approve a customer of the new run, then a CSV of the
+          # approved customers and an Excel workbook of all of them. Only counts are printed.
+          customer=$(curl -sS --fail-with-body "$clusters?minSize=2&limit=1" -H "$auth" | jq -r '.data.items[0].customerId')
+          curl -sS --fail-with-body -X POST "$clusters/$customer/approve" -H "$auth" \
+            -H 'Content-Type: application/json' -d '{}' > /dev/null
+          exports="$api/projects/$project/exports"
+          all_customers=$(curl -sS --fail-with-body "$clusters/summary" -H "$auth" | jq -r '.data.summary.clusterCount')
+          for spec in 'csv approved text/csv; charset=utf-8' \
+            'xlsx all application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'; do
+            format=${spec%% *}; rest=${spec#* }; scope=${rest%% *}; type=${rest#* }
+            job=$(curl -sS --fail-with-body -X POST "$api/projects/$project/jobs" -H "$auth" \
+              -H 'Content-Type: application/json' \
+              -d "{\"type\":\"export\",\"payload\":{\"format\":\"$format\",\"scope\":\"$scope\",\"includeSources\":true}}" \
+              | jq -r '.data.job.id')
+            curl -sSN --fail --max-time 90 "$api/jobs/$job/events" -H "$auth" | sed -n 's/^data: //p' > "/tmp/export-$job"
+            echo "export job $job: $(jq -r '"\(.status) \(.progress)% \(.message)"' "/tmp/export-$job" | paste -sd ',' -)"
+            jq -s -e 'last | .status == "succeeded"' "/tmp/export-$job" > /dev/null
+            export_id=$(jq -s -r 'last | .result.exportId' "/tmp/export-$job")
+            curl -sS --fail-with-body "$exports/$export_id" -H "$auth" > /tmp/export-meta
+            jq -c '.data.export | {format, scope, rowCount, bytes, filename}' /tmp/export-meta
+            rows=$(jq -r '.data.export.rowCount' /tmp/export-meta)
+            got=$(curl -sS --fail-with-body -D /tmp/export-headers -o "/tmp/export.$format" \
+              -w '%{http_code}|%{content_type}' "$exports/$export_id/download" -H "$auth")
+            echo "download: $got, $(wc -c < "/tmp/export.$format") bytes"
+            test "$got" = "200|$type"
+            test -s "/tmp/export.$format"
+            test "$(wc -c < "/tmp/export.$format")" = "$(jq -r '.data.export.bytes' /tmp/export-meta)"
+            grep -qi '^content-disposition: attachment; filename="customers-[a-z0-9-]*\.'"$format"'"' /tmp/export-headers
+            grep -qi '^x-content-type-options: nosniff' /tmp/export-headers
+            grep -qi '^cache-control: no-store' /tmp/export-headers
+            if [ "$format" = csv ]; then
+              head -n 1 /tmp/export.csv | sed 's/^\xEF\xBB\xBF//' | grep -q '^customer_id,'
+              counted=$(python3 -c 'import csv, sys; print(sum(1 for _ in csv.reader(open(sys.argv[1], encoding="utf-8-sig", newline=""))) - 1)' /tmp/export.csv)
+              echo "csv rows: $counted (metadata: $rows)"
+              test "$counted" = "$rows"
+              test "$rows" -ge 1
+            else
+              test "$(head -c 4 /tmp/export.xlsx | od -An -tx1 | tr -d ' \n')" = 504b0304
+              echo "xlsx rows: $rows (customers: $all_customers)"
+              test "$rows" = "$all_customers"
+            fi
+          done
+          code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$api/projects/$project/jobs" -H "$auth" \
+            -H 'Content-Type: application/json' -d '{"type":"export","payload":{"format":"pdf"}}')
+          test "$code" = 400
+          echo "ok: golden records exported to CSV and Excel, downloaded as attachments"
+
       - name: AI service is not published to the host
         run: |
           if curl -s --max-time 3 http://localhost:8000/internal/v1/health; then

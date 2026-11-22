@@ -423,6 +423,45 @@ naming a record that no longer exists is ignored and counted (`staleDecisionCoun
   cuts the weakest link on their strongest path until they are in separate customers
   (`cutLinkCount`, `conflictingDecisionCount` in the summary).
 
+**Export golden records** (CSV and Excel). An `export` job writes the golden records of the
+current clusters to a file; the api lists, streams and deletes the files. Design notes:
+[ADR 0020](docs/adr/0020-export.md).
+
+```bash
+curl -s -X POST http://localhost:8080/api/v1/projects/$PROJECT/jobs \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"type":"export","payload":{"format":"xlsx","scope":"all","includeSources":true}}'
+# when the job succeeded: result.exportId
+curl -OJ http://localhost:8080/api/v1/projects/$PROJECT/exports/$EXPORT/download \
+  -H "Authorization: Bearer $TOKEN"     # customers-<project>-<yyyymmdd-hhmm>.xlsx
+```
+
+- **Payload**: `format` `csv | xlsx`; `scope` `approved` (default: customers approved as they are
+  now) or `all` (approved and proposed, with a `review_status` column); `includeSources` (default
+  false) adds `record_count` and `source_record_keys` (`<source name>:<source record id>`, `; `).
+- **Rows**: one per customer, `customer_id` first, then the target fields in schema order. The
+  XLSX has three sheets: `Customers`, `Provenance` (customer, field, chosen source, source record
+  id, rule) and `About` (project, time, scope, schema version, clustering run, row counts).
+- **Formula injection**: values starting with `=`, `+`, `-`, `@`, a tab or a carriage return (also
+  after leading spaces) cannot run as formulas. In **CSV** they get a leading `'`, so phone numbers
+  such as `+91...` read `'+91...` in the file (Excel shows them as text). In **XLSX** every value
+  is a text cell, never a formula; such cells are marked as text with Excel's quote prefix, so they
+  show unchanged.
+- **Start**: owner, admin, data_engineer and data_steward. `409` (`details.reason`):
+  `CLUSTERS_NOT_RUN`, `CLUSTERS_OUTDATED`, `CLUSTERING_RUNNING`, `NOTHING_APPROVED`. The job fails
+  with `EXPORT_TOO_LARGE` above `EXPORT_MAX_ROWS` (200,000) rows.
+- CSV is UTF-8 with a byte order mark (for Excel), RFC 4180 quoting and `\r\n` line endings.
+
+| Method | Path (under `/projects/:projectId/exports`) | Who                         | Result                         |
+| ------ | ------------------------------------------- | --------------------------- | ------------------------------ |
+| GET    | `/?limit=`                                  | any member                  | 200 `{ items }` newest first   |
+| GET    | `/:exportId`                                | any member                  | 200 `{ export }`               |
+| GET    | `/:exportId/download`                       | any member                  | 200 the file, as an attachment |
+| DELETE | `/:exportId`                                | owner, admin, data_engineer | 200 `{ deleted: true }`        |
+
+Every download is audited (`export.download`, metadata only), like the start (`job.create`) and
+the delete (`export.delete`). Exports are deleted with the project.
+
 **Background jobs.** Long work (profiling, mapping, standardising, matching; pipelines later) runs
 in a Celery worker, not in the request. The api owns the job record in MongoDB; the worker moves it
 forward and publishes every change to Redis; the browser watches it live over Server-Sent Events.
@@ -445,13 +484,13 @@ queued --> running --> succeeded
 A finished job (`succeeded`, `failed`, `cancelled`) never changes again: every update is a
 conditional write, so late or duplicate updates are ignored.
 
-| Method | Path                               | Who                         | Result                                   |
-| ------ | ---------------------------------- | --------------------------- | ---------------------------------------- |
-| POST   | `/projects/:projectId/jobs`        | owner, admin, data_engineer | 202 `{ job }` (queued)                   |
-| GET    | `/projects/:projectId/jobs?limit=` | any member, owner, admin    | 200 `{ items }` newest first (1-100, 20) |
-| GET    | `/jobs/:jobId`                     | any member of its project   | 200 `{ job }`                            |
-| POST   | `/jobs/:jobId/cancel`              | owner, admin, data_engineer | 200 `{ job }` (finished jobs unchanged)  |
-| GET    | `/jobs/:jobId/events`              | any member of its project   | 200 `text/event-stream`                  |
+| Method | Path                               | Who                         | Result                                             |
+| ------ | ---------------------------------- | --------------------------- | -------------------------------------------------- |
+| POST   | `/projects/:projectId/jobs`        | owner, admin, data_engineer | 202 `{ job }` (queued; `export` also data_steward) |
+| GET    | `/projects/:projectId/jobs?limit=` | any member, owner, admin    | 200 `{ items }` newest first (1-100, 20)           |
+| GET    | `/jobs/:jobId`                     | any member of its project   | 200 `{ job }`                                      |
+| POST   | `/jobs/:jobId/cancel`              | owner, admin, data_engineer | 200 `{ job }` (finished jobs unchanged)            |
+| GET    | `/jobs/:jobId/events`              | any member of its project   | 200 `text/event-stream`                            |
 
 - **Start**: `{ "type": "demo", "payload": { "steps": 1-20, "stepMs": 10-2000, "failAtStep"?: n } }`,
   `{ "type": "profile", "payload": { "sourceId": "<id>" } }` or `mapping` with the same payload

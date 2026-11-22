@@ -56,6 +56,8 @@ x-ai-environment: &ai-environment
   CLUSTERING_INCLUDE_AI_SUGGESTED: ${CLUSTERING_INCLUDE_AI_SUGGESTED:-true}
   CLUSTERING_MAX_CLUSTER_SIZE: ${CLUSTERING_MAX_CLUSTER_SIZE:-6}
   SURVIVORSHIP_SOURCE_TRUST: ${SURVIVORSHIP_SOURCE_TRUST:-crm,billing,support}
+  # Export of golden records (docs/adr/0020-export.md).
+  EXPORT_MAX_ROWS: ${EXPORT_MAX_ROWS:-200000}
 
 services:
   mongo:
@@ -116,8 +118,13 @@ services:
         '--hostname=worker@%h',
       ]
     environment: *ai-environment
+    # Same uid/gid as the api's non-root "node" user (1000), so the export job can write its
+    # files under projects/<id>/exports/ in the folders the api created, and the api can
+    # stream and delete them (docs/adr/0020-export.md). Still not root.
+    user: '1000:1000'
     volumes:
-      - uploads:/data/uploads:ro
+      # Read-write for exports only; uploaded originals are only read (ADR 0009, ADR 0020).
+      - uploads:/data/uploads
     # Not published and listens on no port: it only talks to redis and mongo.
     healthcheck:
       # Replaces the image's HTTP check: asks this worker to answer a ping over the broker.
@@ -202,5 +209,6 @@ services:
 volumes:
   mongo-data:
   redis-data:
-  # Uploaded files: read-write for api, read-only for ai-service and ai-worker.
+  # Uploaded files and exports: read-write for api and ai-worker (exports), read-only for
+  # ai-service.
   uploads:

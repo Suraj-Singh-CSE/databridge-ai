@@ -1,6 +1,7 @@
 import { defineApiSuite } from './support/api-suite.js';
 import { defineCandidatesSuite } from './support/candidates-suite.js';
 import { defineClustersSuite } from './support/clusters-suite.js';
+import { defineExportsSuite } from './support/exports-suite.js';
 import { defineScoresSuite } from './support/scores-suite.js';
 import { defineJobsSuite } from './support/jobs-suite.js';
 import type { Repositories } from '../src/repositories.js';
@@ -8,6 +9,7 @@ import type { Repositories } from '../src/repositories.js';
 import {
   createMemoryRepositories,
   type CandidateWrite,
+  type ClusterWrite,
   type MemoryRepositories,
   type ScoreWrite,
   type StagedWrite,
@@ -77,10 +79,18 @@ const memoryScores = {
   },
 };
 defineScoresSuite('in-memory repositories', memoryScores);
-defineClustersSuite('in-memory repositories', {
+const memoryClusters = {
   ...memoryScores,
-  async workerClusters(repos, write) {
+  async workerClusters(repos: Repositories, write: ClusterWrite) {
     await Promise.resolve();
     (repos as MemoryRepositories).clusters.workerSave(write);
+  },
+};
+defineClustersSuite('in-memory repositories', memoryClusters);
+defineExportsSuite('in-memory repositories', {
+  ...memoryClusters,
+  async workerExport(repos, record) {
+    await Promise.resolve();
+    (repos as MemoryRepositories).exports.workerSave(record);
   },
 });

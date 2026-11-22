@@ -4,6 +4,7 @@ import type { Logger } from '../../logger.js';
 import type { Repositories } from '../../repositories.js';
 import type { AuditService } from '../audit/audit.service.js';
 import { candidatesOutdated } from '../candidates/candidate.service.js';
+import { currentClusters } from '../clusters/cluster.service.js';
 import type { Actor } from '../projects/project.service.js';
 import type { Project } from '../projects/project.types.js';
 import type { MappingDecision, MappingSuggestion } from '../mappings/mapping.types.js';
@@ -30,7 +31,17 @@ export interface JobService {
 }
 
 export interface JobServiceDeps {
-  repos: Pick<Repositories, 'jobs' | 'sources' | 'mappings' | 'candidates' | 'scores'>;
+  repos: Pick<
+    Repositories,
+    | 'jobs'
+    | 'sources'
+    | 'mappings'
+    | 'candidates'
+    | 'scores'
+    | 'clusters'
+    | 'review'
+    | 'stagedRecords'
+  >;
   /** Mapping jobs need the project's target schema stored (the default is seeded here). */
   targetSchemas: TargetSchemaService;
   audit: AuditService;
@@ -104,6 +115,14 @@ const CLUSTERING = {
     'The candidate pairs are being scored. Wait for that job to finish, then build clusters.',
   reviewing:
     'The AI is reviewing the maybe pairs. Wait for that job to finish, then build clusters.',
+};
+
+const EXPORT = {
+  outdated:
+    'The customers are out of date: the pairs were scored or reviewed again after grouping. Build clusters again first.',
+  clustering: 'Clusters are being built. Wait for that job to finish, then export.',
+  nothingApproved:
+    'No customer is approved yet. Approve customers in Match Review, or export all customers with their review status.',
 };
 
 function pendingMessage(count: number): string {
@@ -324,6 +343,30 @@ export function createJobService({
   }
 
   /**
+   * `export` is project-level: it writes the golden records of the current clusters, so they
+   * must exist (409 CLUSTERS_NOT_RUN) and be current (CLUSTERS_OUTDATED), with no clustering
+   * job active (CLUSTERING_RUNNING); the `approved` scope needs at least one customer approved
+   * as it is now (NOTHING_APPROVED). The worker checks again and enforces EXPORT_MAX_ROWS.
+   */
+  async function checkExportJob(project: Project, payload: Record<string, unknown>) {
+    const { summary, outdated } = await currentClusters(repos, project);
+    if (outdated) throw AppError.conflict(EXPORT.outdated, { reason: 'CLUSTERS_OUTDATED' });
+    if (await isActive(project, 'clustering')) {
+      throw AppError.conflict(EXPORT.clustering, { reason: 'CLUSTERING_RUNNING' });
+    }
+    if (payload.scope === 'all') return;
+    const approvals = await repos.review.listApprovals(project.id);
+    const approved = await repos.clusters.countWithIds(
+      project.id,
+      summary.runId,
+      approvals.map((a) => a.customerId),
+    );
+    if (approved === 0) {
+      throw AppError.conflict(EXPORT.nothingApproved, { reason: 'NOTHING_APPROVED' });
+    }
+  }
+
+  /**
    * Source jobs need a source of this project (404 otherwise) that no other job of the same
    * type is working on (409). Mapping and standardise also need the source profiled (409);
    * mapping needs the project's target schema stored, standardise a fully reviewed mapping.
@@ -356,6 +399,7 @@ export function createJobService({
       if (type === 'scoring') await checkScoringJob(project);
       if (type === 'pair_review') await checkPairReviewJob(project);
       if (type === 'clustering') await checkClusteringJob(project);
+      if (type === 'export') await checkExportJob(project, payload);
       const job = await repos.jobs.create({
         projectId: project.id,
         type,

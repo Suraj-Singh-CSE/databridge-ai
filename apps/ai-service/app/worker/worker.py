@@ -8,6 +8,7 @@ from pymongo import MongoClient
 from redis import Redis
 
 from app.config import Settings
+from app.export.store import ExportStore
 from app.llm.cache import SyncRedisCache
 from app.llm.cost import SyncMongoCostLogger
 from app.llm.factory import build_gateway
@@ -31,6 +32,7 @@ from app.worker.celery_config import create_celery
 from app.worker.handlers import build_registry
 from app.worker.handlers.candidates import CandidatesHandler
 from app.worker.handlers.clustering import ClusteringHandler, ClusteringSettings
+from app.worker.handlers.export import ExportHandler, ExportSettings
 from app.worker.handlers.mapping import MappingHandler, MappingHandlerSettings
 from app.worker.handlers.pair_review import PairReviewHandler, PairReviewHandlerSettings
 from app.worker.handlers.profile import ProfileHandler, ProfilerSettings
@@ -49,7 +51,8 @@ def build_runner(settings: Settings) -> JobRunner:
     ``target_schemas``, ``mapping_suggestions``, ``mapping_decisions``, ``staged_records``,
     ``candidate_pairs``, ``candidate_summaries``, ``pair_scores``, ``score_summaries``,
     ``match_decisions``, ``clusters``, ``golden_records``, ``cluster_summaries``,
-    ``llm_calls``), Redis, the uploads folder and the LLM gateway. Clients connect lazily."""
+    ``cluster_approvals``, ``exports``, ``llm_calls``), Redis, the storage folder (uploads read,
+    exports written) and the LLM gateway. Clients connect lazily."""
     mongo: MongoClient[Document] = MongoClient(
         settings.mongodb_uri, serverSelectionTimeoutMS=CLIENT_TIMEOUT_SECONDS * 1000
     )
@@ -82,7 +85,10 @@ def build_runner(settings: Settings) -> JobRunner:
     scorer = ScoringHandler(ScoreStore(database), scoring_config(settings))
     reviewer = PairReviewHandler(PairReviewStore(database), gateway, review_settings(settings))
     clusterer = ClusteringHandler(ClusterStore(database), clustering_settings(settings))
-    registry = build_registry(profiler, mapper, standardiser, blocker, scorer, reviewer, clusterer)
+    exporter = ExportHandler(ExportStore(database), export_settings(settings))
+    registry = build_registry(
+        profiler, mapper, standardiser, blocker, scorer, reviewer, clusterer, exporter
+    )
     return JobRunner(store, JobSignals(redis), registry, retry)
 
 
@@ -143,3 +149,7 @@ def clustering_settings(settings: Settings) -> ClusteringSettings:
         ),
         survivorship=SurvivorshipConfig(source_trust=settings.source_trust),
     )
+
+
+def export_settings(settings: Settings) -> ExportSettings:
+    return ExportSettings(root=Path(settings.upload_dir), max_rows=settings.export_max_rows)

@@ -12,6 +12,7 @@ import {
   ClusterSummaryModel,
   GoldenRecordModel,
 } from '../src/modules/clusters/cluster.model.js';
+import { ExportModel } from '../src/modules/exports/export.model.js';
 import { JobModel } from '../src/modules/jobs/job.model.js';
 import { PairScoreModel, ScoreSummaryModel } from '../src/modules/scores/score.model.js';
 import type { PairScore } from '../src/modules/scores/score.types.js';
@@ -30,6 +31,7 @@ import { createMongoRepositories } from '../src/repositories.js';
 import { defineApiSuite } from './support/api-suite.js';
 import { defineCandidatesSuite } from './support/candidates-suite.js';
 import { defineClustersSuite } from './support/clusters-suite.js';
+import { defineExportsSuite } from './support/exports-suite.js';
 import { defineScoresSuite } from './support/scores-suite.js';
 import { defineJobsSuite } from './support/jobs-suite.js';
 import { defineMappingsSuite, suggested } from './support/mappings-suite.js';
@@ -38,6 +40,7 @@ import { defineSourcesSuite } from './support/sources-suite.js';
 import { defineStagedSuite } from './support/staged-suite.js';
 import type {
   CandidateWrite,
+  ClusterWrite,
   ScoreWrite,
   StagedWrite,
   SuggestionWrite,
@@ -191,9 +194,9 @@ describe.skipIf(!available)('MongoDB', () => {
     },
   };
   defineScoresSuite('MongoDB repositories', mongoScores);
-  defineClustersSuite('MongoDB repositories', {
+  const mongoClusters = {
     ...mongoScores,
-    async workerClusters(_repos, { projectId, clusters, golden, summary }) {
+    async workerClusters(_repos: unknown, { projectId, clusters, golden, summary }: ClusterWrite) {
       // What apps/ai-service/app/matching/cluster_store.py writes (then drops the older runs).
       const { jobId, runId } = summary;
       const oid = (id: string) => new mongoose.Types.ObjectId(id);
@@ -233,6 +236,21 @@ describe.skipIf(!available)('MongoDB', () => {
       );
       await ClusterModel.deleteMany({ projectId, runId: { $ne: runId } });
       await GoldenRecordModel.deleteMany({ projectId, runId: { $ne: runId } });
+    },
+  };
+  defineClustersSuite('MongoDB repositories', mongoClusters);
+  defineExportsSuite('MongoDB repositories', {
+    ...mongoClusters,
+    async workerExport(_repos, { id, ...record }) {
+      // What apps/ai-service/app/export/store.py writes: _id = the job id.
+      const oid = (value: string) => new mongoose.Types.ObjectId(value);
+      await ExportModel.collection.insertOne({
+        ...record,
+        _id: oid(id),
+        projectId: oid(record.projectId),
+        jobId: oid(record.jobId),
+        createdBy: record.createdBy ? oid(record.createdBy) : null,
+      });
     },
   });
 

@@ -8,6 +8,7 @@ export const JOB_TYPES = [
   'scoring',
   'pair_review',
   'clustering',
+  'export',
 ] as const;
 export type JobType = (typeof JOB_TYPES)[number];
 
