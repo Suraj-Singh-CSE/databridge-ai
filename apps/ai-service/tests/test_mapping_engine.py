@@ -12,7 +12,13 @@ from app.llm.errors import LLMConfigError
 from app.llm.factory import build_provider
 from app.llm.gateway import LLMGateway
 from app.llm.mock import MockProvider
-from app.mapping.engine import score_columns, suggest, suggest_with_rules, valid_choices
+from app.mapping.engine import (
+    MappingSettings,
+    score_columns,
+    suggest,
+    suggest_with_rules,
+    valid_choices,
+)
 from app.mapping.models import MappingOutcome
 from app.mapping.prompt import (
     INPUT_MARKER,
@@ -225,6 +231,19 @@ def test_wide_sources_are_ranked_in_batches(settings: Settings) -> None:
     assert batches == [(1, 2), (2, 2)]
     assert len(outcome.suggestions) == 45
     assert all(s.role == "ignore" for s in outcome.suggestions)
+
+
+def test_columns_per_call_is_configurable_and_keeps_results(settings: Settings) -> None:
+    provider = build_provider(settings)
+    assert isinstance(provider, MockProvider)
+    gateway, _ = gateway_for(provider, settings)
+    profiles = [column(f"extra_{i}", position=i) for i in range(30)]
+    wide = run(profiles, gateway)
+
+    small = run(profiles, gateway, settings=MappingSettings(max_columns_per_call=12))
+
+    assert len(provider.calls) == 1 + 3  # one wide call, then 12 + 12 + 6 columns
+    assert small.model_dump() == wide.model_dump()
 
 
 def test_mock_answer_and_prompt_template() -> None:

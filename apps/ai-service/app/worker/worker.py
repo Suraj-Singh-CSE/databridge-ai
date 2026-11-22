@@ -66,6 +66,7 @@ def mapping_settings(settings: Settings) -> MappingHandlerSettings:
         llm=MappingSettings(
             temperature=settings.mapping_temperature,
             max_output_tokens=settings.mapping_max_output_tokens,
+            max_columns_per_call=settings.mapping_max_columns_per_call,
         ),
     )
 

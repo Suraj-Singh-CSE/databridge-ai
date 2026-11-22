@@ -25,6 +25,12 @@ class LLMCallRecord(BaseModel):
     attempts: int = Field(ge=0)
     outcome: Literal["ok", "error"]
     error_type: str | None = None
+    # HTTP status, provider status (e.g. INVALID_ARGUMENT) and the provider's cleaned message.
+    error_code: int | None = None
+    error_status: str | None = None
+    error_detail: str | None = None
+    # True when a 400 made the gateway resend the request without the response schema.
+    schema_fallback: bool = False
     project_id: str | None = None
     request_id: str | None = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))

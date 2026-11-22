@@ -33,6 +33,7 @@ class Completer(Protocol):
 class MappingSettings:
     temperature: float = 0.0
     max_output_tokens: int = 4096
+    max_columns_per_call: int = MAX_COLUMNS_PER_CALL
 
 
 def score_columns(
@@ -61,9 +62,8 @@ async def suggest(
     columns = score_columns(profiles, schema)
     choices: dict[str, LLMChoice] = {}
     model: str | None = None
-    batches = [
-        columns[i : i + MAX_COLUMNS_PER_CALL] for i in range(0, len(columns), MAX_COLUMNS_PER_CALL)
-    ]
+    size = max(1, min(settings.max_columns_per_call, MAX_COLUMNS_PER_CALL))
+    batches = [columns[i : i + size] for i in range(0, len(columns), size)]
     try:
         for done, batch in enumerate(batches, start=1):
             request = build_request(

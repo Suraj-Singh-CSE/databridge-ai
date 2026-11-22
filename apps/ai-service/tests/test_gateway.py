@@ -10,6 +10,7 @@ from app.llm.base import LLMProvider, LLMRequest, LLMResponse, Message
 from app.llm.cache import InMemoryCache, RedisCache
 from app.llm.cost import InMemoryCostLogger, LLMCallRecord
 from app.llm.errors import (
+    LLMBadRequestError,
     LLMConfigError,
     LLMError,
     LLMRateLimitError,
@@ -243,8 +244,8 @@ async def test_retries_rate_limit_then_succeeds() -> None:
 
     assert response.text == "ok"
     assert len(provider.calls) == 3
-    # base 1s: attempt 1 -> 1 * (0.5 + 0.5*0.5) = 0.75; attempt 2 -> 2 * 0.75 = 1.5
-    assert sleeps.delays == [0.75, 1.5]
+    # defaults: base 2 s, multiplier 2.5, rand 0.5 = no jitter -> 2 s, then 5 s
+    assert sleeps.delays == [2.0, 5.0]
     [record] = costs.records
     assert record.attempts == 3
     assert record.outcome == "ok"
@@ -289,12 +290,15 @@ async def test_non_retryable_errors_are_not_retried() -> None:
 
 async def test_backoff_is_capped_and_honours_retry_after() -> None:
     settings = make_settings(
-        llm_backoff_base_seconds=4, llm_backoff_max_seconds=5, llm_max_attempts=4
+        llm_backoff_base_seconds=2,
+        llm_backoff_multiplier=2.5,
+        llm_backoff_max_seconds=12,
+        llm_max_attempts=4,
     )
     provider = ScriptedProvider(
         [
             LLMRateLimitError("429", retry_after_seconds=3),
-            LLMRateLimitError("429"),
+            LLMUnavailableError("503"),
             LLMRateLimitError("429", retry_after_seconds=60),
             "ok",
         ]
@@ -303,8 +307,19 @@ async def test_backoff_is_capped_and_honours_retry_after() -> None:
 
     await gateway.complete(ask())
 
-    # attempt 1: 4/2 = 2 but Retry-After 3 -> 3; attempt 2: min(5, 8)/2 = 2.5; attempt 3: capped 5
-    assert sleeps.delays == [3, 2.5, 5]
+    # rand 0 = -20%: attempt 1: 1.6 but Retry-After 3 -> 3; attempt 2: 5 * 0.8 = 4;
+    # attempt 3: Retry-After 60 is longer than 12.5 * 0.8 but capped at 12
+    assert sleeps.delays == [3, 4, 12]
+
+
+async def test_backoff_jitter_adds_up_to_twenty_percent() -> None:
+    provider = ScriptedProvider([LLMUnavailableError("503"), LLMTimeoutError("slow"), "ok"])
+    gateway, costs, sleeps = make_gateway(provider, rand=1.0)
+
+    await gateway.complete(ask())
+
+    assert sleeps.delays == pytest.approx([2.4, 6.0])
+    assert costs.records[0].attempts == 3
 
 
 async def test_slow_provider_is_timed_out_and_retried() -> None:
@@ -398,6 +413,10 @@ async def test_cost_record_is_written_with_tokens_cost_and_ids() -> None:
         "cost_inr": 0.002,  # (100*10 + 10*100) / 1e6
         "cache_hit": False,
         "attempts": 1,
+        "error_code": None,
+        "error_status": None,
+        "error_detail": None,
+        "schema_fallback": False,
         "outcome": "ok",
         "error_type": None,
         "project_id": "proj-1",
@@ -429,3 +448,81 @@ async def test_cost_logger_failure_does_not_fail_the_call() -> None:
     response = await gateway.complete(ask())
 
     assert response.text == "hello"
+
+
+# ---- schema fallback and error fields
+
+
+def bad_request() -> LLMBadRequestError:
+    return LLMBadRequestError(
+        "Gemini API error 400 INVALID_ARGUMENT",
+        code=400,
+        status="INVALID_ARGUMENT",
+        detail="Invalid JSON payload: unknown name additionalProperties",
+    )
+
+
+async def test_bad_request_with_schema_is_resent_once_without_it() -> None:
+    provider = ScriptedProvider([bad_request(), '{"target": "customer_email", "confidence": 0.9}'])
+    gateway, costs, sleeps = make_gateway(provider)
+
+    response = await gateway.complete(ask(schema=Mapping))
+
+    assert isinstance(response.parsed, Mapping)
+    assert [call.enforce_schema for call in provider.calls] == [True, False]
+    assert provider.calls[1].response_schema is Mapping  # still validated against it
+    assert sleeps.delays == []
+    [record] = costs.records
+    assert (record.outcome, record.attempts, record.schema_fallback) == ("ok", 2, True)
+
+
+async def test_repair_after_schema_fallback_stays_in_plain_json_mode() -> None:
+    provider = ScriptedProvider(
+        [bad_request(), "not json", '{"target": "customer_email", "confidence": 0.9}']
+    )
+    gateway, costs, _ = make_gateway(provider)
+
+    response = await gateway.complete(ask(schema=Mapping))
+
+    assert isinstance(response.parsed, Mapping)
+    assert [call.enforce_schema for call in provider.calls] == [True, False, False]
+    assert costs.records[0].attempts == 3
+
+
+async def test_bad_request_without_schema_or_twice_is_raised_with_its_fields() -> None:
+    plain, plain_costs, _ = make_gateway(ScriptedProvider([bad_request()]))
+    with pytest.raises(LLMBadRequestError):
+        await plain.complete(ask())
+    assert plain_costs.records[0].schema_fallback is False
+
+    provider = ScriptedProvider([bad_request(), bad_request()])
+    gateway, costs, _ = make_gateway(provider)
+    with pytest.raises(LLMBadRequestError):
+        await gateway.complete(ask(schema=Mapping))
+
+    [record] = costs.records
+    assert len(provider.calls) == 2
+    assert record.schema_fallback is True
+    assert (record.error_type, record.error_code, record.error_status) == (
+        "LLMBadRequestError",
+        400,
+        "INVALID_ARGUMENT",
+    )
+    assert record.error_detail == "Invalid JSON payload: unknown name additionalProperties"
+
+
+async def test_gateway_timeout_is_labelled() -> None:
+    import asyncio
+
+    async def hang() -> None:
+        await asyncio.sleep(5)
+
+    provider = ScriptedProvider([hang])
+    settings = make_settings(llm_timeout_seconds=0.01, llm_max_attempts=1)
+    gateway, costs, _ = make_gateway(provider, settings)
+
+    with pytest.raises(LLMTimeoutError) as raised:
+        await gateway.complete(ask())
+
+    assert raised.value.label == "LLMTimeoutError GATEWAY_TIMEOUT"
+    assert costs.records[0].error_status == "GATEWAY_TIMEOUT"
