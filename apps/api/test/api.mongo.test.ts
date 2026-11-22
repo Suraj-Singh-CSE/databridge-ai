@@ -3,6 +3,10 @@ import { afterAll, describe, expect, it } from 'vitest';
 
 import { disconnectDb } from '../src/db.js';
 import { AuditLogModel } from '../src/modules/audit/audit.model.js';
+import {
+  CandidatePairModel,
+  CandidateSummaryModel,
+} from '../src/modules/candidates/candidate.model.js';
 import { JobModel } from '../src/modules/jobs/job.model.js';
 import { RefreshTokenModel } from '../src/modules/auth/refresh-token.model.js';
 import {
@@ -17,12 +21,13 @@ import { UserModel } from '../src/modules/users/user.model.js';
 import { createMongoRepositories } from '../src/repositories.js';
 
 import { defineApiSuite } from './support/api-suite.js';
+import { defineCandidatesSuite } from './support/candidates-suite.js';
 import { defineJobsSuite } from './support/jobs-suite.js';
 import { defineMappingsSuite, suggested } from './support/mappings-suite.js';
 import { columnProfile, defineProfilesSuite } from './support/profiles-suite.js';
 import { defineSourcesSuite } from './support/sources-suite.js';
 import { defineStagedSuite } from './support/staged-suite.js';
-import type { SuggestionWrite } from './support/memory-repositories.js';
+import type { StagedWrite, SuggestionWrite } from './support/memory-repositories.js';
 import { clearDb, connectTestDb } from './support/mongo.js';
 
 const available = await connectTestDb();
@@ -86,13 +91,14 @@ describe.skipIf(!available)('MongoDB', () => {
     },
   };
   defineMappingsSuite('MongoDB repositories', mongoMappings);
-  defineStagedSuite('MongoDB repositories', {
+  const mongoStaged = {
     ...mongoMappings,
-    async workerStage(_repos, { projectId, sourceId, runId, rows, source }) {
-      // What apps/ai-service/app/standardise/store.py writes.
+    async workerStage(_repos: unknown, { projectId, sourceId, runId, rows, source }: StagedWrite) {
+      // What apps/ai-service/app/standardise/store.py writes (then drops the older runs).
       const jobId = new mongoose.Types.ObjectId();
       await StagedRecordModel.insertMany(
-        rows.map((row) => ({
+        rows.map(({ id, ...row }) => ({
+          ...(id ? { _id: id } : {}),
           ...row,
           projectId,
           sourceId,
@@ -104,6 +110,29 @@ describe.skipIf(!available)('MongoDB', () => {
       );
       const standardisation = source.standardisation && { ...source.standardisation, jobId };
       await SourceModel.updateOne({ _id: sourceId }, { $set: { ...source, standardisation } });
+      await StagedRecordModel.deleteMany({ projectId, sourceId, runId: { $ne: runId } });
+    },
+  };
+  defineStagedSuite('MongoDB repositories', mongoStaged);
+  defineCandidatesSuite('MongoDB repositories', {
+    ...mongoStaged,
+    async workerCandidates(_repos, { projectId, pairs, summary }) {
+      // What apps/ai-service/app/matching/store.py writes.
+      const jobId = summary.jobId;
+      await CandidatePairModel.insertMany(
+        pairs.map((pair) => ({
+          ...pair,
+          projectId,
+          jobId,
+          runId: summary.runId,
+          createdAt: new Date(),
+        })),
+      );
+      await CandidateSummaryModel.replaceOne(
+        { projectId },
+        { ...summary, projectId },
+        { upsert: true },
+      );
     },
   });
 

@@ -2,6 +2,11 @@ import { randomBytes } from 'node:crypto';
 
 import { DuplicateKeyError } from '../../src/errors.js';
 import type { AuditEntry } from '../../src/modules/audit/audit.types.js';
+import type {
+  CandidatePair,
+  CandidateRepository,
+  CandidateSummary,
+} from '../../src/modules/candidates/candidate.types.js';
 import type { Job, JobRepository } from '../../src/modules/jobs/job.types.js';
 import type {
   MappingDecision,
@@ -17,6 +22,7 @@ import type {
 import type { Source } from '../../src/modules/sources/source.types.js';
 import type {
   StagedRecord,
+  StagedRecordRef,
   StagedRecordRepository,
 } from '../../src/modules/staged/staged.types.js';
 import type { TargetSchema } from '../../src/modules/target-schema/target-schema.types.js';
@@ -55,8 +61,16 @@ export interface StagedWrite {
   projectId: string;
   sourceId: string;
   runId: string;
-  rows: StagedRecord[];
+  /** `id` (the staged record's id) is optional; one is made when absent. */
+  rows: (StagedRecord & { id?: string })[];
   source: Partial<Pick<Source, 'status' | 'standardisedAt' | 'standardisation'>>;
+}
+
+/** What the Python candidates worker writes: one run's pairs plus the project summary. */
+export interface CandidateWrite {
+  projectId: string;
+  pairs: CandidatePair[];
+  summary: CandidateSummary;
 }
 
 export interface MemoryRepositories extends Repositories {
@@ -64,6 +78,7 @@ export interface MemoryRepositories extends Repositories {
   columnProfiles: ColumnProfileRepository & { workerSave(write: ProfileWrite): void };
   mappings: MappingRepository & { workerSave(write: SuggestionWrite): void };
   stagedRecords: StagedRecordRepository & { workerSave(write: StagedWrite): void };
+  candidates: CandidateRepository & { workerSave(write: CandidateWrite): void };
 }
 
 /**
@@ -83,7 +98,9 @@ export function createMemoryRepositories(): MemoryRepositories {
   const suggestions = new Map<string, StoredSuggestion[]>();
   const decisions = new Map<string, Map<string, MappingDecision>>();
   // key: `${projectId}/${sourceId}`; one run per source (the worker drops older runs).
-  const staged = new Map<string, { runId: string; rows: StagedRecord[] }>();
+  const staged = new Map<string, { runId: string; rows: StagedRecordRef[] }>();
+  // key: projectId; one run per project (the worker drops older runs).
+  const candidates = new Map<string, { summary: CandidateSummary; pairs: CandidatePair[] }>();
   const dropPrefix = (map: Map<string, unknown>, projectId: string) => {
     for (const key of map.keys()) if (key.startsWith(`${projectId}/`)) map.delete(key);
   };
@@ -508,8 +525,17 @@ export function createMemoryRepositories(): MemoryRepositories {
           run.rows
             .filter((r) => r.rowNumber > afterRow && (!issuesOnly || r.issues.length > 0))
             .sort((a, b) => a.rowNumber - b.rowNumber)
-            .slice(0, limit),
+            .slice(0, limit)
+            .map(({ id: _id, sourceId: _source, ...row }): StagedRecord => row),
         );
+      },
+      async findByIds(projectId, ids) {
+        await Promise.resolve();
+        const wanted = new Set(ids);
+        const found = [...staged.entries()]
+          .filter(([key]) => key.startsWith(`${projectId}/`))
+          .flatMap(([, run]) => run.rows.filter((r) => wanted.has(r.id)));
+        return structuredClone(found);
       },
       async deleteBySource(projectId, sourceId) {
         await Promise.resolve();
@@ -520,9 +546,42 @@ export function createMemoryRepositories(): MemoryRepositories {
         dropPrefix(staged, projectId);
       },
       workerSave({ projectId, sourceId, runId, rows, source }) {
-        staged.set(`${projectId}/${sourceId}`, { runId, rows: structuredClone(rows) });
+        staged.set(`${projectId}/${sourceId}`, {
+          runId,
+          rows: rows.map(({ id, ...row }) => ({
+            ...structuredClone(row),
+            id: id ?? newId(),
+            sourceId,
+          })),
+        });
         const stored = sources.get(sourceId);
         if (stored) Object.assign(stored, structuredClone(source), { updatedAt: tick() });
+      },
+    },
+
+    candidates: {
+      async findSummary(projectId) {
+        await Promise.resolve();
+        const run = candidates.get(projectId);
+        return run ? structuredClone(run.summary) : null;
+      },
+      async listPairs(projectId, { runId, afterPosition, limit }) {
+        await Promise.resolve();
+        const run = candidates.get(projectId);
+        if (run?.summary.runId !== runId) return [];
+        return structuredClone(
+          run.pairs
+            .filter((p) => p.position > afterPosition)
+            .sort((a, b) => a.position - b.position)
+            .slice(0, limit),
+        );
+      },
+      async deleteByProject(projectId) {
+        await Promise.resolve();
+        candidates.delete(projectId);
+      },
+      workerSave({ projectId, pairs, summary }) {
+        candidates.set(projectId, structuredClone({ summary, pairs }));
       },
     },
 

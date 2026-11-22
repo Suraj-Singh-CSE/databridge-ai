@@ -96,6 +96,10 @@ class Settings(BaseSettings):
     # Columns per LLM call; smaller batches answer faster, larger ones make fewer calls.
     mapping_max_columns_per_call: int = Field(default=40, ge=1, le=40)
 
+    # ---- candidate pairs (ADR 0015)
+    # Blocks with more records than this are skipped (and counted), not paired.
+    blocking_max_block_size: int = Field(default=200, ge=2, le=5000)
+
     @property
     def paced_requests_per_minute(self) -> int:
         """The pacing limit in force: 0 for the mock provider, which has no quota to respect."""

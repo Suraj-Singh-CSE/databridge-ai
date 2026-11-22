@@ -65,6 +65,15 @@ const NOT_PROFILED: Record<'mapping' | 'standardise', string> = {
   standardise: 'Profile and map this source before standardising it.',
 };
 const MAPPING_NOT_RUN = 'Run the mapping for this source first, then review it.';
+const CANDIDATES = {
+  busy: 'Candidate pairs are already being found. Wait for that job to finish, or cancel it first.',
+  none: 'Standardise at least one source before finding candidate pairs.',
+  standardising:
+    'A source is being standardised. Wait for that job to finish, then find candidate pairs.',
+  outdated: (names: string[]) =>
+    `These sources changed after they were standardised: ${names.join(', ')}. ` +
+    'Standardise them again first.',
+};
 
 function pendingMessage(count: number): string {
   const noun = count === 1 ? 'column still needs' : 'columns still need';
@@ -176,6 +185,38 @@ export function createJobService({
   }
 
   /**
+   * `candidates` is project-level (payload `{}`): it reads every standardised source, so it
+   * needs at least one (409 NO_STANDARDISED_SOURCES), none that changed after its last run
+   * (re-profiled: STANDARDISATION_OUTDATED), no standardise job running (STANDARDISE_RUNNING)
+   * and no other candidates job (CANDIDATES_RUNNING). The worker checks the sources again.
+   */
+  async function checkCandidatesJob(project: Project): Promise<void> {
+    const sources = await repos.sources.listByProject(project.id);
+    const outdated = sources.filter((s) => s.standardisation && s.status !== 'standardised');
+    if (outdated.length > 0) {
+      throw AppError.conflict(CANDIDATES.outdated(outdated.map((s) => s.name)), {
+        reason: 'STANDARDISATION_OUTDATED',
+        sourceIds: outdated.map((s) => s.id),
+      });
+    }
+    if (!sources.some((s) => s.status === 'standardised')) {
+      throw AppError.conflict(CANDIDATES.none, { reason: 'NO_STANDARDISED_SOURCES' });
+    }
+    const active = async (type: JobType): Promise<boolean> => {
+      const jobs = await Promise.all(
+        (await repos.jobs.listActive(project.id, type)).map(withStaleCheck),
+      );
+      return jobs.some((job) => !isTerminal(job.status));
+    };
+    if (await active('standardise')) {
+      throw AppError.conflict(CANDIDATES.standardising, { reason: 'STANDARDISE_RUNNING' });
+    }
+    if (await active('candidates')) {
+      throw AppError.conflict(CANDIDATES.busy, { reason: 'CANDIDATES_RUNNING' });
+    }
+  }
+
+  /**
    * Source jobs need a source of this project (404 otherwise) that no other job of the same
    * type is working on (409). Mapping and standardise also need the source profiled (409);
    * mapping needs the project's target schema stored, standardise a fully reviewed mapping.
@@ -204,6 +245,7 @@ export function createJobService({
   return {
     async create(actor, project, { type, payload }) {
       if (isSourceJob(type)) await checkSourceJob(project, type, payload);
+      if (type === 'candidates') await checkCandidatesJob(project);
       const job = await repos.jobs.create({
         projectId: project.id,
         type,

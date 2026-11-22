@@ -15,11 +15,14 @@ from app.llm.gateway import LLMGateway
 from app.logging import configure_logging
 from app.mapping.engine import MappingSettings
 from app.mapping.store import MappingStore
+from app.matching.blocking import BlockingConfig
+from app.matching.store import CandidateStore
 from app.profiling.store import ProfileStore
 from app.profiling.zip_guard import ZipLimits
 from app.standardise.store import StandardiseStore
 from app.worker.celery_config import create_celery
 from app.worker.handlers import build_registry
+from app.worker.handlers.candidates import CandidatesHandler
 from app.worker.handlers.mapping import MappingHandler, MappingHandlerSettings
 from app.worker.handlers.profile import ProfileHandler, ProfilerSettings
 from app.worker.handlers.standardise import StandardiseHandler
@@ -34,7 +37,7 @@ CLIENT_TIMEOUT_SECONDS = 5
 def build_runner(settings: Settings) -> JobRunner:
     """Production collaborators: MongoDB (``jobs``, ``sources``, ``column_profiles``,
     ``target_schemas``, ``mapping_suggestions``, ``mapping_decisions``, ``staged_records``,
-    ``llm_calls``), Redis, the uploads folder and
+    ``candidate_pairs``, ``candidate_summaries``, ``llm_calls``), Redis, the uploads folder and
     the LLM gateway. Clients connect lazily."""
     mongo: MongoClient[Document] = MongoClient(
         settings.mongodb_uri, serverSelectionTimeoutMS=CLIENT_TIMEOUT_SECONDS * 1000
@@ -62,7 +65,10 @@ def build_runner(settings: Settings) -> JobRunner:
 
     mapper = MappingHandler(MappingStore(database), gateway, mapping_settings(settings))
     standardiser = StandardiseHandler(StandardiseStore(database), reading)
-    registry = build_registry(profiler, mapper, standardiser)
+    blocker = CandidatesHandler(
+        CandidateStore(database), BlockingConfig(max_block_size=settings.blocking_max_block_size)
+    )
+    registry = build_registry(profiler, mapper, standardiser, blocker)
     return JobRunner(store, JobSignals(redis), registry, retry)
 
 

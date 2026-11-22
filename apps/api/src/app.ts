@@ -19,6 +19,8 @@ import { createTokenService } from './modules/auth/tokens.js';
 import type { JobEventBus } from './modules/jobs/job.events.js';
 import { createJobRouter, createProjectJobsRouter } from './modules/jobs/job.routes.js';
 import { createJobService } from './modules/jobs/job.service.js';
+import { createCandidateRouter } from './modules/candidates/candidate.routes.js';
+import { createCandidateService } from './modules/candidates/candidate.service.js';
 import { createMappingRouter } from './modules/mappings/mapping.routes.js';
 import { createMappingService } from './modules/mappings/mapping.service.js';
 import { createStagedRouter } from './modules/staged/staged.routes.js';
@@ -78,6 +80,7 @@ export function createApp({
   const targetSchemas = createTargetSchemaService(repos.targetSchemas, audit);
   const mappingService = createMappingService(repos, targetSchemas, audit);
   const stagedService = createStagedService(repos);
+  const candidateService = createCandidateService(repos);
   const jobService = createJobService({
     repos,
     targetSchemas,
@@ -131,6 +134,10 @@ export function createApp({
   app.use(
     '/api/v1/projects/:projectId/sources/:sourceId/staged',
     createStagedRouter({ stagedService, projects: repos.projects, tokens }),
+  );
+  app.use(
+    '/api/v1/projects/:projectId/candidates',
+    createCandidateRouter({ candidateService, projects: repos.projects, tokens }),
   );
   app.use(
     '/api/v1/projects/:projectId/target-schema',
