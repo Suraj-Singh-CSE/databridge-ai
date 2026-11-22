@@ -10,6 +10,13 @@ over the staged records:
 - a person's decision on a pair (``PairDecision``, recorded by the review screen, M4.6) wins
   over both: ``different`` removes the link, ``same`` adds one (kind ``human``, score 1).
 
+A ``different`` decision also keeps the two records apart when other links would still join
+them (A~C~B with A and B marked different): while a component holds a ``different`` pair, the
+weakest link on the strongest path between the two (their path on the maximum spanning tree) is
+cut, preferring links no person made; links are cut one at a time until every ``different``
+pair sits in separate clusters (``cut_links`` counts them; ``conflicting`` counts cuts of a
+person's own ``same`` link, when two decisions contradict each other).
+
 Clusters are the connected components (union-find); every record without a link is a cluster
 of its own (a singleton). Links are taken from the highest score down (Kruskal), so the links
 that join components form a *maximum spanning tree*; a cluster's confidence is the lowest score
@@ -90,6 +97,45 @@ class PairDecision:
     record_a: str
     record_b: str
     decision: Decision
+
+
+@dataclass(frozen=True)
+class StoredDecision:
+    """A decision as stored: record ids at decision time and the records' stable keys.
+
+    Staged record ids change when a source is standardised again; the keys
+    (``<sourceId>:<sourceRecordId>``, as for customer ids) do not, so a decision follows its
+    records through re-runs. ``None`` keys (older decisions) fall back to the ids.
+    """
+
+    record_a: str
+    record_b: str
+    decision: Decision
+    key_a: str | None = None
+    key_b: str | None = None
+
+
+def resolve_decisions(
+    stored: Sequence[StoredDecision], records: Sequence[MemberRecord]
+) -> tuple[list[PairDecision], int]:
+    """Decisions on today's record ids, and how many no longer apply (a record is gone).
+
+    Later decisions on the same pair win (``stored`` is in decision order).
+    """
+    by_key = {r.key: r.id for r in records}
+    ids = set(by_key.values())
+    resolved: dict[tuple[str, str], Decision] = {}
+    stale = 0
+    for item in stored:
+        if item.key_a is not None and item.key_b is not None:
+            a, b = by_key.get(item.key_a), by_key.get(item.key_b)
+        else:
+            a, b = item.record_a, item.record_b
+        if a is None or b is None or a not in ids or b not in ids or a == b:
+            stale += 1
+            continue
+        resolved[_ordered(a, b)] = item.decision
+    return [PairDecision(a, b, d) for (a, b), d in resolved.items()], stale
 
 
 @dataclass(frozen=True)
@@ -196,6 +242,69 @@ def links_of(
     return sorted(links.values(), key=lambda link: (-link.score, link.record_a, link.record_b))
 
 
+@dataclass(frozen=True)
+class SeparationResult:
+    links: list[Link]
+    # Links removed to keep `different` pairs apart; `conflicting` of them a person's `same`.
+    cut_links: int
+    conflicting: int
+
+
+def separate(
+    ids: Iterable[str], links: Sequence[Link], decisions: Sequence[PairDecision]
+) -> SeparationResult:
+    """Cut links until no component holds two records a person marked ``different``.
+
+    Each round builds the maximum spanning forest of the remaining links (strongest first),
+    finds the first ``different`` pair still in one component, and removes the weakest link on
+    their tree path (the strongest path between them), a non-human link when there is one.
+    Every round removes a link, so it ends; ``different`` pairs are few in practice.
+    """
+    apart = sorted(_ordered(d.record_a, d.record_b) for d in decisions if d.decision == "different")
+    remaining = list(links)
+    if not apart:
+        return SeparationResult(remaining, 0, 0)
+    node_ids = list(ids)
+    cut = conflicting = 0
+    while True:
+        groups = _UnionFind(node_ids)
+        tree: dict[str, list[Link]] = {}
+        for link in remaining:
+            if groups.union(link.record_a, link.record_b):
+                tree.setdefault(link.record_a, []).append(link)
+                tree.setdefault(link.record_b, []).append(link)
+        joined = next((p for p in apart if groups.find(p[0]) == groups.find(p[1])), None)
+        if joined is None:
+            return SeparationResult(remaining, cut, conflicting)
+        path = _tree_path(tree, *joined)
+        machine = [link for link in path if link.kind != "human"]
+        weakest = min(machine or path, key=lambda link: (link.score, link.record_a, link.record_b))
+        remaining.remove(weakest)
+        cut += 1
+        conflicting += weakest.kind == "human"
+
+
+def _tree_path(tree: Mapping[str, list[Link]], start: str, end: str) -> list[Link]:
+    """The links on the (unique) path from ``start`` to ``end`` in a spanning forest."""
+    came_from: dict[str, Link | None] = {start: None}
+    queue = [start]
+    while queue:
+        node = queue.pop()
+        if node == end:
+            break
+        for link in tree.get(node, ()):
+            other = link.record_b if link.record_a == node else link.record_a
+            if other not in came_from:
+                came_from[other] = link
+                queue.append(other)
+    path: list[Link] = []
+    node = end
+    while (step := came_from[node]) is not None:
+        path.append(step)
+        node = step.record_b if step.record_a == node else step.record_a
+    return path
+
+
 def cluster_records(
     records: Sequence[MemberRecord],
     pairs: Sequence[ScoredPair],
@@ -203,13 +312,28 @@ def cluster_records(
     config: ClusteringConfig | None = None,
 ) -> list[Cluster]:
     """Group the records into proposed clusters, largest first (then by first member)."""
+    return cluster_with_decisions(records, pairs, decisions, config)[0]
+
+
+def cluster_with_decisions(
+    records: Sequence[MemberRecord],
+    pairs: Sequence[ScoredPair],
+    decisions: Sequence[PairDecision] = (),
+    config: ClusteringConfig | None = None,
+) -> tuple[list[Cluster], SeparationResult]:
+    """``cluster_records``, also saying which links the ``different`` decisions cut."""
     config = config or ClusteringConfig()
     by_id = {r.id: r for r in records}
-    links = [
-        link
-        for link in links_of(pairs, decisions, config)
-        if link.record_a in by_id and link.record_b in by_id
-    ]
+    separation = separate(
+        by_id,
+        [
+            link
+            for link in links_of(pairs, decisions, config)
+            if link.record_a in by_id and link.record_b in by_id
+        ],
+        decisions,
+    )
+    links = separation.links
     groups = _UnionFind(by_id)
     tree: set[tuple[str, str]] = set()
     for link in links:
@@ -256,7 +380,7 @@ def cluster_records(
         )
     _check_unique_ids(clusters)
     clusters.sort(key=lambda c: (-c.size, by_id[c.member_ids[0]].source_order, c.member_ids))
-    return clusters
+    return clusters, separation
 
 
 def _guard(

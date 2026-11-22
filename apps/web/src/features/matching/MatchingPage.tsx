@@ -5,9 +5,11 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useAuth } from '@/features/auth/auth-context';
 import {
+  canReviewMatches,
   canRunMatching,
   projectAccessOf,
   READ_ONLY_MATCHING_NOTE,
+  STEWARD_MATCHING_NOTE,
 } from '@/features/projects/access';
 import { ProjectPageFrame } from '@/features/projects/ProjectPageFrame';
 import { projectPage } from '@/features/projects/steps';
@@ -39,6 +41,7 @@ function MatchingContent({ project }: { project: Project }) {
   const { user } = useAuth();
   const access = user ? projectAccessOf(project, user) : null;
   const canRun = canRunMatching(access);
+  const canDecide = canReviewMatches(access);
   const sources = useSources(project.id);
   const jobs = useProjectJobs(project.id);
   const candidates = useCandidateSummary(project.id);
@@ -80,7 +83,7 @@ function MatchingContent({ project }: { project: Project }) {
           description="Customers appear here after “Group records” (step 5) has run."
         />
       ) : (
-        <ClustersSection projectId={project.id} view={clusters.data} />
+        <ClustersSection projectId={project.id} view={clusters.data} canDecide={canDecide} />
       );
   }
 
@@ -90,7 +93,9 @@ function MatchingContent({ project }: { project: Project }) {
       {!canRun && (
         <Alert>
           <Info aria-hidden="true" />
-          <AlertDescription>{READ_ONLY_MATCHING_NOTE}</AlertDescription>
+          <AlertDescription>
+            {canDecide ? STEWARD_MATCHING_NOTE : READ_ONLY_MATCHING_NOTE}
+          </AlertDescription>
         </Alert>
       )}
       {pipeline}

@@ -160,3 +160,42 @@ export function jobErrorText(error: unknown): JobErrorText {
   // STANDARDISATION_OUTDATED names the files; *_RUNNING says what to wait for.
   return { text: error.message, link: null };
 }
+
+/** The review state of a customer: approved, proposed, or proposed after its approval broke. */
+export function reviewStatus(cluster: { status: ClusterStatus; membershipChanged: boolean }): {
+  text: string;
+  tone: StatusTone;
+} {
+  if (cluster.status === 'approved') return { text: 'Approved', tone: 'high' };
+  if (cluster.membershipChanged) return { text: 'Membership changed', tone: 'review' };
+  return { text: STATUS_LABELS[cluster.status], tone: 'neutral' };
+}
+
+export const BAND_LABELS: Record<ScoreBand, string> = {
+  match: 'Match',
+  maybe: 'Maybe',
+  non_match: 'Not a match',
+};
+
+export const AI_DECISION_LABELS: Record<'same' | 'different' | 'unsure', string> = {
+  same: 'AI says same person',
+  different: 'AI says different people',
+  unsure: 'AI is unsure',
+};
+
+/** "Approved 3 groups. 1 was already approved." */
+export function approveHighSummary({
+  approved,
+  alreadyApproved,
+}: {
+  approved: number;
+  alreadyApproved: number;
+}): string {
+  const parts = [`Approved ${plural(approved, 'group', 'groups')}.`];
+  if (alreadyApproved > 0) {
+    parts.push(
+      `${formatCount(alreadyApproved)} ${alreadyApproved === 1 ? 'was' : 'were'} already approved.`,
+    );
+  }
+  return parts.join(' ');
+}

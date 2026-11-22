@@ -1,12 +1,14 @@
 """The ``clustering`` job end to end on an in-memory MongoDB: samples -> scores -> clusters."""
 
 import re
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 import pytest
 import structlog
 from bson import ObjectId
+from pymongo.database import Database
 from pymongo.errors import AutoReconnect
 
 from app.config import Settings
@@ -485,3 +487,53 @@ def test_the_source_trust_setting_is_validated(settings: Settings) -> None:
         Settings.model_validate(
             {**settings.model_dump(mode="python"), "survivorship_source_trust": "crm;;"}
         )
+
+
+def _key(db: Database[dict[str, Any]], record: ObjectId) -> str:
+    doc = db.staged_records.find_one({"_id": record})
+    assert doc is not None
+    return f"{doc['sourceId']}:{doc.get('sourceRecordId') or '#' + str(doc['rowNumber'])}"
+
+
+def test_decisions_follow_record_keys_and_gone_records_are_counted(
+    clustering: Clustering,
+) -> None:
+    clustering.prepare("crm", "billing")
+    db, project = clustering.world.db, ObjectId(clustering.world.project_id)
+    clustering.run()
+    pair = next(
+        p
+        for p in db.pair_scores.find({"band": "match"})
+        if _cluster_of(clustering, p["recordA"])["size"] == 2
+    )
+    # Ids from an earlier standardisation run: only the keys still name today's records.
+    db.match_decisions.insert_many(
+        [
+            {
+                "projectId": project,
+                "recordA": ObjectId(),
+                "recordB": ObjectId(),
+                "keyA": _key(db, pair["recordA"]),
+                "keyB": _key(db, pair["recordB"]),
+                "decision": "different",
+                "decidedAt": datetime(2026, 11, 23, tzinfo=UTC),
+            },
+            {
+                "projectId": project,
+                "recordA": ObjectId(),
+                "recordB": ObjectId(),
+                "keyA": "gone:1",
+                "keyB": _key(db, pair["recordB"]),
+                "decision": "same",
+                "decidedAt": datetime(2026, 11, 23, tzinfo=UTC),
+            },
+        ]
+    )
+
+    clustering.run()
+
+    assert _cluster_of(clustering, pair["recordA"])["size"] == 1
+    summary = clustering.summary()
+    assert summary is not None
+    assert (summary["decisionCount"], summary["staleDecisionCount"]) == (1, 1)
+    assert (summary["cutLinkCount"], summary["conflictingDecisionCount"]) == (0, 0)

@@ -25,6 +25,8 @@ import type {
   ClusterRepository,
   ClusterSummary,
   GoldenRecord,
+  ClusterApproval,
+  PairDecision,
 } from '../../src/modules/clusters/cluster.types.js';
 import type {
   ColumnProfile,
@@ -133,6 +135,19 @@ export function createMemoryRepositories(): MemoryRepositories {
   const scores = new Map<string, { summary: ScoreSummary; scores: PairScore[] }>();
   // key: projectId; one run per project (the worker drops older runs).
   const clusters = new Map<string, Omit<ClusterWrite, 'projectId'>>();
+  // key: projectId; one decision per (keyA, keyB) and one approval per customer id.
+  const pairDecisions = new Map<string, Map<string, PairDecision>>();
+  const approvals = new Map<string, Map<string, ClusterApproval>>();
+  const approvable = (c: Cluster) =>
+    c.size >= 2 && c.label === 'High' && !c.flags.includes('needs_review');
+  const inProject = <T>(map: Map<string, Map<string, T>>, projectId: string) => {
+    let found = map.get(projectId);
+    if (!found) {
+      found = new Map();
+      map.set(projectId, found);
+    }
+    return found;
+  };
   const dropPrefix = (map: Map<string, unknown>, projectId: string) => {
     for (const key of map.keys()) if (key.startsWith(`${projectId}/`)) map.delete(key);
   };
@@ -639,6 +654,16 @@ export function createMemoryRepositories(): MemoryRepositories {
             .slice(0, limit),
         );
       },
+      async findAmong(projectId, runId, recordIds) {
+        await Promise.resolve();
+        const run = scores.get(projectId);
+        if (run?.summary.runId !== runId) return [];
+        return structuredClone(
+          run.scores
+            .filter((s) => recordIds.includes(s.recordA) && recordIds.includes(s.recordB))
+            .sort((a, b) => a.position - b.position),
+        );
+      },
       async deleteByProject(projectId) {
         await Promise.resolve();
         scores.delete(projectId);
@@ -654,18 +679,25 @@ export function createMemoryRepositories(): MemoryRepositories {
         const run = clusters.get(projectId);
         return run ? structuredClone(run.summary) : null;
       },
-      async listClusters(projectId, { runId, status, flag, minSize, afterPosition, limit }) {
+      async listClusters(
+        projectId,
+        { runId, flag, minSize, aiSuggested, customerIds, afterPosition, limit },
+      ) {
         await Promise.resolve();
         const run = clusters.get(projectId);
         if (run?.summary.runId !== runId) return [];
+        const idMatches = (id: string) =>
+          !customerIds ||
+          ('in' in customerIds ? customerIds.in.includes(id) : !customerIds.notIn.includes(id));
         return structuredClone(
           run.clusters
             .filter(
               (c) =>
                 c.position > afterPosition &&
-                (!status || c.status === status) &&
                 (!flag || c.flags.includes(flag)) &&
-                (!minSize || c.size >= minSize),
+                (!minSize || c.size >= minSize) &&
+                (aiSuggested === undefined || c.aiSuggested === aiSuggested) &&
+                idMatches(c.customerId),
             )
             .sort((a, b) => a.position - b.position)
             .slice(0, limit),
@@ -684,12 +716,87 @@ export function createMemoryRepositories(): MemoryRepositories {
         if (run?.summary.runId !== runId) return [];
         return structuredClone(run.golden.filter((g) => customerIds.includes(g.customerId)));
       },
+      async countWithIds(projectId, runId, customerIds) {
+        await Promise.resolve();
+        const run = clusters.get(projectId);
+        if (run?.summary.runId !== runId) return 0;
+        return run.clusters.filter((c) => customerIds.includes(c.customerId)).length;
+      },
+      async listApprovable(projectId, runId) {
+        await Promise.resolve();
+        const run = clusters.get(projectId);
+        if (run?.summary.runId !== runId) return [];
+        return structuredClone(
+          run.clusters.filter(approvable).sort((a, b) => a.position - b.position),
+        );
+      },
+      async countApprovable(projectId, runId, exceptIds) {
+        await Promise.resolve();
+        const run = clusters.get(projectId);
+        if (run?.summary.runId !== runId) return 0;
+        return run.clusters.filter((c) => approvable(c) && !exceptIds.includes(c.customerId))
+          .length;
+      },
       async deleteByProject(projectId) {
         await Promise.resolve();
         clusters.delete(projectId);
       },
       workerSave({ projectId, ...run }) {
         clusters.set(projectId, structuredClone(run));
+      },
+    },
+
+    review: {
+      async savePairDecisions(projectId, decisions) {
+        await Promise.resolve();
+        const stored = inProject(pairDecisions, projectId);
+        for (const d of decisions) stored.set(`${d.keyA}/${d.keyB}`, structuredClone(d));
+      },
+      async countPairDecisions(projectId) {
+        await Promise.resolve();
+        const counts = { same: 0, different: 0 };
+        for (const d of inProject(pairDecisions, projectId).values()) counts[d.decision] += 1;
+        return counts;
+      },
+      async deleteApprovalDecisions(projectId, customerId) {
+        await Promise.resolve();
+        const stored = inProject(pairDecisions, projectId);
+        for (const [key, d] of stored) {
+          if (d.action === 'approve' && d.customerId === customerId) stored.delete(key);
+        }
+      },
+      async saveApprovals(projectId, written) {
+        await Promise.resolve();
+        const stored = inProject(approvals, projectId);
+        const keys = new Set(written.flatMap((a) => a.memberKeys));
+        for (const [id, a] of stored) {
+          if (a.memberKeys.some((k) => keys.has(k))) stored.delete(id);
+        }
+        for (const a of written) stored.set(a.customerId, structuredClone(a));
+      },
+      async listApprovals(projectId) {
+        await Promise.resolve();
+        return structuredClone([...inProject(approvals, projectId).values()]);
+      },
+      async findApprovalsByKeys(projectId, keys) {
+        await Promise.resolve();
+        return structuredClone(
+          [...inProject(approvals, projectId).values()].filter((a) =>
+            a.memberKeys.some((k) => keys.includes(k)),
+          ),
+        );
+      },
+      async deleteApproval(projectId, customerId) {
+        await Promise.resolve();
+        const stored = inProject(approvals, projectId);
+        const found = stored.get(customerId);
+        stored.delete(customerId);
+        return found ? structuredClone(found) : null;
+      },
+      async deleteByProject(projectId) {
+        await Promise.resolve();
+        pairDecisions.delete(projectId);
+        approvals.delete(projectId);
       },
     },
 

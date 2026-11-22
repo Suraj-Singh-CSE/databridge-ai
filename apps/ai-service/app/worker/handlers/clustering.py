@@ -23,7 +23,13 @@ import structlog
 from pydantic import BaseModel, ConfigDict
 
 from app.matching.cluster_store import ClusterStore, SourceInfo
-from app.matching.clustering import Cluster, ClusteringConfig, MemberRecord, cluster_records
+from app.matching.clustering import (
+    Cluster,
+    ClusteringConfig,
+    MemberRecord,
+    cluster_with_decisions,
+    resolve_decisions,
+)
 from app.matching.survivorship import (
     GoldenRecord,
     SurvivorshipConfig,
@@ -88,12 +94,12 @@ class ClusteringHandler:
         known = {m.id for m in members}
         if any(p.record_a not in known or p.record_b not in known for p in pairs):
             raise JobFailedError("SCORES_OUTDATED", _OUTDATED)
-        decisions = self._store.decisions(ctx.project_id)
+        decisions, stale = resolve_decisions(self._store.decisions(ctx.project_id), members)
         self._check_cancel(ctx)
 
         ctx.report(_READ_DONE, f"Grouping {len(members):,} records")
         config = self._settings.clustering
-        clusters = cluster_records(members, pairs, decisions, config)
+        clusters, separation = cluster_with_decisions(members, pairs, decisions, config)
         golden = self._golden(ctx.project_id, clusters, members, sources)
         self._check_cancel(ctx)
 
@@ -128,6 +134,9 @@ class ClusteringHandler:
                         "sourceTrust": list(self._settings.survivorship.source_trust),
                     },
                     "decisionCount": len(decisions),
+                    "staleDecisionCount": stale,
+                    "cutLinkCount": separation.cut_links,
+                    "conflictingDecisionCount": separation.conflicting,
                 },
             )
         except TRANSIENT_ERRORS:
@@ -142,6 +151,8 @@ class ClusteringHandler:
             records=len(members),
             pairs=len(pairs),
             decisions=len(decisions),
+            staleDecisions=stale,
+            cutLinks=separation.cut_links,
             seconds=round(time.monotonic() - started, 3),
             **counts,
         )

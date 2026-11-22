@@ -384,6 +384,45 @@ members keep the same id. Design notes: [ADR 0018](docs/adr/0018-clusters-and-go
   `SURVIVORSHIP_SOURCE_TRUST` (`crm,billing,support`).
 - **Quality**: `cd eval && python -m dbeval.evaluate_golden`.
 
+**Match Review decisions.** AI proposes, a person approves. A data steward (or the owner, an
+admin, a data engineer; viewers only read) can approve a customer, split a record out of it,
+merge two customers, or approve every High-confidence one at once. Every decision is written to
+the audit log. Decisions are stored as **pair decisions** (`match_decisions`: `same` /
+`different` between two records, keyed by the records' stable source keys so they survive
+re-standardisation and re-scoring), which the `clustering` job applies on every run; a decision
+naming a record that no longer exists is ignored and counted (`staleDecisionCount`). An
+**approval** is keyed by the customer's membership (its `customerId`): a customer shows
+`approved` only while its members are exactly the approved ones, else it falls back to
+`proposed` with `membershipChanged: true`. Design notes:
+[ADR 0019](docs/adr/0019-match-review-decisions.md).
+
+| Method | Path (under `/api/v1/projects/:projectId/clusters`) | Who                 | Result                                      |
+| ------ | --------------------------------------------------- | ------------------- | ------------------------------------------- |
+| POST   | `/:customerId/approve`                              | data_steward and up | 200 `{ customerId, status, approvedAt }`    |
+| DELETE | `/:customerId/approval`                             | data_steward and up | 200 `{ customerId, status: "proposed" }`    |
+| POST   | `/:customerId/split` `{ recordId, reason? }`        | data_steward and up | 200 `{ decisionsWritten, job, jobMessage }` |
+| POST   | `/merge` `{ customerIds: [a, b], reason? }`         | data_steward and up | 200 `{ decisionsWritten, job, jobMessage }` |
+| POST   | `/approve-high`                                     | data_steward and up | 200 `{ approved, alreadyApproved }`         |
+
+- **Approve** stores the approval and `same` decisions on the customer's spanning-tree links (the
+  grouping is pinned); no re-run is needed. **Undo** removes both.
+- **Split** writes `different` between the record and every other member; **merge** writes one
+  `same` between the strongest scored pair across the two (else their first members). Both start
+  a `clustering` job at once and return it (`job: null` with a plain `jobMessage` when it cannot
+  start, e.g. scoring is running; the decision is kept for the next run).
+- **Approve all High** approves every customer of 2 or more records labelled High without
+  `needs_review` that is not approved yet.
+- `409` (`details.reason`): `CLUSTERS_NOT_RUN`, `CLUSTERS_OUTDATED` (scored or reviewed again
+  since grouping, or a member record is gone), `CLUSTERING_RUNNING` (decisions wait for the
+  rebuild), `NOTHING_TO_SPLIT`. A `recordId` outside the customer is a `400`.
+- Reading gains `status` from approvals, `approval`, `membershipChanged`, the `aiSuggested=true|false`
+  filter, `status=approved|proposed` from approvals, `review` counts in every summary
+  (`approvedCount`, `proposedCount`, `approvableHighCount`, same / different decisions) and, in the
+  detail, each link's `evidence` (score, band, reasons, the AI's decision and reason).
+- A `different` decision keeps two records apart even through other links: the clustering job
+  cuts the weakest link on their strongest path until they are in separate customers
+  (`cutLinkCount`, `conflictingDecisionCount` in the summary).
+
 **Background jobs.** Long work (profiling, mapping, standardising, matching; pipelines later) runs
 in a Celery worker, not in the request. The api owns the job record in MongoDB; the worker moves it
 forward and publishes every change to Redis; the browser watches it live over Server-Sent Events.
@@ -494,7 +533,7 @@ Every route except sign-in, create-account and the 404 page needs a session; oth
   for the project owner, admins and data engineers (the api enforces the same rule).
 - Pages are lazy-loaded (`React.lazy`), see ADR 0007.
 
-**Match Review (M4.6a, read-only)**
+**Match Review (M4.6a, M4.6b)**
 
 - **Prepare matching** lists the five jobs in order with their state (Done / Out of date / Not
   run), counts and a plain explanation: 1 clean each mapped file (`standardise`), 2 find possible
@@ -503,13 +542,19 @@ Every route except sign-in, create-account and the 404 page needs a session; oth
   Cancel are for the project owner, admins and data engineers; progress is live over SSE, and a
   409 is explained in plain words (e.g. an unapproved mapping links to the Mapping page).
 - **Customers found** shows summary cards, then the customers (multi-record ones by default) with
-  confidence in words, flags and status. Filters: needs review and size use the api; "AI
-  suggested" filters the loaded page. Search takes an exact customer id. Pages follow the api
-  cursor.
+  confidence in words, flags and status (Proposed / Approved / Membership changed). Filters
+  (needs review, AI suggested, approved, not approved, size) all use the api. Search takes an
+  exact customer id. Pages follow the api cursor.
 - **View** opens a customer: its records side by side (one column per source row), values that
   differ from the golden record marked "Differs", the golden value with where it came from
-  ("From CRM row 12 · most frequent") and every value on request, and the links that join them.
-- Approve / split / merge decisions come in M4.6b.
+  ("From CRM row 12 · most frequent") and every value on request, and the links that join them
+  with their evidence (score band, reasons, the AI's decision and reason).
+- Data stewards and up decide: **Approve group** (and **Undo approval**), **Split out** on a
+  record's column (confirm, optional reason), **Merge with…** (find the other customer by id, see
+  both sizes, confirm), and **Approve all High** on the list (confirm shows the count). After a
+  split or merge the rebuild job's progress shows and the list refreshes when it ends. Results
+  and plain-language errors (409, 403, network) are announced in an `aria-live` region; dialogs
+  return focus to their button. Viewers see the same page without these buttons.
 
 **Run it in development** (Vite proxies `/api` to `http://localhost:4000`):
 

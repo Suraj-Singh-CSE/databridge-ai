@@ -2,24 +2,53 @@ import { CircleAlert, Search } from 'lucide-react';
 import { useState, type FormEvent } from 'react';
 
 import { EmptyState } from '@/components/EmptyState';
+import { ProgressBar } from '@/components/ProgressBar';
 import { StatusPill } from '@/components/StatusPill';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Skeleton } from '@/components/ui/skeleton';
+import { useProjectJobs } from '@/features/sources/queries';
 import { ApiError } from '@/lib/api';
-import type { ClusterSummaryView, ClusterView } from '@/lib/api-types';
+import type { ClusterSummaryView, ClusterView, Job } from '@/lib/api-types';
+import { isTerminalStatus } from '@/lib/job-events';
 
 import { ClusterDetail } from './ClusterDetail';
 import {
+  approveHighSummary,
   clusterConfidence,
   CUSTOMER_ID_PATTERN,
   FLAG_LABELS,
   formatCount,
-  STATUS_LABELS,
+  plural,
+  reviewStatus,
 } from './matching-labels';
-import { useCluster, useClusters, type ClusterFilters } from './queries';
+import {
+  latestJob,
+  reviewErrorMessage,
+  useApproveHigh,
+  useCluster,
+  useClusters,
+  type ClusterFilters,
+} from './queries';
+import { ConfirmAction } from './ReviewDialogs';
+
+/** The clustering job a split or merge started: its progress until the groups are rebuilt. */
+function RebuildProgress({ job }: { job: Job }) {
+  return (
+    <div role="status" className="space-y-2 rounded-xl border px-4 py-3">
+      <p className="text-sm font-medium">
+        {job.status === 'queued'
+          ? 'Waiting to rebuild the groups'
+          : `Rebuilding the groups: ${job.progress}%`}
+      </p>
+      <ProgressBar value={job.progress / 100} label="Rebuilding the groups" />
+    </div>
+  );
+}
+
+type StatusFilter = NonNullable<ClusterFilters['status']>;
 
 function SummaryCard({ label, value, hint }: { label: string; value: number; hint?: string }) {
   return (
@@ -122,7 +151,9 @@ function ClusterTable({
                   )}
                 </td>
                 <td className="px-3 py-2.5">
-                  <StatusPill tone="neutral">{STATUS_LABELS[cluster.status]}</StatusPill>
+                  <StatusPill tone={reviewStatus(cluster).tone}>
+                    {reviewStatus(cluster).text}
+                  </StatusPill>
                 </td>
                 <td className="px-3 py-2">
                   <Button
@@ -151,13 +182,23 @@ function ClusterTable({
 export function ClustersSection({
   projectId,
   view,
+  canDecide,
 }: {
   projectId: string;
   view: ClusterSummaryView;
+  /** Approve, split and merge (data stewards and up); viewers only read. */
+  canDecide: boolean;
 }) {
   const [needsReview, setNeedsReview] = useState(false);
   const [aiOnly, setAiOnly] = useState(false);
   const [multiOnly, setMultiOnly] = useState(true);
+  const [status, setStatus] = useState<StatusFilter | null>(null);
+  const [result, setResult] = useState('');
+  const jobs = useProjectJobs(projectId);
+  const approveHigh = useApproveHigh(projectId);
+  const clustering = latestJob(jobs.data, 'clustering');
+  const rebuilding =
+    clustering !== null && !isTerminalStatus(clustering.status) ? clustering : null;
   const [cursors, setCursors] = useState<string[]>([]);
   const [query, setQuery] = useState('');
   const [queryError, setQueryError] = useState<string | null>(null);
@@ -167,11 +208,13 @@ export function ClustersSection({
   const filters: ClusterFilters = {
     ...(needsReview ? { flag: 'needs_review' as const } : {}),
     ...(multiOnly ? { minSize: 2 } : {}),
+    ...(aiOnly ? { aiSuggested: true } : {}),
+    ...(status ? { status } : {}),
     ...(cursors.length > 0 ? { cursor: cursors[cursors.length - 1] } : {}),
   };
   const list = useClusters(projectId, filters, searchId === null);
   const found = useCluster(projectId, searchId);
-  const { summary } = view;
+  const { summary, review } = view;
 
   const changeFilter = (set: (v: boolean) => void) => (value: boolean) => {
     set(value);
@@ -227,7 +270,7 @@ export function ClustersSection({
       />
     );
   } else {
-    rows = aiOnly ? list.data.items.filter((c) => c.aiSuggested) : list.data.items;
+    rows = list.data.items;
     if (rows.length === 0) {
       body = (
         <EmptyState
@@ -256,7 +299,7 @@ export function ClustersSection({
           </AlertDescription>
         </Alert>
       )}
-      <div className="grid gap-4 sm:grid-cols-3 lg:grid-cols-5">
+      <div className="grid gap-4 sm:grid-cols-3 lg:grid-cols-6">
         <SummaryCard
           label="People found"
           value={summary.clusterCount}
@@ -270,7 +313,54 @@ export function ClustersSection({
         <SummaryCard label="Need review" value={summary.needsReviewCount} />
         <SummaryCard label="AI suggested" value={summary.aiSuggestedCount} />
         <SummaryCard label="Largest group" value={summary.largestCluster} hint="records" />
+        <SummaryCard
+          label="Approved"
+          value={review.approvedCount}
+          hint={`${formatCount(review.proposedCount)} still proposed`}
+        />
       </div>
+      {summary.staleDecisionCount > 0 && (
+        <p className="text-sm text-muted-foreground">
+          {plural(
+            summary.staleDecisionCount,
+            'earlier decision no longer applies',
+            'earlier decisions no longer apply',
+          )}
+          : their records were changed or removed.
+        </p>
+      )}
+      {rebuilding && <RebuildProgress job={rebuilding} />}
+      <p aria-live="polite" role="status" className="text-sm empty:hidden">
+        {result}
+      </p>
+      {canDecide && (
+        <div className="flex flex-wrap items-center gap-3">
+          <ConfirmAction
+            label="Approve all High"
+            variant="default"
+            title={`Approve ${plural(review.approvableHighCount, 'High-confidence group', 'High-confidence groups')}?`}
+            description="Approves every group of 2 or more records with High confidence and no review flag that is not approved yet. You can undo any of them afterwards."
+            confirmLabel={`Approve ${formatCount(review.approvableHighCount)}`}
+            pending={approveHigh.isPending}
+            disabled={review.approvableHighCount === 0 || rebuilding !== null || view.outdated}
+            onConfirm={() => {
+              approveHigh.mutate(undefined, {
+                onSuccess: (counts) => {
+                  setResult(approveHighSummary(counts));
+                },
+                onError: (error) => {
+                  setResult(reviewErrorMessage(error));
+                },
+              });
+            }}
+          />
+          {review.approvableHighCount === 0 && (
+            <span className="text-sm text-muted-foreground">
+              No High-confidence groups are waiting for approval.
+            </span>
+          )}
+        </div>
+      )}
 
       <div className="flex flex-wrap items-center gap-4">
         <form role="search" onSubmit={search} className="flex items-start gap-2">
@@ -323,6 +413,20 @@ export function ClustersSection({
             />
             <Toggle label="AI suggested" pressed={aiOnly} onChange={changeFilter(setAiOnly)} />
             <Toggle
+              label="Approved"
+              pressed={status === 'approved'}
+              onChange={changeFilter((on) => {
+                setStatus(on ? 'approved' : null);
+              })}
+            />
+            <Toggle
+              label="Not approved"
+              pressed={status === 'proposed'}
+              onChange={changeFilter((on) => {
+                setStatus(on ? 'proposed' : null);
+              })}
+            />
+            <Toggle
               label="2 or more records"
               pressed={multiOnly}
               onChange={changeFilter(setMultiOnly)}
@@ -330,11 +434,6 @@ export function ClustersSection({
           </div>
         )}
       </div>
-      {aiOnly && searchId === null && (
-        <p className="text-sm text-muted-foreground">
-          “AI suggested” shows the matching customers on this page.
-        </p>
-      )}
       {queryError && (
         <p id="customer-search-error" className="text-sm text-destructive">
           {queryError}
@@ -376,10 +475,14 @@ export function ClustersSection({
       {selected && (
         <ClusterDetail
           key={selected.customerId}
+          projectId={projectId}
           cluster={selected}
+          canDecide={canDecide}
+          rebuilding={rebuilding !== null}
           onClose={() => {
             setSelectedId(null);
           }}
+          onResult={setResult}
         />
       )}
     </section>

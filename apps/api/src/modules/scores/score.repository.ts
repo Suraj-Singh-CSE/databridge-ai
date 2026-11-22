@@ -105,6 +105,19 @@ export function createMongoScoreRepository(): ScoreRepository {
         .lean<PairScoreDoc[]>();
       return docs.map(toPairScore);
     },
+    async findAmong(projectId, runId, recordIds) {
+      if (recordIds.length < 2) return [];
+      const ids = [...recordIds];
+      const docs = await PairScoreModel.find({
+        projectId,
+        runId,
+        recordA: { $in: ids },
+        recordB: { $in: ids },
+      })
+        .sort({ position: 1 })
+        .lean<PairScoreDoc[]>();
+      return docs.map(toPairScore);
+    },
     async deleteByProject(projectId) {
       await PairScoreModel.deleteMany({ projectId });
       await ScoreSummaryModel.deleteMany({ projectId });

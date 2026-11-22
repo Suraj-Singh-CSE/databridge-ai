@@ -575,6 +575,39 @@ jobs:
           test "$code" = 400
           echo "ok: every record in one proposed cluster; golden records carry provenance"
 
+          # Match Review decisions (ADR 0019): approve all High, approve one, split one record out.
+          curl -sS --fail-with-body -X POST "$clusters/approve-high" -H "$auth" \
+            -H 'Content-Type: application/json' -d '{}' > /tmp/approve-high
+          jq -c '.data' /tmp/approve-high
+          jq -e '.data.approved >= 0 and .data.alreadyApproved >= 0' /tmp/approve-high > /dev/null
+          curl -sS --fail-with-body -X POST "$clusters/$customer/approve" -H "$auth" \
+            -H 'Content-Type: application/json' -d '{}' > /dev/null
+          curl -sS --fail-with-body "$clusters/$customer" -H "$auth" > /tmp/cluster-approved
+          jq -e '.data.cluster.status == "approved" and .data.cluster.goldenRecord.status == "approved"
+            and .data.review.approvedCount >= 1 and all(.data.cluster.links[]; has("evidence"))' \
+            /tmp/cluster-approved > /dev/null
+          echo "ok: approved $customer ($(jq -r '.data.review.approvedCount' /tmp/cluster-approved) approved in all)"
+          record=$(jq -r '.data.cluster.memberRecordIds[0]' /tmp/cluster-detail)
+          curl -sS --fail-with-body -X POST "$clusters/$customer/split" -H "$auth" \
+            -H 'Content-Type: application/json' -d "{\"recordId\":\"$record\"}" > /tmp/split
+          jq -c '.data | {decisionsWritten, job: (.job | {type, status})}' /tmp/split
+          job=$(jq -r '.data.job.id' /tmp/split)
+          curl -sSN --fail --max-time 90 "$api/jobs/$job/events" -H "$auth" | sed -n 's/^data: //p' > "/tmp/clustering-$job"
+          jq -s -e 'last | .status == "succeeded"' "/tmp/clustering-$job" > /dev/null
+          # The record now belongs to another customer id (the old membership is gone).
+          cursor=""; owner_id=""
+          while [ -z "$owner_id" ]; do
+            curl -sS --fail-with-body "$clusters?limit=100${cursor:+&cursor=$cursor}" -H "$auth" > /tmp/clusters-page
+            owner_id=$(jq -r --arg r "$record" '.data.items[] | select(.memberRecordIds | index($r)) | .customerId' /tmp/clusters-page)
+            cursor=$(jq -r '.data.nextCursor // empty' /tmp/clusters-page)
+            [ -n "$cursor" ] || break
+          done
+          echo "record moved from $customer to $owner_id"
+          test -n "$owner_id"
+          test "$owner_id" != "$customer"
+          curl -sS --fail-with-body "$clusters/summary" -H "$auth" | jq -e '.data.summary.decisionCount >= 1' > /dev/null
+          echo "ok: split applied by the automatic clustering job"
+
       - name: AI service is not published to the host
         run: |
           if curl -s --max-time 3 http://localhost:8000/internal/v1/health; then

@@ -25,6 +25,8 @@ export interface JobService {
   listByProject(project: Project, limit: number): Promise<Job[]>;
   /** Cancels a queued or running job; a finished job is returned unchanged. */
   cancel(actor: Actor, job: Job): Promise<Job>;
+  /** A job of this type is queued or running in the project (stale workers excluded). */
+  hasActive(project: Project, type: JobType): Promise<boolean>;
 }
 
 export interface JobServiceDeps {
@@ -382,6 +384,8 @@ export function createJobService({
       }
       return job;
     },
+
+    hasActive: isActive,
 
     async find(jobId) {
       const job = await repos.jobs.findById(jobId);

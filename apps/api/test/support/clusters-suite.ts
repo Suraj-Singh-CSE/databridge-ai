@@ -285,10 +285,10 @@ export function defineClustersSuite(label: string, harness: ClustersHarness): vo
     }
 
     /** Clusters as the worker writes them: a pair, a flagged AI-suggested pair, a single record. */
-    async function buildClusters(scores: ScoreSummary): Promise<Cluster[]> {
+    function defaultClusters(): Cluster[] {
       const [c1 = '', c2 = '', c3 = ''] = crmIds;
       const [b1 = '', b2 = ''] = billingIds;
-      const clusters = [
+      return [
         cluster(1, [c1, b1]),
         cluster(2, [c2, c3], {
           flags: ['needs_review', 'conflicting_evidence'],
@@ -299,6 +299,12 @@ export function defineClustersSuite(label: string, harness: ClustersHarness): vo
         }),
         cluster(3, [b2]),
       ];
+    }
+
+    async function buildClusters(
+      scores: ScoreSummary,
+      clusters: Cluster[] = defaultClusters(),
+    ): Promise<Cluster[]> {
       const runId = `${newId()}:1`;
       const summary: ClusterSummary = {
         jobId: runId.split(':')[0] ?? '',
@@ -315,6 +321,9 @@ export function defineClustersSuite(label: string, harness: ClustersHarness): vo
         averageSize: 1.6667,
         largestCluster: 2,
         decisionCount: 0,
+        staleDecisionCount: 0,
+        cutLinkCount: 0,
+        conflictingDecisionCount: 0,
         settings: { includeAiSuggested: true, maxClusterSize: 6, sourceTrust: ['crm', 'billing'] },
         finishedAt: new Date('2026-11-22T13:00:00Z'),
       };
@@ -689,6 +698,294 @@ export function defineClustersSuite(label: string, harness: ClustersHarness): vo
             limit: 10,
           }),
         ).toEqual([]);
+      });
+    });
+
+    describe('review decisions (approve, split, merge, approve all High)', () => {
+      const post = (session: Session | null, path: string, body: object = {}) => {
+        const req = request(app).post(url(path)).send(body);
+        return session ? req.set(bearer(session)) : req;
+      };
+      const detail = async (id: string) =>
+        (
+          await request(app)
+            .get(url(`/${id}`))
+            .set(bearer(owner))
+            .expect(200)
+        ).body.data as {
+          cluster: Item & {
+            approval: { approvedBy: string } | null;
+            membershipChanged: boolean;
+            links: (Cluster['links'][number] & { evidence: Record<string, unknown> | null })[];
+          };
+        };
+      const actions = async () =>
+        (await repos.audit.listByProject(projectId, { skip: 0, limit: 100 })).items.map(
+          (e) => e.action,
+        );
+      const clusteringJobs = () => ai.enqueued.filter(({ input }) => input.type === 'clustering');
+
+      it('approves a cluster: status approved in list, detail, golden record and summary; audited', async () => {
+        const [top] = await buildClusters(await prepare());
+        if (!top) throw new Error('no cluster');
+        const steward = await memberWith('data_steward');
+
+        const res = await post(steward, `/${top.customerId}/approve`);
+
+        expect(res.status).toBe(200);
+        expect(res.body.data).toMatchObject({ customerId: top.customerId, status: 'approved' });
+        const { cluster: found } = await detail(top.customerId);
+        expect(found.status).toBe('approved');
+        expect(found.goldenRecord?.status).toBe('approved');
+        expect(found.approval?.approvedBy).toBe(steward.id);
+        expect(found.membershipChanged).toBe(false);
+        const approved = await request(app).get(url('?status=approved')).set(bearer(owner));
+        expect(itemsOf(approved.body).map((i) => i.customerId)).toEqual([top.customerId]);
+        const proposed = await request(app).get(url('?status=proposed')).set(bearer(owner));
+        expect(itemsOf(proposed.body).map((i) => i.position)).toEqual([2, 3]);
+        const summary = await request(app).get(url('/summary')).set(bearer(owner)).expect(200);
+        expect(summary.body.data.review).toEqual({
+          approvedCount: 1,
+          proposedCount: 2,
+          approvableHighCount: 0,
+          sameDecisionCount: 1, // the approved link is pinned
+          differentDecisionCount: 0,
+        });
+        expect(await actions()).toContain('cluster.approve');
+        expect(clusteringJobs()).toEqual([]); // approval keeps the membership: no re-run
+      });
+
+      it('keeps an approval while the membership is the same, and shows a changed membership', async () => {
+        const scores = await prepare();
+        const built = await buildClusters(scores);
+        const [top] = built;
+        if (!top) throw new Error('no cluster');
+        await post(owner, `/${top.customerId}/approve`).expect(200);
+
+        // A re-run with the same members keeps the customer id, so the approval stands.
+        await buildClusters(scores, built);
+        expect((await detail(top.customerId)).cluster.status).toBe('approved');
+
+        // A re-run that splits it: two new customer ids, both "membership changed".
+        const [c1 = '', c2 = '', c3 = ''] = crmIds;
+        const [b1 = '', b2 = ''] = billingIds;
+        const split = [cluster(1, [c2, c3]), cluster(2, [c1]), cluster(3, [b1]), cluster(4, [b2])];
+        await buildClusters(scores, split);
+        const [, alone, other, untouched] = split;
+        for (const c of [alone, other]) {
+          const { cluster: found } = await detail(c?.customerId ?? '');
+          expect(found).toMatchObject({ status: 'proposed', membershipChanged: true });
+        }
+        expect((await detail(untouched?.customerId ?? '')).cluster.membershipChanged).toBe(false);
+      });
+
+      it('undoes an approval and its pinned links (404 when not approved)', async () => {
+        const [top] = await buildClusters(await prepare());
+        if (!top) throw new Error('no cluster');
+        await post(owner, `/${top.customerId}/approve`).expect(200);
+
+        const res = await request(app)
+          .delete(url(`/${top.customerId}/approval`))
+          .set(bearer(owner));
+
+        expect(res.status).toBe(200);
+        expect(res.body.data).toEqual({ customerId: top.customerId, status: 'proposed' });
+        expect((await detail(top.customerId)).cluster.status).toBe('proposed');
+        expect(await repos.review.countPairDecisions(projectId)).toEqual({ same: 0, different: 0 });
+        expect(await actions()).toContain('cluster.unapprove');
+        const again = await request(app)
+          .delete(url(`/${top.customerId}/approval`))
+          .set(bearer(owner));
+        expect(again.status).toBe(404);
+      });
+
+      it('approves every High cluster without needs_review, and counts the ones already approved', async () => {
+        const [top] = await buildClusters(await prepare());
+        const engineer = await memberWith('data_engineer');
+
+        const before = await request(app).get(url('/summary')).set(bearer(owner)).expect(200);
+        expect(before.body.data.review.approvableHighCount).toBe(1);
+        const first = await post(engineer, '/approve-high');
+        expect(first.status).toBe(200);
+        expect(first.body.data).toEqual({ approved: 1, alreadyApproved: 0 });
+        expect((await detail(top?.customerId ?? '')).cluster.status).toBe('approved');
+        const second = await post(engineer, '/approve-high').expect(200);
+        expect(second.body.data).toEqual({ approved: 0, alreadyApproved: 1 });
+        expect(await actions()).toContain('cluster.approve_high');
+        expect((await post(engineer, '/approve-high', { all: true })).status).toBe(400);
+      });
+
+      it('splits a record out: different decisions, a clustering job, an audit entry', async () => {
+        const [top] = await buildClusters(await prepare());
+        if (!top) throw new Error('no cluster');
+        const steward = await memberWith('data_steward');
+        const [recordId] = top.memberRecordIds;
+
+        const res = await post(steward, `/${top.customerId}/split`, {
+          recordId,
+          reason: '  Different person  ',
+        });
+
+        expect(res.status).toBe(200);
+        expect(res.body.data).toMatchObject({
+          decisionsWritten: 1,
+          jobMessage: null,
+          job: { type: 'clustering', status: 'queued', payload: {} },
+        });
+        expect(clusteringJobs()).toHaveLength(1);
+        expect(await repos.review.countPairDecisions(projectId)).toEqual({ same: 0, different: 1 });
+        const entries = (await repos.audit.listByProject(projectId, { skip: 0, limit: 100 })).items;
+        const audit = entries.find((e) => e.action === 'cluster.split');
+        expect(audit).toMatchObject({
+          entityType: 'cluster',
+          entityId: top.customerId,
+          actorId: steward.id,
+          after: { recordId, decisions: 1, reason: 'Different person' },
+        });
+
+        // The clustering job is now queued: further decisions wait for it.
+        const blocked = await post(owner, `/${top.customerId}/approve`);
+        expect(blocked.status).toBe(409);
+        expect(blocked.body.error.details).toEqual({ reason: 'CLUSTERING_RUNNING' });
+        expect(blocked.body.error.message).toContain('Clusters are being rebuilt');
+      });
+
+      it('validates a split: a member of this cluster, a short reason, more than one record', async () => {
+        const [top, , single] = await buildClusters(await prepare());
+        if (!top || !single) throw new Error('no cluster');
+        const [member] = top.memberRecordIds;
+        for (const body of [
+          {},
+          { recordId: 'x' },
+          { recordId: newId() },
+          { recordId: member, reason: 'x'.repeat(301) },
+          { recordId: member, other: 1 },
+        ]) {
+          const res = await post(owner, `/${top.customerId}/split`, body);
+          expect(res.status, JSON.stringify(body).slice(0, 40)).toBe(400);
+          expect(res.body.error.code).toBe('VALIDATION_ERROR');
+        }
+        const lone = await post(owner, `/${single.customerId}/split`, {
+          recordId: single.memberRecordIds[0],
+        });
+        expect(lone.status).toBe(409);
+        expect(lone.body.error.details).toEqual({ reason: 'NOTHING_TO_SPLIT' });
+        expect((await post(owner, `/${customerId()}/split`, { recordId: member })).status).toBe(
+          404,
+        );
+        expect(clusteringJobs()).toEqual([]);
+      });
+
+      it('merges two clusters with one same decision and starts a clustering job', async () => {
+        const [top, , single] = await buildClusters(await prepare());
+        if (!top || !single) throw new Error('no cluster');
+
+        const res = await post(owner, '/merge', {
+          customerIds: [top.customerId, single.customerId],
+          reason: 'Same customer',
+        });
+
+        expect(res.status).toBe(200);
+        expect(res.body.data).toMatchObject({ decisionsWritten: 1, job: { type: 'clustering' } });
+        expect(await repos.review.countPairDecisions(projectId)).toEqual({ same: 1, different: 0 });
+        expect(await actions()).toContain('cluster.merge');
+        for (const body of [
+          { customerIds: [top.customerId] },
+          { customerIds: [top.customerId, top.customerId] },
+          { customerIds: [top.customerId, 'C1'] },
+          { customerIds: [top.customerId, single.customerId], reason: 3 },
+        ]) {
+          expect((await post(owner, '/merge', body)).status).toBe(400);
+        }
+      });
+
+      it('answers 404 for an unknown customer id in a merge', async () => {
+        const [top] = await buildClusters(await prepare());
+        const res = await post(owner, '/merge', {
+          customerIds: [top?.customerId ?? '', customerId()],
+        });
+        expect(res.status).toBe(404);
+        expect(await repos.review.countPairDecisions(projectId)).toEqual({ same: 0, different: 0 });
+      });
+
+      it('saves a split even when the clustering job cannot start, and says why', async () => {
+        const [top] = await buildClusters(await prepare());
+        if (!top) throw new Error('no cluster');
+        await repos.jobs.create({ projectId, type: 'scoring', payload: {}, createdBy: owner.id });
+
+        const res = await post(owner, `/${top.customerId}/split`, {
+          recordId: top.memberRecordIds[1],
+        });
+
+        expect(res.status).toBe(200);
+        expect(res.body.data.job).toBeNull();
+        expect(res.body.data.jobMessage).toContain('Your decision is saved');
+        expect(await repos.review.countPairDecisions(projectId)).toEqual({ same: 0, different: 1 });
+      });
+
+      it('refuses decisions on outdated clusters and before the first run (409)', async () => {
+        const scores = await prepare();
+        const before = await post(owner, '/approve-high');
+        expect(before.status).toBe(409);
+        expect(before.body.error.details).toEqual({ reason: 'CLUSTERS_NOT_RUN' });
+        const [top] = await buildClusters(scores);
+        await score(scores.candidatesRunId, newId()); // reviewed again: clusters outdated
+        for (const [path, body] of [
+          [`/${top?.customerId ?? ''}/approve`, {}],
+          ['/approve-high', {}],
+          [`/${top?.customerId ?? ''}/split`, { recordId: top?.memberRecordIds[0] }],
+        ] as const) {
+          const res = await post(owner, path, body);
+          expect(res.status, path).toBe(409);
+          expect(res.body.error.details).toEqual({ reason: 'CLUSTERS_OUTDATED' });
+        }
+      });
+
+      it('lets stewards and up decide; viewers 403, outsiders 404, no token 401', async () => {
+        const [top, , single] = await buildClusters(await prepare());
+        if (!top || !single) throw new Error('no cluster');
+        const viewer = await memberWith('viewer');
+        const outsider = await register('outsider@example.com');
+        const routes: [string, object][] = [
+          [`/${top.customerId}/approve`, {}],
+          ['/approve-high', {}],
+          [`/${top.customerId}/split`, { recordId: top.memberRecordIds[0] }],
+          ['/merge', { customerIds: [top.customerId, single.customerId] }],
+        ];
+        for (const [path, body] of routes) {
+          const forbidden = await post(viewer, path, body);
+          expect(forbidden.status, path).toBe(403);
+          expect(forbidden.body.error.code).toBe('FORBIDDEN');
+          expect((await post(outsider, path, body)).status, path).toBe(404);
+          expect((await post(null, path, body)).status, path).toBe(401);
+        }
+        const undo = request(app).delete(url(`/${top.customerId}/approval`));
+        expect((await undo.set(bearer(viewer))).status).toBe(403);
+        expect((await request(app).delete(url(`/${top.customerId}/approval`))).status).toBe(401);
+        expect(await repos.review.countPairDecisions(projectId)).toEqual({ same: 0, different: 0 });
+        await post(admin, `/${top.customerId}/approve`).expect(200);
+      });
+
+      it('filters AI-suggested clusters on the server and shows link evidence in the detail', async () => {
+        const [top] = await buildClusters(await prepare());
+        const ai = await request(app).get(url('?aiSuggested=true')).set(bearer(owner)).expect(200);
+        expect(itemsOf(ai.body).map((i) => i.position)).toEqual([2]);
+        const notAi = await request(app).get(url('?aiSuggested=false')).set(bearer(owner));
+        expect(itemsOf(notAi.body).map((i) => i.position)).toEqual([1, 3]);
+        expect((await request(app).get(url('?aiSuggested=yes')).set(bearer(owner))).status).toBe(
+          400,
+        );
+
+        const { cluster: found } = await detail(top?.customerId ?? '');
+        expect(found.links[0]?.evidence).toEqual({
+          score: 0.999,
+          band: 'match',
+          reasons: [{ field: 'phone', level: 'exact', weight: 7.1, text: 'Same phone' }],
+          aiDecision: null,
+          aiConfidence: null,
+          aiReason: null,
+          suggestedBand: 'match',
+        });
       });
     });
   });
