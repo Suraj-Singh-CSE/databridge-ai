@@ -217,6 +217,37 @@ curl -s http://localhost:8080/api/v1/projects/$PROJECT/sources/$SOURCE/mappings 
   masked or shape samples of the profile, never file values, and only through the gateway.
 - **Accuracy** on the committed samples: `cd eval && python -m dbeval.evaluate_mapping`.
 
+**Standardise (clean every row).** Once every column of a source has a decision, the
+`standardise` job applies the reviewed mapping to every row and stores the cleaned rows in
+`staged_records`. No LLM is involved. Design notes: [ADR 0014](docs/adr/0014-standardisation.md).
+
+| Method | Path (under `/api/v1/projects/:projectId`)               | Who                         | Result                                       |
+| ------ | -------------------------------------------------------- | --------------------------- | -------------------------------------------- |
+| POST   | `/jobs` `{ type: "standardise", payload: { sourceId } }` | owner, admin, data_engineer | 202 `{ job }`                                |
+| GET    | `/sources/:sourceId/staged?limit=&cursor=&issues=only`   | any member                  | 200 `{ source, summary, items, nextCursor }` |
+
+- **Start**: `409` (`details.reason`) unless the source is profiled (`SOURCE_NOT_PROFILED`), the
+  mapping has run (`MAPPING_NOT_RUN`) and no column is pending (`MAPPING_NOT_APPROVED`, with the
+  count), no accept is outdated (`DECISION_OUTDATED`: a mapping re-run changed the accepted
+  suggestion; those columns need review again), and while another standardise job works on it. The worker checks again and also fails
+  with `MAPPING_STALE`, `MAPPING_CONFLICT`, `NOTHING_MAPPED`, `SOURCE_CHANGED` or the file errors
+  of profiling. Running it again replaces the staged rows.
+- **Effective mapping**: accepted -> the suggestion's target and cleaning step, only while it is the one accepted; changed -> the
+  reviewer's; rejected or "Not mapped" -> left out; Record ID -> kept as `sourceRecordId`.
+- **Cleaning steps**: `to_e164_in` (`+91XXXXXXXXXX`), `lowercase` (emails validated),
+  `title_case` (names: `SHROFF, RUDRA` -> `Rudra Shroff`), `city` (Bombay -> Mumbai, Bangalore ->
+  Bengaluru, ...), `parse_date:<format>` (to `YYYY-MM-DD`; day/month order is never guessed),
+  `digits_only` (PIN: 6 digits), `concat` / `split_name`, `trim`, `uppercase`. A value that cannot
+  be cleaned safely is stored as `null` with an issue (`INVALID_PHONE`, `INVALID_EMAIL`,
+  `UNPARSEABLE_DATE`, `AMBIGUOUS_DATE`, `INVALID_PIN`, `INVALID_NAME`, `EMPTY` for a required
+  field, ...).
+- **Staged row**: `{ rowNumber, sourceRecordId, fields: { <target>: value | null }, issues:
+[{ field, code }] }`. `limit` 1-100 (default 50); pass `nextCursor` as `cursor` for the next
+  page; `issues=only` lists rows with issues. `summary` has `rowCount`, `rowsWithIssues` and
+  `issues` counted by field and code. Values are returned as stored (members may see their
+  project's data, as in the preview); they are never logged. `409` before the first run.
+- **Accuracy** against the golden records: `cd eval && python -m dbeval.evaluate_standardise`.
+
 **Background jobs.** Long work (profiling, mapping; matching and pipelines later) runs
 in a Celery worker, not in the request. The api owns the job record in MongoDB; the worker moves it
 forward and publishes every change to Redis; the browser watches it live over Server-Sent Events.
@@ -408,6 +439,26 @@ minute, 250K tokens per minute and 500 requests per day (`gemini-3.8-flash`: 5 p
 per day). That run hit exactly 15 requests in one minute and got two 429s. The gateway now
 spaces provider attempts (retries included) to `LLM_MAX_REQUESTS_PER_MINUTE` (default 12, per
 process) and waits out a 429's retry delay (up to `LLM_RETRY_AFTER_MAX_SECONDS`, default 60).
+
+### Cleaning accuracy
+
+`python -m dbeval.evaluate_standardise` cleans the committed samples with the answer-key mapping
+and compares every staged field with the golden record of its person (through `clusters.csv`).
+Accuracy counts rows whose source value was not empty:
+
+| Field         | Rows | Accuracy | Missing at source |
+| ------------- | ---: | -------: | ----------------: |
+| full_name     |  385 |    81.8% |                 0 |
+| phone         |  385 |   100.0% |                24 |
+| email         |  385 |   100.0% |                30 |
+| date_of_birth |  294 |   100.0% |                12 |
+| city          |  385 |    96.6% |                 8 |
+| pin_code      |  143 |   100.0% |                 7 |
+| address       |  143 |    90.4% |                 7 |
+
+The remaining name, city and address differences are typos, initials, swapped first/last names,
+misspellings and abbreviations in the sources: cleaning keeps them, and entity resolution (the next step)
+is where they are matched. CI holds floors per field (`eval/tests/test_evaluate_standardise.py`).
 
 ## CI
 

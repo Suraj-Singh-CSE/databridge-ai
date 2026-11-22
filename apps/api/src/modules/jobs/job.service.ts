@@ -5,6 +5,8 @@ import type { Repositories } from '../../repositories.js';
 import type { AuditService } from '../audit/audit.service.js';
 import type { Actor } from '../projects/project.service.js';
 import type { Project } from '../projects/project.types.js';
+import type { MappingDecision, MappingSuggestion } from '../mappings/mapping.types.js';
+import { isProfiled } from '../sources/source.types.js';
 import type { TargetSchemaService } from '../target-schema/target-schema.service.js';
 
 import type { JobEventBus, JobUpdate } from './job.events.js';
@@ -25,7 +27,7 @@ export interface JobService {
 }
 
 export interface JobServiceDeps {
-  repos: Pick<Repositories, 'jobs' | 'sources'>;
+  repos: Pick<Repositories, 'jobs' | 'sources' | 'mappings'>;
   /** Mapping jobs need the project's target schema stored (the default is seeded here). */
   targetSchemas: TargetSchemaService;
   audit: AuditService;
@@ -43,13 +45,44 @@ const WORKER_LOST = {
   message: 'The worker running this job stopped responding. Please start the job again.',
 };
 
-const BUSY: Record<'profile' | 'mapping', string> = {
+type SourceJobType = 'profile' | 'mapping' | 'standardise';
+const SOURCE_JOBS: ReadonlySet<JobType> = new Set<SourceJobType>([
+  'profile',
+  'mapping',
+  'standardise',
+]);
+
+const BUSY: Record<SourceJobType, string> = {
   profile:
     'This source is already being profiled. Wait for that job to finish, or cancel it first.',
   mapping:
     'Mapping suggestions for this source are already being made. Wait for that job to finish, or cancel it first.',
+  standardise:
+    'This source is already being standardised. Wait for that job to finish, or cancel it first.',
 };
-const NOT_PROFILED = 'Profile this source first: mapping suggestions are built from its profile.';
+const NOT_PROFILED: Record<'mapping' | 'standardise', string> = {
+  mapping: 'Profile this source first: mapping suggestions are built from its profile.',
+  standardise: 'Profile and map this source before standardising it.',
+};
+const MAPPING_NOT_RUN = 'Run the mapping for this source first, then review it.';
+
+function pendingMessage(count: number): string {
+  const noun = count === 1 ? 'column still needs' : 'columns still need';
+  return `${count} ${noun} a decision. Accept, reject or change every column's mapping first.`;
+}
+
+/** An accept still stands only while the suggestion is the one the reviewer accepted. */
+function acceptedAsShown(suggestion: MappingSuggestion, decision: MappingDecision): boolean {
+  return (
+    suggestion.role === decision.role &&
+    suggestion.target === decision.target &&
+    suggestion.transform === decision.transform
+  );
+}
+
+function isSourceJob(type: JobType): type is SourceJobType {
+  return SOURCE_JOBS.has(type);
+}
 
 export function toUpdate(job: Job): JobUpdate {
   return {
@@ -111,21 +144,55 @@ export function createJobService({
   }
 
   /**
-   * Profile and mapping jobs need a source of this project (404 otherwise) that no other job of
-   * the same type is working on (409); mapping also needs the source profiled (409) and the
-   * project's target schema stored. The worker checks the source again when it runs.
+   * Standardise needs every column's mapping decided, and every accept still matching the
+   * suggestion the reviewer saw (role, target, transform snapshot on the decision): a mapping
+   * re-run that changed it means the column must be reviewed again. The worker checks again.
+   */
+  async function checkMappingReviewed(project: Project, sourceId: string): Promise<void> {
+    const [suggestions, decisions] = await Promise.all([
+      repos.mappings.listSuggestions(project.id, sourceId),
+      repos.mappings.listDecisions(project.id, sourceId),
+    ]);
+    if (suggestions.length === 0) {
+      throw AppError.conflict(MAPPING_NOT_RUN, { reason: 'MAPPING_NOT_RUN' });
+    }
+    const byColumn = new Map(decisions.map((d) => [d.column, d]));
+    const pending = suggestions.filter((s) => !byColumn.has(s.column)).length;
+    if (pending > 0) {
+      throw AppError.conflict(pendingMessage(pending), { reason: 'MAPPING_NOT_APPROVED', pending });
+    }
+    const outdated = suggestions
+      .filter((s) => {
+        const decision = byColumn.get(s.column);
+        return decision?.decision === 'accept' && !acceptedAsShown(s.suggestion, decision);
+      })
+      .map((s) => s.column);
+    if (outdated.length > 0) {
+      throw AppError.conflict(
+        `Mapping changed after review for: ${outdated.join(', ')}. Review these columns again.`,
+        { reason: 'DECISION_OUTDATED', columns: outdated },
+      );
+    }
+  }
+
+  /**
+   * Source jobs need a source of this project (404 otherwise) that no other job of the same
+   * type is working on (409). Mapping and standardise also need the source profiled (409);
+   * mapping needs the project's target schema stored, standardise a fully reviewed mapping.
+   * The worker checks the source again when it runs.
    */
   async function checkSourceJob(
     project: Project,
-    type: 'profile' | 'mapping',
+    type: SourceJobType,
     payload: Record<string, unknown>,
   ): Promise<void> {
     const sourceId = String(payload.sourceId);
     const source = await repos.sources.findById(project.id, sourceId);
     if (!source) throw AppError.notFound('Source not found.');
-    if (type === 'mapping' && source.status !== 'profiled') {
-      throw AppError.conflict(NOT_PROFILED);
+    if (type !== 'profile' && !isProfiled(source.status)) {
+      throw AppError.conflict(NOT_PROFILED[type], { reason: 'SOURCE_NOT_PROFILED' });
     }
+    if (type === 'standardise') await checkMappingReviewed(project, sourceId);
     const active = await repos.jobs.listActive(project.id, type);
     const busy = await Promise.all(active.map(withStaleCheck));
     if (busy.some((job) => !isTerminal(job.status) && job.payload.sourceId === sourceId)) {
@@ -136,7 +203,7 @@ export function createJobService({
 
   return {
     async create(actor, project, { type, payload }) {
-      if (type === 'profile' || type === 'mapping') await checkSourceJob(project, type, payload);
+      if (isSourceJob(type)) await checkSourceJob(project, type, payload);
       const job = await repos.jobs.create({
         projectId: project.id,
         type,

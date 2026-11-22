@@ -83,6 +83,7 @@ describe('formatting', () => {
     expect(formatPercent(100)).toBe('100%');
     expect(sourceStatusPill('profiling', 63.6)).toEqual({ label: 'Profiling 64%', tone: 'review' });
     expect(sourceStatusPill('profiled')).toEqual({ label: 'Profiled', tone: 'high' });
+    expect(sourceStatusPill('standardised')).toEqual({ label: 'Standardised', tone: 'high' });
     expect(sourceStatusPill('failed').label).toBe('Failed');
     expect(sourceStatusPill('uploaded').label).toBe('Uploaded');
   });

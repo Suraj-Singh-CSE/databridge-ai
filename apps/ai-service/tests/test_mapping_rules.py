@@ -155,7 +155,7 @@ def test_date_format_picks_the_most_common_pattern() -> None:
         ("pin", "pin_code", "digits_only"),
         ("cust_nm", "full_name", "title_case"),
         ("first_name", "full_name", "concat"),
-        ("city", "city", "title_case"),
+        ("city", "city", "city"),
         ("addr", "address", "trim"),
     ],
 )

@@ -57,6 +57,7 @@ const TRANSFORMS: Record<string, string> = {
   concat: 'Join with the other name parts',
   split_name: 'Split the full name',
   title_case: 'Capitalise each word',
+  city: 'Official city name',
   trim: 'Trim extra spaces',
 };
 
@@ -71,7 +72,7 @@ export function transformLabel(transform: string | null): string {
 
 /** Only profiled files have the column profile the mapping engine works from. */
 export function isMappable(source: Source): boolean {
-  return source.status === 'profiled';
+  return source.status === 'profiled' || source.status === 'standardised';
 }
 
 const DATE_FORMATS = ['DD/MM/YYYY', 'DD-MM-YYYY', 'YYYY-MM-DD', 'YYYY/MM/DD', 'DD-Mon-YYYY'];
@@ -82,6 +83,7 @@ export const TRANSFORM_CODES: readonly string[] = [
   'lowercase',
   'uppercase',
   'title_case',
+  'city',
   'digits_only',
   'to_e164_in',
   'split_name',

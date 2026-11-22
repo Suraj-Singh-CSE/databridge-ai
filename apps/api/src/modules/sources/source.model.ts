@@ -10,6 +10,27 @@ const sourceErrorSchema = new Schema(
   { _id: false },
 );
 
+const issueCountSchema = new Schema(
+  {
+    field: { type: String, required: true },
+    code: { type: String, required: true },
+    count: { type: Number, required: true, min: 0 },
+  },
+  { _id: false },
+);
+
+// Written by the standardise worker (apps/ai-service/app/standardise/store.py).
+const standardisationSchema = new Schema(
+  {
+    jobId: { type: Schema.Types.ObjectId, ref: 'Job', required: true },
+    runId: { type: String, required: true },
+    rowCount: { type: Number, required: true, min: 0 },
+    rowsWithIssues: { type: Number, required: true, min: 0 },
+    issues: { type: [issueCountSchema], default: [] },
+  },
+  { _id: false },
+);
+
 const sourceSchema = new Schema(
   {
     projectId: { type: Schema.Types.ObjectId, ref: 'Project', required: true },
@@ -28,6 +49,8 @@ const sourceSchema = new Schema(
     // `<jobId>:<attempt>` that owns the current status.
     profiledAt: { type: Date, default: null },
     profileRunId: { type: String, default: null },
+    standardisedAt: { type: Date, default: null },
+    standardisation: { type: standardisationSchema, default: null },
     uploadedBy: { type: Schema.Types.ObjectId, ref: 'User', required: true },
   },
   { timestamps: true },

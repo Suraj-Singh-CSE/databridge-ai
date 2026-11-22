@@ -17,6 +17,7 @@ const SIMPLE_TRANSFORMS = [
   'lowercase',
   'uppercase',
   'title_case',
+  'city',
   'digits_only',
   'to_e164_in',
   'split_name',

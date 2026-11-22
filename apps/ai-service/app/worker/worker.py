@@ -17,10 +17,12 @@ from app.mapping.engine import MappingSettings
 from app.mapping.store import MappingStore
 from app.profiling.store import ProfileStore
 from app.profiling.zip_guard import ZipLimits
+from app.standardise.store import StandardiseStore
 from app.worker.celery_config import create_celery
 from app.worker.handlers import build_registry
 from app.worker.handlers.mapping import MappingHandler, MappingHandlerSettings
 from app.worker.handlers.profile import ProfileHandler, ProfilerSettings
+from app.worker.handlers.standardise import StandardiseHandler
 from app.worker.runner import JobRunner, RetryPolicy
 from app.worker.signals import JobSignals
 from app.worker.store import Document, JobStore
@@ -31,7 +33,8 @@ CLIENT_TIMEOUT_SECONDS = 5
 
 def build_runner(settings: Settings) -> JobRunner:
     """Production collaborators: MongoDB (``jobs``, ``sources``, ``column_profiles``,
-    ``target_schemas``, ``mapping_suggestions``, ``llm_calls``), Redis, the uploads folder and
+    ``target_schemas``, ``mapping_suggestions``, ``mapping_decisions``, ``staged_records``,
+    ``llm_calls``), Redis, the uploads folder and
     the LLM gateway. Clients connect lazily."""
     mongo: MongoClient[Document] = MongoClient(
         settings.mongodb_uri, serverSelectionTimeoutMS=CLIENT_TIMEOUT_SECONDS * 1000
@@ -48,7 +51,8 @@ def build_runner(settings: Settings) -> JobRunner:
         backoff_seconds=settings.job_retry_backoff_seconds,
         backoff_max_seconds=settings.job_retry_backoff_max_seconds,
     )
-    profiler = ProfileHandler(ProfileStore(database), profiler_settings(settings))
+    reading = profiler_settings(settings)
+    profiler = ProfileHandler(ProfileStore(database), reading)
 
     def gateway() -> LLMGateway:
         # Synchronous Redis and MongoDB adapters: each job runs its calls in a new event loop.
@@ -57,7 +61,9 @@ def build_runner(settings: Settings) -> JobRunner:
         )
 
     mapper = MappingHandler(MappingStore(database), gateway, mapping_settings(settings))
-    return JobRunner(store, JobSignals(redis), build_registry(profiler, mapper), retry)
+    standardiser = StandardiseHandler(StandardiseStore(database), reading)
+    registry = build_registry(profiler, mapper, standardiser)
+    return JobRunner(store, JobSignals(redis), registry, retry)
 
 
 def mapping_settings(settings: Settings) -> MappingHandlerSettings:

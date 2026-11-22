@@ -306,7 +306,8 @@ function ProfileContent({ project }: { project: Project }) {
       </Alert>
     );
   } else if (profile.data.columns.length === 0) {
-    const profiled = profile.data.source.status === 'profiled';
+    const { status } = profile.data.source;
+    const profiled = status === 'profiled' || status === 'standardised';
     body = (
       <EmptyState
         title={profiled ? 'This file has no columns' : 'Not profiled yet'}

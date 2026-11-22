@@ -806,6 +806,7 @@ describe('transformLabel', () => {
 describe('mapping helpers', () => {
   it('only treats profiled files as mappable', () => {
     expect(isMappable(makeSource({ status: 'profiled' }))).toBe(true);
+    expect(isMappable(makeSource({ status: 'standardised' }))).toBe(true);
     expect(isMappable(makeSource({ status: 'ready' }))).toBe(false);
     expect(isMappable(makeSource({ status: 'uploaded' }))).toBe(false);
   });

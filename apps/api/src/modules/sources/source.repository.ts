@@ -24,6 +24,19 @@ function toSource(doc: StoredSource): Source {
     columnCount: doc.columnCount ?? null,
     error: doc.error ? { code: doc.error.code, message: doc.error.message } : null,
     profiledAt: doc.profiledAt ?? null,
+    standardisedAt: doc.standardisedAt ?? null,
+    standardisation: doc.standardisation
+      ? {
+          runId: doc.standardisation.runId,
+          rowCount: doc.standardisation.rowCount,
+          rowsWithIssues: doc.standardisation.rowsWithIssues,
+          issues: doc.standardisation.issues.map(({ field, code, count }) => ({
+            field,
+            code,
+            count,
+          })),
+        }
+      : null,
     uploadedBy: doc.uploadedBy.toHexString(),
     createdAt: doc.createdAt,
     updatedAt: doc.updatedAt,
