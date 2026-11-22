@@ -132,12 +132,12 @@ If errors remain, the run summary names the status and Google's message.
 
 Settings: thinking level = model default, timeout 90 s, 12 columns per call, budget 40 calls.
 
-| Set | Path | Columns | Accuracy | Acc. at High | High-conf wrong | Null precision | Null recall |
-|---|---|---|---|---|---|---|---|
-| samples | rules | 25 | 100.0% (25/25) | 100.0% (22/22) | 0 | 100% | 100% |
-| samples | hybrid | 25 | 100.0% (25/25) | 100.0% (23/23) | 0 | 100% | 100% |
-| unseen | rules | 44 | 72.7% (32/44) | 81.0% (17/21) | 4 | 60.0% | 100% |
-| unseen | hybrid | 44 | 81.8% (36/44) | 90.5% (19/21) | 2 | 65.2% | 100% |
+| Set     | Path   | Columns | Accuracy       | Acc. at High   | High-conf wrong | Null precision | Null recall |
+| ------- | ------ | ------- | -------------- | -------------- | --------------- | -------------- | ----------- |
+| samples | rules  | 25      | 100.0% (25/25) | 100.0% (22/22) | 0               | 100%           | 100%        |
+| samples | hybrid | 25      | 100.0% (25/25) | 100.0% (23/23) | 0               | 100%           | 100%        |
+| unseen  | rules  | 44      | 72.7% (32/44)  | 81.0% (17/21)  | 4               | 60.0%          | 100%        |
+| unseen  | hybrid | 44      | 81.8% (36/44)  | 90.5% (19/21)  | 2               | 65.2%          | 100%        |
 
 - On unseen headers the model lifts accuracy from 72.7% to 81.8% and halves High-confidence
   wrong answers (4 to 2). On the samples both paths are already perfect.

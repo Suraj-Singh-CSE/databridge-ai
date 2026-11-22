@@ -395,10 +395,10 @@ Only synthetic files are sent, after the gateway's masking. Dry run without a ke
 Latest live run (2026-11-22, `gemini-3.5-flash-lite`, synthetic data; details in ADR 0013):
 
 | Unseen headers (44 columns) | Rules only | Hybrid (rules + model) |
-|---|---|---|
-| Accuracy | 72.7% | 81.8% |
-| Accuracy at High confidence | 81.0% | 90.5% |
-| Wrong at High confidence | 4 | 2 |
+| --------------------------- | ---------- | ---------------------- |
+| Accuracy                    | 72.7%      | 81.8%                  |
+| Accuracy at High confidence | 81.0%      | 90.5%                  |
+| Wrong at High confidence    | 4          | 2                      |
 
 On the committed samples both paths score 100%. Privacy check passed: no raw email or phone in
 any of the 24 prompts.
