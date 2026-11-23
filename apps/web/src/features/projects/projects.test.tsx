@@ -199,11 +199,13 @@ describe('new project dialog', () => {
 });
 
 describe('project pages', () => {
-  it('render the shell, breadcrumb, stepper and the milestone placeholder', async () => {
+  it('render the shell, breadcrumb, stepper and the step page', async () => {
     const project = makeProject({ currentStep: 'mapping' });
     server.use(
       ...signedInHandlers(),
       http.get(`${API}/projects/:id`, () => ok({ project })),
+      http.get(`${API}/projects/:id/sql/versions`, () => ok({ items: [] })),
+      http.get(`${API}/projects/:id/exports`, () => ok({ items: [] })),
     );
     renderApp(`/projects/${project.id}/pipeline`);
 
@@ -213,7 +215,7 @@ describe('project pages', () => {
     const breadcrumb = screen.getByRole('navigation', { name: 'Breadcrumb' });
     expect(breadcrumb).toHaveTextContent('Projects/Customer 360 demo/Pipeline');
     expect(screen.getByRole('list', { name: 'Project steps' })).toBeInTheDocument();
-    expect(screen.getByText('Coming in milestone M5')).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'No SQL version yet' })).toBeInTheDocument();
     expect(document.title).toBe('Pipeline · Customer 360 demo · DataBridge AI');
 
     const nav = screen.getByRole('navigation', { name: 'Main' });

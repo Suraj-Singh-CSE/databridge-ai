@@ -43,3 +43,15 @@ export const canReviewMatches = canReviewMappings;
 
 export const STEWARD_MATCHING_NOTE =
   'You can approve, split and merge customers. Only the project owner, an admin or a data engineer can run the matching steps.';
+
+/** Draft, approve, reject and run SQL, and start exports: the same people who manage sources. */
+export const canManagePipeline = canManageSources;
+
+export const READ_ONLY_PIPELINE_NOTE =
+  'You can view the SQL and download exports. Only the project owner, an admin or a data engineer can draft, approve or run SQL and start exports.';
+
+/** Run the quality checks and change their thresholds. */
+export const canManageQuality = canManageSources;
+
+export const READ_ONLY_QUALITY_NOTE =
+  'You can view the quality reports. Only the project owner, an admin or a data engineer can run the checks or change the thresholds.';

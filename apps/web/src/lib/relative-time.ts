@@ -18,3 +18,14 @@ export function formatRelativeTime(iso: string, now: Date = new Date()): string 
   if (days < 30) return `${days} days ago`;
   return `on ${then.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}`;
 }
+
+/** Exact local date and time, for a `title` next to a relative time. */
+export function formatDateTime(iso: string): string {
+  return new Date(iso).toLocaleString('en-GB', {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}

@@ -546,3 +546,176 @@ export interface ClusterPage extends ClusterSummaryView {
 export interface ClusterDetail extends ClusterSummaryView {
   cluster: ClusterDetailView;
 }
+
+/* ---------- SQL pipeline (apps/api modules/sql, ADR 0021) ---------- */
+
+export type SqlStatus = 'draft' | 'approved' | 'rejected' | 'superseded';
+export type SqlMethod = 'llm' | 'reference';
+export type DataScope = 'approved' | 'all';
+
+export interface SqlValidation {
+  ok: boolean;
+  code: string | null;
+  message: string | null;
+}
+
+export interface SqlCheck {
+  /** columns, row_count, customer_id_unique, customer_id_known, golden_equality, runtime. */
+  name: string;
+  status: 'passed' | 'failed' | 'skipped';
+  message: string;
+  /** Counts, percentages and at most a few customer ids: never record values. */
+  details: Record<string, unknown>;
+}
+
+export interface SqlTestResults {
+  passed: boolean;
+  checks: SqlCheck[];
+  summary: {
+    passedCount: number;
+    checkCount: number;
+    rowCount: number;
+    expectedRowCount: number;
+    durationMs: number;
+  };
+}
+
+export interface SqlLastRun {
+  runId: string;
+  passed: boolean;
+  rowCount: number;
+  finishedAt: string;
+}
+
+/** A version as the list returns it: everything but the query text and the attempt log. */
+export interface SqlVersionSummary {
+  id: string;
+  projectId: string;
+  jobId: string;
+  version: number;
+  explanation: string;
+  assumptions: string[];
+  method: SqlMethod;
+  model: string | null;
+  promptVersion: string | null;
+  fallbackReason: string | null;
+  scope: DataScope;
+  instructions: string | null;
+  validation: SqlValidation;
+  error: { code: string; message: string } | null;
+  tests: SqlTestResults | null;
+  testsPassed: boolean;
+  usage: Record<string, number> | null;
+  status: SqlStatus;
+  createdBy: string | null;
+  createdAt: string;
+  clusteringRunId: string;
+  schemaVersion: number | null;
+  lastRun: SqlLastRun | null;
+  approvedBy: string | null;
+  approvedAt: string | null;
+  rejectedBy: string | null;
+  rejectedAt: string | null;
+  rejectReason: string | null;
+  supersededAt: string | null;
+}
+
+export interface SqlVersion extends SqlVersionSummary {
+  sql: string;
+  attempts: Record<string, unknown>[];
+}
+
+/* ---------- Exports (apps/api modules/exports, ADR 0020) ---------- */
+
+export type ExportFormat = 'csv' | 'xlsx';
+
+export interface ExportView {
+  id: string;
+  projectId: string;
+  jobId: string;
+  format: ExportFormat;
+  scope: DataScope;
+  includeSources: boolean;
+  rowCount: number;
+  bytes: number;
+  sha256: string;
+  clusteringRunId: string;
+  schemaVersion: number | null;
+  status: 'ready';
+  createdBy: string | null;
+  createdAt: string;
+  filename: string;
+}
+
+/* ---------- Data quality (apps/api modules/quality, ADR 0022) ---------- */
+
+export type QualityStatus = 'pass' | 'warn' | 'fail' | 'skipped';
+
+export interface QualityThreshold {
+  warn: number;
+  /** null: the rule never fails, it can only warn. */
+  fail: number | null;
+}
+
+export interface QualityResult {
+  rule: string;
+  label: string;
+  field: string | null;
+  status: QualityStatus;
+  metric: number | null;
+  unit: 'percent' | 'hours';
+  direction: 'min' | 'max';
+  threshold: QualityThreshold | null;
+  message: string;
+  /** Counts only, never values. */
+  counts: Record<string, number>;
+  /** At most 10 customer ids, never values. */
+  exampleIds: string[];
+}
+
+export interface QualitySource {
+  kind: 'sql_version' | 'golden_records';
+  label: string;
+  versionId: string | null;
+  version: number | null;
+  scope: DataScope;
+  sqlTestsPassed: boolean;
+  failedChecks: string[];
+}
+
+export interface QualityRunSummary {
+  id: string;
+  projectId: string;
+  jobId: string;
+  startedAt: string;
+  finishedAt: string;
+  source: QualitySource;
+  clusteringRunId: string;
+  schemaVersion: number | null;
+  rowCount: number;
+  /** The worst rule status (skipped rules do not count). */
+  status: Exclude<QualityStatus, 'skipped'>;
+  statusCounts: Record<QualityStatus, number>;
+  ruleCount: number;
+  createdBy: string | null;
+}
+
+export interface QualityRun extends QualityRunSummary {
+  results: QualityResult[];
+  /** The effective thresholds the run used (defaults plus overrides). */
+  config: Record<string, unknown>;
+}
+
+export interface QualityRuleOverride {
+  enabled?: boolean;
+  warn?: number;
+  fail?: number | null;
+}
+
+export interface QualityRulesView {
+  rules: Partial<Record<string, QualityRuleOverride>>;
+  fields: Record<string, { warn?: number; fail?: number | null }>;
+  updatedBy: string | null;
+  updatedAt: string | null;
+  catalogue: { rule: string; direction: 'min' | 'max'; max: number }[];
+}

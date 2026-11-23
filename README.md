@@ -625,7 +625,8 @@ React 18 + Vite + Tailwind with shadcn/ui components (`apps/web/src/components/u
 | `/projects/:id/profile`               | Column profile per file: types, empty %, patterns, flags     |
 | `/projects/:id/mapping`               | Mapping Review: run mapping, accept/reject/change per column |
 | `/projects/:id/matching`              | Match Review: run the matching steps, browse customers       |
-| `/projects/:id/{pipeline,quality}`    | Project steps (placeholders until M5)                        |
+| `/projects/:id/pipeline`              | Pipeline: current SQL, versions and tests, export downloads  |
+| `/projects/:id/quality`               | Data quality: latest report, history, thresholds in use      |
 | `/projects/:id/{dashboard,assistant}` | Dashboard and assistant (placeholders until M6)              |
 
 Every route except sign-in, create-account and the 404 page needs a session; others redirect to
@@ -683,6 +684,29 @@ Every route except sign-in, create-account and the 404 page needs a session; oth
   the dialog: Escape closes it and focus returns), waits for the rebuild, runs Approve all High,
   checks that no raw email is announced or in the page title, and runs an axe WCAG 2 A/AA scan
   with a customer open. Screenshot: `08-match-review.png`.
+
+**Pipeline and Data quality (M5.4a, view only)**
+
+- **Pipeline** shows the **Current SQL** (the approved version): who wrote it (AI and model, or
+  the reference query), when and by whom it was approved, its plain-language explanation and
+  assumptions, the query in a read-only, scrollable code block, and its tests on the sample with
+  Passed / Failed / Skipped pills (e.g. "Customer ID unique", "Matches golden records 100%") and
+  the last run. **Versions** lists every version (Draft / Approved / Rejected / Superseded, tests
+  x/y); **View** opens one with its failing checks and messages.
+- **Exports** lists the files (format, which customers, rows, size, created). **Download** fetches
+  the file with the bearer token (a plain link cannot send it), so the session refresh still
+  applies, then saves the Blob under the name from `Content-Disposition` (falling back to the
+  listed name). CSV files prefix phone numbers with `'` so spreadsheets do not read them as
+  formulas; the page says so.
+- **Data quality** shows the latest report (overall status, what was checked, rows, run time,
+  counts by status) and its rules grouped by kind (Completeness, Validity, Uniqueness,
+  Consistency, Freshness, Volume) with metric, thresholds in words, a status pill and example
+  customer ids (ids only) behind a button. **History** lists past runs with counts and a small
+  trend bar; **Thresholds in use** shows the values the latest report used and which ones the
+  project changed.
+- The api records user ids only, so "by" reads "you", "the project owner" or the member's role.
+  Every member can view and download; drafting, approving and running SQL, starting exports and
+  running quality checks come in M5.4b (members who cannot do them see a short note).
 
 **Run it in development** (Vite proxies `/api` to `http://localhost:4000`):
 
