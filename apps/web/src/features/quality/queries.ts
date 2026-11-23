@@ -1,7 +1,13 @@
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
 import { api } from '@/lib/api';
-import type { Page, QualityRulesView, QualityRun, QualityRunSummary } from '@/lib/api-types';
+import type {
+  Page,
+  QualityRuleOverride,
+  QualityRulesView,
+  QualityRun,
+  QualityRunSummary,
+} from '@/lib/api-types';
 
 const qualityPath = (projectId: string) => `/projects/${encodeURIComponent(projectId)}/quality`;
 
@@ -43,5 +49,25 @@ export function useQualityRules(projectId: string) {
       api<{ rules: QualityRulesView }>(`${qualityPath(projectId)}/rules`, { signal }).then(
         (data) => data.rules,
       ),
+  });
+}
+
+/** PUT .../quality/rules: replaces the project's overrides (apps/api quality.schemas.ts). */
+export interface QualityRulesInput {
+  rules: Record<string, QualityRuleOverride>;
+  fields: QualityRulesView['fields'];
+}
+
+export function useSaveQualityRules(projectId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: QualityRulesInput) =>
+      api<{ rules: QualityRulesView }>(`${qualityPath(projectId)}/rules`, {
+        method: 'PUT',
+        body: input,
+      }).then((data) => data.rules),
+    onSuccess: (rules) => {
+      queryClient.setQueryData(qualityKeys.rules(projectId), rules);
+    },
   });
 }

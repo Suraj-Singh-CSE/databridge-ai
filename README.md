@@ -625,8 +625,8 @@ React 18 + Vite + Tailwind with shadcn/ui components (`apps/web/src/components/u
 | `/projects/:id/profile`               | Column profile per file: types, empty %, patterns, flags     |
 | `/projects/:id/mapping`               | Mapping Review: run mapping, accept/reject/change per column |
 | `/projects/:id/matching`              | Match Review: run the matching steps, browse customers       |
-| `/projects/:id/pipeline`              | Pipeline: current SQL, versions and tests, export downloads  |
-| `/projects/:id/quality`               | Data quality: latest report, history, thresholds in use      |
+| `/projects/:id/pipeline`              | Pipeline: draft, approve and run SQL; start and get exports  |
+| `/projects/:id/quality`               | Data quality: run checks, report, history, edit thresholds   |
 | `/projects/:id/{dashboard,assistant}` | Dashboard and assistant (placeholders until M6)              |
 
 Every route except sign-in, create-account and the 404 page needs a session; others redirect to
@@ -705,8 +705,35 @@ Every route except sign-in, create-account and the 404 page needs a session; oth
   trend bar; **Thresholds in use** shows the values the latest report used and which ones the
   project changed.
 - The api records user ids only, so "by" reads "you", "the project owner" or the member's role.
-  Every member can view and download; drafting, approving and running SQL, starting exports and
-  running quality checks come in M5.4b (members who cannot do them see a short note).
+
+**Pipeline and Data quality actions (M5.4b)**
+
+- **Draft SQL** (owner, admin, data engineer) asks for the customers (approved or all) and optional
+  instructions (500 characters, with a counter and a reminder not to type customer details). It
+  starts a `sql_draft` job with live progress and Cancel; when it ends the new version opens with
+  its tests. Instructions the worker refuses as personal data (`INSTRUCTIONS_CONTAIN_PII`) are
+  explained in plain words.
+- An open **Draft** version has **Approve** (enabled only when every test passed, otherwise
+  disabled with "All tests must pass before approval"; the confirm says the current version becomes
+  Superseded) and **Reject** (optional reason). **Run SQL** on the current version starts `sql_run`
+  and reports the run (rows, passed or which checks failed); the version's last run refreshes.
+- **New export** (data stewards and up) picks CSV or Excel, approved customers only or all with their
+  review status, and optionally the source record keys; the `export` job's progress shows and the
+  file appears in the list. **Delete** (data engineers and up) asks first.
+- **Run quality checks** (data stewards and up) starts a `quality` job; the latest report and the
+  history refresh when it ends. **Edit thresholds** (data engineers and up) lists every rule with
+  an on/off box, warn and fail numbers labelled with their direction ("Warn below (%)", "Fail above
+  (hours)"), "Only warn, never fail" and **Reset to default**. Empty means the default. The same
+  checks as the api run before saving (0 to the rule's maximum, fail on the worse side of warn),
+  then `PUT .../quality/rules` stores only the changed rules (field overrides are kept); the api
+  audits the change.
+- Every job is followed over SSE (polling fallback) from the cached job list; the page reacts to
+  the final update by listening to the query cache, so it is not missed when the list is re-read
+  straight after. Buttons are disabled while a request is pending and stay focusable
+  (`aria-disabled`) while their job runs, so focus returns to them when a dialog closes. Results
+  and plain errors (403, 409 reasons such as `NOTHING_APPROVED`, `CLUSTERS_OUTDATED`,
+  `SQL_TESTS_FAILED`, `*_RUNNING`, network) are announced in `aria-live` regions. Only data
+  engineers and up see Cancel, as the api allows. Viewers and stewards see a short note.
 
 **Run it in development** (Vite proxies `/api` to `http://localhost:4000`):
 

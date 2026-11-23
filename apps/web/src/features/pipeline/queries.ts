@@ -1,7 +1,15 @@
-import { useMutation, useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
+import { sourceKeys, storeJob } from '@/features/sources/queries';
 import { api, downloadFile } from '@/lib/api';
-import type { ExportView, SqlVersion, SqlVersionSummary } from '@/lib/api-types';
+import type {
+  DataScope,
+  ExportFormat,
+  ExportView,
+  Job,
+  SqlVersion,
+  SqlVersionSummary,
+} from '@/lib/api-types';
 
 const projectPath = (projectId: string) => `/projects/${encodeURIComponent(projectId)}`;
 
@@ -76,6 +84,86 @@ export function useDownloadExport(projectId: string) {
       const filename = file.filename ?? item.filename;
       saveBlob(file.blob, filename);
       return filename;
+    },
+  });
+}
+
+/* ---------- Actions: jobs, SQL decisions, export deletion ---------- */
+
+/** The jobs started from the Pipeline and Data quality pages, with their payloads. */
+export type PipelineJobRequest =
+  | { type: 'sql_draft'; payload: { scope: DataScope; instructions?: string } }
+  | { type: 'sql_run'; payload: { versionId: string } }
+  | { type: 'export'; payload: { format: ExportFormat; scope: DataScope; includeSources: boolean } }
+  | { type: 'quality'; payload: Record<string, never> };
+
+export type PipelineJobType = PipelineJobRequest['type'];
+
+/** Starts a job; it goes into the cached job list so its progress shows straight away. */
+export function useStartPipelineJob(projectId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (request: PipelineJobRequest) =>
+      api<{ job: Job }>(`${projectPath(projectId)}/jobs`, { method: 'POST', body: request }).then(
+        (data) => data.job,
+      ),
+    onSuccess: (job) => {
+      storeJob(queryClient, job);
+    },
+    // A 409 may mean the job is already running: fetch it so its progress shows.
+    onError: () => queryClient.invalidateQueries({ queryKey: sourceKeys.jobs(projectId) }),
+  });
+}
+
+/** The newest job of `type` (the list is newest first). */
+export function latestJobOf(jobs: Job[] | undefined, type: PipelineJobType): Job | null {
+  return jobs?.find((job) => job.type === type) ?? null;
+}
+
+const versionPath = (projectId: string, versionId: string) =>
+  `${projectPath(projectId)}/sql/versions/${encodeURIComponent(versionId)}`;
+
+/** Approve or reject; every SQL view is re-read since approving supersedes the previous one. */
+function useSqlDecision<Input>(projectId: string, request: (input: Input) => Promise<SqlVersion>) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: request,
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: pipelineKeys.all(projectId) }),
+  });
+}
+
+export function useApproveSql(projectId: string) {
+  return useSqlDecision(projectId, (versionId: string) =>
+    api<{ version: SqlVersion }>(`${versionPath(projectId, versionId)}/approve`, {
+      method: 'POST',
+      body: {},
+    }).then((data) => data.version),
+  );
+}
+
+export function useRejectSql(projectId: string) {
+  return useSqlDecision(
+    projectId,
+    ({ versionId, reason }: { versionId: string; reason: string | undefined }) =>
+      api<{ version: SqlVersion }>(`${versionPath(projectId, versionId)}/reject`, {
+        method: 'POST',
+        body: reason ? { reason } : {},
+      }).then((data) => data.version),
+  );
+}
+
+export function useDeleteExport(projectId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (item: ExportView) =>
+      api<{ deleted: true }>(`${projectPath(projectId)}/exports/${encodeURIComponent(item.id)}`, {
+        method: 'DELETE',
+      }),
+    onSuccess: (_data, item) => {
+      queryClient.setQueryData<ExportView[]>(pipelineKeys.exports(projectId), (items) =>
+        items?.filter((other) => other.id !== item.id),
+      );
+      return queryClient.invalidateQueries({ queryKey: pipelineKeys.exports(projectId) });
     },
   });
 }

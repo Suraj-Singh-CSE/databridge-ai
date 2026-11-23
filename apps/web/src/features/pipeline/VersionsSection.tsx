@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 
 import { LoadFailed } from '@/components/LoadFailed';
 import { StatusPill } from '@/components/StatusPill';
@@ -9,23 +9,36 @@ import type { SqlVersionSummary } from '@/lib/api-types';
 
 import { SQL_STATUS, testsText } from './pipeline-labels';
 import { useSqlVersion } from './queries';
+import { DecisionActions } from './SqlActions';
 import { VersionDetails } from './VersionDetails';
 
 interface VersionsSectionProps {
   projectId: string;
   versions: SqlVersionSummary[];
   personOf: (userId: string | null) => string;
+  /** The open version (lifted so a new draft can open itself). */
+  selectedId: string | null;
+  onSelect: (versionId: string | null) => void;
+  canDecide: boolean;
+}
+
+interface SelectedVersionProps {
+  projectId: string;
+  versionId: string;
+  personOf: (userId: string | null) => string;
+  approved: SqlVersionSummary | null;
+  canDecide: boolean;
+  onResult: (text: string, ok: boolean) => void;
 }
 
 function SelectedVersion({
   projectId,
   versionId,
   personOf,
-}: {
-  projectId: string;
-  versionId: string;
-  personOf: (userId: string | null) => string;
-}) {
+  approved,
+  canDecide,
+  onResult,
+}: SelectedVersionProps) {
   const version = useSqlVersion(projectId, versionId);
   if (version.isPending) {
     return <Skeleton className="h-64 w-full" aria-label="Loading version details" />;
@@ -39,13 +52,34 @@ function SelectedVersion({
       />
     );
   }
-  return <VersionDetails version={version.data} personOf={personOf} />;
+  return (
+    <div className="space-y-4">
+      {canDecide && version.data.status === 'draft' && (
+        <DecisionActions
+          projectId={projectId}
+          version={version.data}
+          approved={approved}
+          onResult={onResult}
+        />
+      )}
+      <VersionDetails version={version.data} personOf={personOf} />
+    </div>
+  );
 }
 
 /** Every SQL version with its status and tests; one can be opened to see its details. */
-export function VersionsSection({ projectId, versions, personOf }: VersionsSectionProps) {
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+export function VersionsSection({
+  projectId,
+  versions,
+  personOf,
+  selectedId,
+  onSelect,
+  canDecide,
+}: VersionsSectionProps) {
   const selected = versions.find((v) => v.id === selectedId) ?? null;
+  const approved = versions.find((v) => v.status === 'approved') ?? null;
+  const [message, setMessage] = useState<string | null>(null);
+  const detailsHeading = useRef<HTMLHeadingElement>(null);
 
   return (
     <section aria-labelledby="sql-versions" className="space-y-4 rounded-xl border px-5 py-4">
@@ -88,7 +122,8 @@ export function VersionsSection({ projectId, versions, personOf }: VersionsSecti
                       aria-label={`${open ? 'Hide' : 'View'} version ${version.version}`}
                       aria-controls="sql-version-details"
                       onClick={() => {
-                        setSelectedId(open ? null : version.id);
+                        setMessage(null);
+                        onSelect(open ? null : version.id);
                       }}
                     >
                       {open ? 'Hide' : 'View'}
@@ -106,11 +141,27 @@ export function VersionsSection({ projectId, versions, personOf }: VersionsSecti
             aria-label={`Version ${selected.version} details`}
             className="space-y-3 rounded-lg border px-4 py-3"
           >
-            <h3 className="text-sm font-semibold">Version {selected.version}</h3>
-            <SelectedVersion projectId={projectId} versionId={selected.id} personOf={personOf} />
+            <h3 ref={detailsHeading} tabIndex={-1} className="text-sm font-semibold outline-none">
+              Version {selected.version}
+            </h3>
+            <SelectedVersion
+              projectId={projectId}
+              versionId={selected.id}
+              personOf={personOf}
+              approved={approved}
+              canDecide={canDecide}
+              onResult={(text, ok) => {
+                setMessage(text);
+                // The decision buttons go away once decided: keep focus on these details.
+                if (ok) detailsHeading.current?.focus();
+              }}
+            />
           </section>
         )}
       </div>
+      <p role="status" aria-live="polite" className="text-sm">
+        {message}
+      </p>
     </section>
   );
 }

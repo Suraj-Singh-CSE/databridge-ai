@@ -1,6 +1,13 @@
 import type { StatusTone } from '@/components/StatusPill';
 import { ApiError } from '@/lib/api';
-import type { DataScope, SqlCheck, SqlMethod, SqlStatus, SqlVersionSummary } from '@/lib/api-types';
+import type {
+  DataScope,
+  Job,
+  SqlCheck,
+  SqlMethod,
+  SqlStatus,
+  SqlVersionSummary,
+} from '@/lib/api-types';
 
 export const SQL_STATUS: Record<SqlStatus, { label: string; tone: StatusTone }> = {
   draft: { label: 'Draft', tone: 'review' },
@@ -45,9 +52,14 @@ function lowestEqualPercent(check: SqlCheck): number | null {
   return percents.length ? Math.min(...percents) : null;
 }
 
+/** A check's name in plain words, e.g. "Row count" for `row_count`. */
+export function checkName(name: string): string {
+  return CHECK_NAMES[name] ?? name.replaceAll('_', ' ');
+}
+
 /** A check's name in plain words, e.g. "Matches golden records 100%". */
 export function checkLabel(check: SqlCheck): string {
-  const name = CHECK_NAMES[check.name] ?? check.name.replaceAll('_', ' ');
+  const name = checkName(check.name);
   if (check.name !== 'golden_equality') return name;
   const percent = lowestEqualPercent(check);
   return percent === null ? name : `${name} ${percent.toLocaleString('en-US')}%`;
@@ -75,4 +87,41 @@ export function downloadErrorMessage(error: unknown): string {
     return 'You do not have permission to download exports in this project.';
   if (error.status === 404) return 'This export file is no longer available. Refresh the list.';
   return error.message;
+}
+
+/** Mirrors the `sql_draft` payload limit of apps/api job.schemas.ts. */
+export const INSTRUCTIONS_MAX_LENGTH = 500;
+
+function reasonOf(details: unknown): string | null {
+  if (typeof details !== 'object' || details === null || !('reason' in details)) return null;
+  return typeof details.reason === 'string' ? details.reason : null;
+}
+
+/** Better words than the api's for some 409 reasons; the others use the api's message. */
+const REASON_TEXT: Record<string, string> = {
+  CLUSTERS_NOT_RUN: 'There are no customers yet. Group the records on the Match review step first.',
+  SQL_TESTS_FAILED: 'All tests must pass before approval.',
+  SQL_VERSION_NOT_DRAFT: 'This version was already decided. Refresh to see its status.',
+  SQL_VERSION_DECIDED: 'This version was already decided. Refresh to see its status.',
+};
+
+/** Plain-language text for a failed action (start a job, approve, reject, delete, save). */
+export function actionErrorText(error: unknown): string {
+  if (!(error instanceof ApiError)) return 'Something went wrong. Please try again.';
+  if (error.status === 0)
+    return 'We could not reach the server. Check your connection and try again.';
+  if (error.status === 403) return 'You do not have permission to do this in this project.';
+  const reason = reasonOf(error.details);
+  const known = reason ? REASON_TEXT[reason] : undefined;
+  if (error.status === 409 && known) return known;
+  // NOTHING_APPROVED, CLUSTERS_OUTDATED and *_RUNNING come with a plain message from the api.
+  return error.message;
+}
+
+/** Why a job failed, in plain words. */
+export function jobFailureText(job: Job): string {
+  if (job.error?.code === 'INSTRUCTIONS_CONTAIN_PII') {
+    return "The instructions look like they contain customer details (an email, phone number or ID), so they were not sent to the AI. Describe the rule instead, e.g. 'prefer CRM for phone'.";
+  }
+  return job.error?.message ?? (job.message || 'The job failed.');
 }

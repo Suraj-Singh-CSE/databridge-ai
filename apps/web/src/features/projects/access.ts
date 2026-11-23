@@ -44,14 +44,26 @@ export const canReviewMatches = canReviewMappings;
 export const STEWARD_MATCHING_NOTE =
   'You can approve, split and merge customers. Only the project owner, an admin or a data engineer can run the matching steps.';
 
-/** Draft, approve, reject and run SQL, and start exports: the same people who manage sources. */
+/** Draft, approve, reject and run SQL, and delete exports: the same people who manage sources. */
 export const canManagePipeline = canManageSources;
 
-export const READ_ONLY_PIPELINE_NOTE =
-  'You can view the SQL and download exports. Only the project owner, an admin or a data engineer can draft, approve or run SQL and start exports.';
+/** Start an export (ADR 0020): those who review customers, so data stewards too. */
+export const canStartExport = canReviewMappings;
 
-/** Run the quality checks and change their thresholds. */
+export const READ_ONLY_PIPELINE_NOTE =
+  'You can view the SQL and download exports. Only the project owner, an admin or a data engineer can draft, approve or run SQL; data stewards can also start exports.';
+
+export const STEWARD_PIPELINE_NOTE =
+  'You can view the SQL, and start and download exports. Only the project owner, an admin or a data engineer can draft, approve or run SQL, or delete exports.';
+
+/** Run the quality checks (ADR 0022): data stewards and up. */
+export const canRunQuality = canReviewMappings;
+
+/** Change the quality thresholds: the same people who manage sources. */
 export const canManageQuality = canManageSources;
 
 export const READ_ONLY_QUALITY_NOTE =
-  'You can view the quality reports. Only the project owner, an admin or a data engineer can run the checks or change the thresholds.';
+  'You can view the quality reports. Only the project owner, an admin, a data engineer or a data steward can run the checks, and only a data engineer, the owner or an admin can change the thresholds.';
+
+export const STEWARD_QUALITY_NOTE =
+  'You can view the quality reports and run the checks. Only the project owner, an admin or a data engineer can change the thresholds.';

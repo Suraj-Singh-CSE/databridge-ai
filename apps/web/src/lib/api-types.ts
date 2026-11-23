@@ -132,7 +132,8 @@ export type JobType =
   | 'clustering'
   | 'export'
   | 'sql_draft'
-  | 'sql_run';
+  | 'sql_run'
+  | 'quality';
 export type JobStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled';
 
 export interface JobError {
