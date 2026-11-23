@@ -22,6 +22,10 @@ ENV PATH="/opt/venv/bin:$PATH" \
 RUN groupadd --system --gid 10001 app \
     && useradd --system --uid 10001 --gid app --no-create-home --shell /usr/sbin/nologin app
 COPY --from=build /opt/venv /opt/venv
+# The project documentation indexed for the assistant (ADR 0024), in the repository's layout.
+COPY README.md /app/knowledge-docs/README.md
+COPY docs/adr /app/knowledge-docs/docs/adr
+ENV KNOWLEDGE_DOCS_DIR=/app/knowledge-docs
 WORKDIR /app
 USER app
 EXPOSE 8000

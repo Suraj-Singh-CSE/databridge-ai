@@ -644,6 +644,42 @@ is reachable, and the Redis job event tests when `TEST_REDIS_URL` (default
 `CI=true`, they never skip).
 `npm run test:coverage -w apps/api` prints coverage and enforces 80% of lines.
 
+**Knowledge index** (for the project assistant; retrieval only). A `knowledge_index` job turns
+what the project stores into short plain-language chunks with **no record values**: one per
+multi-record customer (why its records were merged, which rule and source row chose each golden
+field), per person's decision in the audit log, per mapped column, per quality rule of the latest
+check (plus recent check overviews), per SQL version, and per README / ADR section. A privacy
+guard drops any data chunk holding a staged personal value or a PII pattern (docs examples are
+masked instead). Chunks are embedded through the LLM gateway (task `embedding`; Mock vectors by
+default, `GEMINI_EMBEDDING_MODEL` with `LLM_PROVIDER=gemini`), only when new or changed, and
+searched with BM25 plus vector similarity fused by reciprocal rank (keyword-only when embeddings
+are unavailable). Design notes: [ADR 0024](docs/adr/0024-knowledge-index.md).
+
+```bash
+curl -s -X POST http://localhost:8080/api/v1/projects/$PROJECT/jobs \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"type":"knowledge_index","payload":{}}'
+curl -s http://localhost:8080/api/v1/projects/$PROJECT/knowledge/summary \
+  -H "Authorization: Bearer $TOKEN" | jq '.data.summary | {chunksByKind, droppedByPrivacyGuard, mode}'
+```
+
+| Method | Path                                              | Who                         | Answer                                            |
+| ------ | ------------------------------------------------- | --------------------------- | ------------------------------------------------- |
+| POST   | `/projects/:projectId/jobs` (`knowledge_index`)   | owner, admin, data_engineer | 202 `{ job }`; `409 KNOWLEDGE_INDEX_RUNNING`      |
+| GET    | `/projects/:projectId/knowledge/summary`          | members                     | 200 `{ summary }` (`null` before the first index) |
+| POST   | `/internal/v1/knowledge/search` (ai-service only) | service token               | 200 ranked chunks, `mode` `hybrid` or `keyword`   |
+
+- **Summary**: `chunkCount`, `chunksByKind` (`customer`, `decision`, `mapping`, `quality`, `sql`,
+  `docs`), `droppedByPrivacyGuard`, `maskedDocs`, `mode`, `embeddingModel`, `embedded` / `reused`
+  (vectors kept for unchanged chunks), `embeddingError` (e.g. a quota code; the index is then
+  keyword-only until the next run), `finishedAt`.
+- **Search** (internal; the public route comes with the assistant's answers): `{ projectId, query
+(1-500 chars), k (1-20, default 5), filters: { kinds, refs: { customerId, sourceId, column,
+ruleId, sqlVersionId, adr } } }`. The query is masked before it is searched or embedded.
+- **Settings**: `GEMINI_EMBEDDING_MODEL` (`gemini-embedding-001`), `EMBEDDING_DIMENSIONS` (768),
+  `EMBEDDING_BATCH_SIZE` (32), `KNOWLEDGE_EMBEDDINGS_ENABLED`, `KNOWLEDGE_QUALITY_RUNS` (5),
+  `KNOWLEDGE_DOCS_DIR` (the Docker image ships the README and ADRs in `/app/knowledge-docs`).
+
 ## Web app
 
 React 18 + Vite + Tailwind with shadcn/ui components (`apps/web/src/components/ui`), React Router
@@ -996,6 +1032,27 @@ city-PIN consistency pass; completeness is what the sources hold (PIN code and a
 birth date 78.7%, against 100% in the answer key), so the report flags those fields, which is the
 point. CI holds these floors (`eval/tests/test_evaluate_quality.py`).
 
+### Knowledge retrieval
+
+`python -m dbeval.evaluate_retrieval` builds the seed 42 samples' project with the pure pipeline
+(mapping suggestions, clusters and golden records, the reference SQL, a quality run, a
+hand-written audit trail, the README and ADRs), indexes it with the Mock embedder and searches 23
+hand-written questions with known answers ("Why did PIN completeness fail?", "Who approved the
+SQL?", "How are duplicates found?", ...):
+
+| Mode    | Recall@1 | Recall@3 | Recall@5 |  MRR |
+| ------- | -------: | -------: | -------: | ---: |
+| keyword |     0.78 |     0.87 |     0.96 | 0.85 |
+| hybrid  |     0.52 |     0.78 |     0.83 | 0.63 |
+
+On 406 chunks (customer 67, decision 7, mapping 25, quality 20, sql 1, docs 286).
+
+The privacy guard drops nothing on the samples and the finished index holds no staged personal
+value. The Mock embedder hashes words, so it adds noise rather than meaning and hybrid scores
+below keyword-only here; the live-eval workflow's `task=embedding_retrieval` measures real
+Gemini embeddings on the same synthetic index (same metrics, tokens and latency). CI holds floors
+a little below these numbers (`eval/tests/test_evaluate_retrieval.py`).
+
 ## CI
 
 GitHub Actions (`.github/workflows/ci.yml`) runs on every pull request and on pushes to `main`:
@@ -1006,8 +1063,8 @@ GitHub Actions (`.github/workflows/ci.yml`) runs on every pull request and on pu
   including a real in-process Celery worker against Redis and MongoDB service containers.
 - **eval**: the same checks for the ground-truth data generator in `eval/` ([eval/README](eval/README.md)).
 
-The **Live eval** workflow (`.github/workflows/live-eval.yml`, task `mapping`, `pair_review` or
-`sql_agent`) is
+The **Live eval** workflow (`.github/workflows/live-eval.yml`, task `mapping`, `pair_review`,
+`sql_agent` or `embedding_retrieval`) is
 separate: manual only, never on push or pull request (see "Evaluating mapping accuracy").
 
 - **docker**: builds every image, starts the full stack with throwaway secrets, and smoke-tests the
@@ -1020,7 +1077,8 @@ separate: manual only, never on push or pull request (see "Evaluating mapping ac
   maybe pairs (or its `NO_MAYBE_PAIRS` refusal when there are none), clusters, review decisions,
   exports, the SQL agent (draft with all tests passing, approve, run), data quality checks (a
   report whose `latest` matches, `customer_id_unique` passing, a changed threshold applied on the
-  next run), that the AI service is not
+  next run), the project dashboard, the knowledge index (every chunk kind, nothing dropped by the
+  privacy guard, an internal search from the api container), that the AI service is not
   reachable from the host, and that containers run as non-root. Then it runs the Playwright e2e
   tests against the stack and uploads screenshots (`web-screenshots`) and, on failure, the
   Playwright report (`playwright-report`).

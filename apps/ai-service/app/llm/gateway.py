@@ -1,23 +1,36 @@
-"""The LLM gateway: mask -> cache -> call with retries and timeout -> validate -> log cost."""
+"""The LLM gateway: mask -> cache -> call with retries and timeout -> validate -> log cost.
+
+Embeddings go through it too (``embed``): mask -> batch -> paced call with retries -> log cost
+under task ``embedding``. Embeddings are not cached here; the knowledge index keeps vectors with a
+content hash and only embeds changed text (ADR 0024)."""
 
 import asyncio
 import hashlib
 import json
 import random
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
+from functools import partial
 from typing import Protocol
 
 import structlog
 from pydantic import BaseModel, ValidationError
 
 from app.config import Settings
-from app.llm.base import LLMProvider, LLMRequest, LLMResponse, Message
+from app.llm.base import (
+    EmbeddingKind,
+    EmbeddingResponse,
+    LLMProvider,
+    LLMRequest,
+    LLMResponse,
+    Message,
+)
 from app.llm.cache import LLMCache
 from app.llm.cost import CostLogger, LLMCallRecord, cost_inr
 from app.llm.errors import (
     LLMBadRequestError,
+    LLMConfigError,
     LLMError,
     LLMRateLimitError,
     LLMResponseError,
@@ -27,6 +40,9 @@ from app.llm.errors import (
 from app.llm.pacing import RequestLimiter, SlidingWindowLimiter
 
 logger = structlog.get_logger("app.llm.gateway")
+
+EMBEDDING_TASK = "embedding"
+EMBEDDING_VERSION = "embed-v1"
 
 REPAIR_PROMPT = (
     "Your previous reply did not match the required JSON schema. Problems: {problems}. "
@@ -159,6 +175,73 @@ class LLMGateway:
         )
         return final
 
+    async def embed(
+        self,
+        texts: Sequence[str],
+        *,
+        kind: EmbeddingKind = "document",
+        project_id: str | None = None,
+    ) -> EmbeddingResponse:
+        """Embed ``texts`` (masked first) in batches of ``EMBEDDING_BATCH_SIZE``; one vector per
+        text, in order. One ``embedding`` call record for the whole request. Raises an
+        ``LLMError`` subclass on failure (after it is logged)."""
+        started = self._clock()
+        stats = _CallStats()
+        model = self.provider.embedding_model or self.provider.model
+        masked = [self._masker.mask_text(text) for text in texts]
+        size = self._settings.embedding_batch_size
+        vectors: list[list[float]] = []
+        prompt_version = f"{EMBEDDING_VERSION}-{kind}"
+        try:
+            if self.provider.embedding_model is None:
+                raise LLMConfigError(f"The {self.provider.name} provider has no embedding model.")
+            for start in range(0, len(masked), size):
+                batch = masked[start : start + size]
+                response = await self._retrying(
+                    EMBEDDING_TASK,
+                    partial(self.provider.embed, batch, kind=kind),
+                    stats,
+                )
+                if len(response.vectors) != len(batch):
+                    raise LLMResponseError(
+                        f"{len(response.vectors)} embeddings for {len(batch)} texts",
+                        status="BAD_EMBEDDINGS",
+                    )
+                stats.input_tokens += response.input_tokens
+                vectors.extend(response.vectors)
+        except LLMError as error:
+            await self._log(
+                EMBEDDING_TASK,
+                prompt_version,
+                stats,
+                started,
+                project_id,
+                model=model,
+                cost=self._cost(model, stats) if stats.attempts else 0.0,
+                cache_hit=False,
+                error=error,
+            )
+            raise
+        cost = self._cost(model, stats) if stats.attempts else 0.0
+        await self._log(
+            EMBEDDING_TASK,
+            prompt_version,
+            stats,
+            started,
+            project_id,
+            model=model,
+            cost=cost,
+            cache_hit=False,
+            error=None,
+        )
+        return EmbeddingResponse(
+            vectors=vectors,
+            model=model,
+            input_tokens=stats.input_tokens,
+            cost_inr=cost,
+            latency_ms=self._elapsed_ms(started),
+        )
+
     # ---- cache
 
     async def _from_cache(self, key: str, masked: LLMRequest) -> LLMResponse | None:
@@ -257,13 +340,24 @@ class LLMGateway:
         )
 
     async def _call_with_retry(self, request: LLMRequest, stats: _CallStats) -> LLMResponse:
+        response = await self._retrying(
+            request.task, lambda: self.provider.complete(request), stats
+        )
+        stats.input_tokens += response.input_tokens
+        stats.output_tokens += response.output_tokens
+        return response
+
+    async def _retrying[T](
+        self, task: str, call: Callable[[], Awaitable[T]], stats: _CallStats
+    ) -> T:
+        """Paced attempts of ``call`` with a timeout each; retryable errors back off."""
         max_attempts = self._settings.llm_max_attempts
         for attempt in range(1, max_attempts + 1):
-            await self._pace(request)
+            await self._pace(task)
             stats.attempts += 1
             try:
                 async with asyncio.timeout(self._settings.llm_timeout_seconds):
-                    response = await self.provider.complete(request)
+                    return await call()
             except TimeoutError:
                 error: LLMRetryableError = LLMTimeoutError(
                     f"LLM call timed out after {self._settings.llm_timeout_seconds}s",
@@ -271,16 +365,12 @@ class LLMGateway:
                 )
             except LLMRetryableError as retryable:
                 error = retryable
-            else:
-                stats.input_tokens += response.input_tokens
-                stats.output_tokens += response.output_tokens
-                return response
             if attempt == max_attempts:
                 raise error
             delay = self._backoff(attempt, error)
             logger.warning(
                 "llm_retry",
-                task=request.task,
+                task=task,
                 attempt=attempt,
                 error_type=type(error).__name__,
                 error_code=error.code,
@@ -291,10 +381,10 @@ class LLMGateway:
             await self._sleep(delay)
         raise AssertionError("unreachable")  # pragma: no cover - the loop returns or raises
 
-    async def _pace(self, request: LLMRequest) -> None:
+    async def _pace(self, task: str) -> None:
         waited = await self._limiter.acquire()
         if waited > 0:
-            logger.info("llm_paced", task=request.task, wait_ms=round(waited * 1000))
+            logger.info("llm_paced", task=task, wait_ms=round(waited * 1000))
 
     def _backoff(self, attempt: int, error: LLMRetryableError) -> float:
         """Exponential backoff (base * multiplier^(attempt-1)) with +/-20% jitter, capped at
@@ -340,12 +430,37 @@ class LLMGateway:
         cache_hit: bool,
         error: LLMError | None,
     ) -> None:
+        await self._log(
+            masked.task,
+            masked.prompt_version,
+            stats,
+            started,
+            project_id,
+            model=model,
+            cost=cost,
+            cache_hit=cache_hit,
+            error=error,
+        )
+
+    async def _log(
+        self,
+        task: str,
+        prompt_version: str,
+        stats: _CallStats,
+        started: float,
+        project_id: str | None,
+        *,
+        model: str,
+        cost: float,
+        cache_hit: bool,
+        error: LLMError | None,
+    ) -> None:
         request_id = structlog.contextvars.get_contextvars().get("requestId")
         record = LLMCallRecord(
-            task=masked.task,
+            task=task,
             provider=self.provider.name,
             model=model,
-            prompt_version=masked.prompt_version,
+            prompt_version=prompt_version,
             input_tokens=stats.input_tokens,
             output_tokens=stats.output_tokens,
             cost_inr=cost,

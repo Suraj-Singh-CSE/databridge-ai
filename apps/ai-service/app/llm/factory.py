@@ -38,6 +38,8 @@ def build_provider(settings: Settings) -> LLMProvider:
         api_key=api_key,
         timeout_seconds=settings.llm_timeout_seconds,
         thinking_level=settings.gemini_thinking_level or None,
+        embedding_model=settings.gemini_embedding_model,
+        embedding_dimensions=settings.embedding_dimensions,
     )
 
 

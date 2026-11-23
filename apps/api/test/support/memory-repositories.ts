@@ -16,6 +16,10 @@ import type {
   LlmErrorCount,
   LlmTaskTotals,
 } from '../../src/modules/dashboard/dashboard.types.js';
+import type {
+  KnowledgeRepository,
+  KnowledgeSummary,
+} from '../../src/modules/knowledge/knowledge.types.js';
 import type { Job, JobRepository, JobType } from '../../src/modules/jobs/job.types.js';
 import type {
   MappingDecision,
@@ -130,6 +134,8 @@ export interface MemoryRepositories extends Repositories {
   quality: QualityRepository & { workerSave(run: QualityRun): void };
   /** `workerLlmCall`: what the ai-service LLM gateway appends to `llm_calls`. */
   dashboard: DashboardRepository & { workerLlmCall(call: LlmCall): void };
+  /** `workerSave`: what the `knowledge_index` job stores in `knowledge_summaries`. */
+  knowledge: KnowledgeRepository & { workerSave(summary: KnowledgeSummary): void };
 }
 
 /**
@@ -137,6 +143,7 @@ export interface MemoryRepositories extends Repositories {
  * Used to run the full API suite without a database; the same suite also runs against MongoDB.
  */
 export function createMemoryRepositories(): MemoryRepositories {
+  const knowledgeSummaries = new Map<string, KnowledgeSummary>();
   const users = new Map<string, User & { passwordHash: string }>();
   const tokens = new Map<string, RefreshTokenRecord>();
   const projects = new Map<string, Project>();
@@ -1145,6 +1152,16 @@ export function createMemoryRepositories(): MemoryRepositories {
       },
       workerLlmCall(call) {
         llmCalls.push(structuredClone(call));
+      },
+    },
+    knowledge: {
+      async findSummary(projectId) {
+        await Promise.resolve();
+        const found = knowledgeSummaries.get(projectId);
+        return found ? structuredClone(found) : null;
+      },
+      workerSave(summary) {
+        knowledgeSummaries.set(summary.projectId, structuredClone(summary));
       },
     },
   };

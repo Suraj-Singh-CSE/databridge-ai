@@ -12,6 +12,7 @@ export const JOB_TYPES = [
   'sql_draft',
   'sql_run',
   'quality',
+  'knowledge_index',
 ] as const;
 export type JobType = (typeof JOB_TYPES)[number];
 

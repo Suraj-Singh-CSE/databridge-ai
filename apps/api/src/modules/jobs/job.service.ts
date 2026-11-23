@@ -144,6 +144,9 @@ const QUALITY = {
     'There is no approved SQL version and no approved customer yet. Approve customers in Match Review or approve an SQL version first.',
 };
 
+const KNOWLEDGE_BUSY =
+  'The knowledge index is already being rebuilt. Wait for that job to finish, or cancel it first.';
+
 function pendingMessage(count: number): string {
   const noun = count === 1 ? 'column still needs' : 'columns still need';
   return `${count} ${noun} a decision. Accept, reject or change every column's mapping first.`;
@@ -492,6 +495,9 @@ export function createJobService({
       if (type === 'sql_draft') await checkSqlDraftJob(project, payload);
       if (type === 'sql_run') await checkSqlRunJob(project, payload);
       if (type === 'quality') await checkQualityJob(project);
+      if (type === 'knowledge_index' && (await isActive(project, 'knowledge_index'))) {
+        throw AppError.conflict(KNOWLEDGE_BUSY, { reason: 'KNOWLEDGE_INDEX_RUNNING' });
+      }
       const job = await repos.jobs.create({
         projectId: project.id,
         type,

@@ -751,6 +751,40 @@ jobs:
           test "$code" = 400
           echo "ok: dashboard counts match the clusters, quality and SQL endpoints"
 
+          # Knowledge index (ADR 0024): index the project (Mock embeddings), check the summary,
+          # then search it from the api container (the ai-service is internal). Only ids, counts,
+          # kinds and titles are printed, never chunk text.
+          job=$(curl -sS --fail-with-body -X POST "$api/projects/$project/jobs" -H "$auth" \
+            -H 'Content-Type: application/json' -d '{"type":"knowledge_index","payload":{}}' | jq -r '.data.job.id')
+          curl -sSN --fail --max-time 180 "$api/jobs/$job/events" -H "$auth" | sed -n 's/^data: //p' > "/tmp/knowledge-$job"
+          echo "knowledge_index job $job: $(jq -s -c 'last | {status, result}' "/tmp/knowledge-$job")"
+          jq -s -e 'last | .status == "succeeded"' "/tmp/knowledge-$job" > /dev/null
+          curl -sS --fail-with-body "$api/projects/$project/knowledge/summary" -H "$auth" > /tmp/knowledge-summary
+          jq -c '.data.summary | {chunkCount, chunksByKind, droppedByPrivacyGuard, maskedDocs, mode, embeddingModel, embedded, reused}' /tmp/knowledge-summary
+          multi=$(jq -r '.data.summary.multiRecordCount' /tmp/clusters-now)
+          jq -e --argjson multi "$multi" '.data.summary | .droppedByPrivacyGuard == 0
+            and .mode == "hybrid" and .embeddingModel == "mock-embedding" and .embeddingError == null
+            and .chunksByKind.customer == $multi and .chunksByKind.decision > 0
+            and .chunksByKind.mapping > 0 and .chunksByKind.quality > 0
+            and .chunksByKind.sql > 0 and .chunksByKind.docs > 0' /tmp/knowledge-summary > /dev/null
+          $COMPOSE exec -T api node -e '
+            const body = { projectId: process.argv[1], query: "Who approved the SQL?", k: 3 };
+            fetch("http://ai-service:8000/internal/v1/knowledge/search", {
+              method: "POST",
+              headers: { "Content-Type": "application/json", "X-Service-Token": process.env.AI_SERVICE_TOKEN },
+              body: JSON.stringify(body),
+            })
+              .then(async (r) => { if (!r.ok) throw new Error(`search answered ${r.status}`); console.log(JSON.stringify(await r.json())); })
+              .catch((e) => { console.error(e.message); process.exit(1); });' "$project" > /tmp/knowledge-search
+          jq -c '.data | {mode, chunkCount, queryMasked, results: [.results[] | {kind, title, keywordRank, vectorRank}]}' /tmp/knowledge-search
+          jq -e '.data.mode == "hybrid" and (.data.results | length) == 3
+            and (.data.results | any(.kind == "decision" and (.title | startswith("SQL decision"))))' \
+            /tmp/knowledge-search > /dev/null
+          code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$api/projects/$project/jobs" -H "$auth" \
+            -H 'Content-Type: application/json' -d '{"type":"knowledge_index","payload":{"full":true}}')
+          test "$code" = 400
+          echo "ok: knowledge index built with every kind, nothing dropped, internal search answers"
+
       - name: AI service is not published to the host
         run: |
           if curl -s --max-time 3 http://localhost:8000/internal/v1/health; then

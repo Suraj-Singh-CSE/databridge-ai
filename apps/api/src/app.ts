@@ -26,6 +26,7 @@ import { createClusterService } from './modules/clusters/cluster.service.js';
 import { createReviewService } from './modules/clusters/review.service.js';
 import { createDashboardRouter } from './modules/dashboard/dashboard.routes.js';
 import { createDashboardService } from './modules/dashboard/dashboard.service.js';
+import { createKnowledgeRouter } from './modules/knowledge/knowledge.routes.js';
 import { createExportRouter } from './modules/exports/export.routes.js';
 import { createExportService } from './modules/exports/export.service.js';
 import { createQualityRouter } from './modules/quality/quality.routes.js';
@@ -182,6 +183,10 @@ export function createApp({
   app.use(
     '/api/v1/projects/:projectId/dashboard',
     createDashboardRouter({ dashboardService, projects: repos.projects, tokens, logger }),
+  );
+  app.use(
+    '/api/v1/projects/:projectId/knowledge',
+    createKnowledgeRouter({ knowledge: repos.knowledge, projects: repos.projects, tokens }),
   );
   app.use(
     '/api/v1/projects/:projectId/target-schema',

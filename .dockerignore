@@ -31,6 +31,8 @@
 .git
 .github
 docs
+# ...except the ADRs, which the ai-service image indexes for the assistant (ADR 0024).
+!docs/adr
 eval
 **/*.log
 **/.DS_Store

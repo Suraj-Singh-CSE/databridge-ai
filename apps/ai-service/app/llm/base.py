@@ -5,6 +5,12 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.llm.errors import LLMConfigError
+
+# What a text is embedded for: a stored passage, or a search query (providers may encode the two
+# differently, e.g. Gemini's RETRIEVAL_DOCUMENT and RETRIEVAL_QUERY task types).
+EmbeddingKind = Literal["document", "query"]
+
 
 class Message(BaseModel):
     """One chat turn. ``assistant`` turns are earlier model replies (used for repair prompts)."""
@@ -47,15 +53,35 @@ class LLMResponse(BaseModel):
     cache_hit: bool = False
 
 
+class EmbeddingResponse(BaseModel):
+    """One vector per input text, in input order. The gateway fills ``cost_inr``."""
+
+    model_config = ConfigDict(frozen=True)
+
+    vectors: list[list[float]]
+    model: str
+    input_tokens: int = Field(ge=0)
+    cost_inr: float = Field(default=0.0, ge=0)
+    latency_ms: float = Field(ge=0)
+
+
 class LLMProvider(ABC):
     """A concrete model backend. Implementations must raise only ``app.llm.errors`` types."""
 
     name: str
     model: str
+    # None: the provider cannot embed text (``embed`` raises LLMConfigError).
+    embedding_model: str | None = None
+    # Length of the vectors ``embed`` returns, when the provider knows it.
+    embedding_dimensions: int | None = None
 
     @abstractmethod
     async def complete(self, request: LLMRequest) -> LLMResponse:
         """Send an (already masked) request to the model and return its raw answer."""
+
+    async def embed(self, texts: list[str], *, kind: EmbeddingKind) -> EmbeddingResponse:
+        """Embed (already masked) texts. Providers without an embedding model refuse."""
+        raise LLMConfigError(f"The {self.name} provider has no embedding model.")
 
 
 def approx_tokens(text: str) -> int:

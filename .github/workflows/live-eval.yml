@@ -12,15 +12,20 @@ on:
       task:
         description: What to evaluate
         type: choice
-        options: [mapping, pair_review, sql_agent]
+        options: [mapping, pair_review, sql_agent, embedding_retrieval]
         default: mapping
       model:
         description: Gemini model name
         type: string
         default: gemini-3.5-flash-lite
         required: true
+      embedding_model:
+        description: embedding_retrieval only - Gemini embedding model name
+        type: string
+        default: gemini-embedding-001
+        required: true
       max_calls:
-        description: Most provider calls this run may make, retries included (empty = 30 for mapping, 15 for pair_review, 12 for sql_agent)
+        description: Most provider calls this run may make, retries included (empty = 30 for mapping, 15 for pair_review, 12 for sql_agent, 20 for embedding_retrieval)
         type: string
         default: ''
         required: false
@@ -77,6 +82,7 @@ jobs:
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           MODEL: ${{ inputs.model }}
+          EMBEDDING_MODEL: ${{ inputs.embedding_model }}
           MAX_CALLS: ${{ inputs.max_calls }}
           THINKING_LEVEL: ${{ inputs.thinking_level }}
           TIMEOUT_SECONDS: ${{ inputs.timeout_seconds }}
@@ -98,8 +104,10 @@ jobs:
             "${budget[@]}" --thinking-level "$THINKING_LEVEL" \
             --timeout-seconds "$TIMEOUT_SECONDS" --columns-per-call "$COLUMNS_PER_CALL" \
             --pairs-per-call "$PAIRS_PER_CALL" --requests-per-minute "$REQUESTS_PER_MINUTE" \
+            --embedding-model "$EMBEDDING_MODEL" \
             --out "$RUNNER_TEMP/live-eval-report" || status=$?
-          for report in live_mapping_report.md live_pair_review_report.md live_sql_agent_report.md; do
+          for report in live_mapping_report.md live_pair_review_report.md live_sql_agent_report.md \
+            live_retrieval_report.md; do
             if [ -f "$RUNNER_TEMP/live-eval-report/$report" ]; then
               cat "$RUNNER_TEMP/live-eval-report/$report" >> "$GITHUB_STEP_SUMMARY"
             fi
