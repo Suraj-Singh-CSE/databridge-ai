@@ -359,11 +359,16 @@ describe('pipeline: exports', () => {
 
   it('downloads with the bearer token and saves under the name from Content-Disposition', async () => {
     let auth: string | null = null;
+    let release: () => void = () => undefined;
+    const answered = new Promise<void>((resolve) => {
+      release = resolve;
+    });
     setup();
     server.use(
       http.get(`${API}/projects/:id/exports/:exportId/download`, async ({ request }) => {
         auth = request.headers.get('Authorization');
-        await delay(20);
+        // Answers only once the test has seen the pending state.
+        await answered;
         return new HttpResponse("customer_id,phone\nC1,'+91\n", {
           headers: {
             'Content-Type': 'text/csv',
@@ -379,6 +384,7 @@ describe('pipeline: exports', () => {
     await user.click(button);
     expect(await screen.findByText('Downloading…')).toBeInTheDocument();
     expect(button).toBeDisabled();
+    release();
     expect(await screen.findByText('Downloaded from-header.csv.')).toBeInTheDocument();
     expect(auth).toBe('Bearer access-1');
     expect(createObjectURL).toHaveBeenCalledTimes(1);
