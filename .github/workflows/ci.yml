@@ -656,6 +656,42 @@ jobs:
           test "$code" = 400
           echo "ok: golden records exported to CSV and Excel, downloaded as attachments"
 
+          # SQL agent (ADR 0021): draft the customers query (Mock provider), check its tests,
+          # approve it, run it. Only codes and counts are printed, never values.
+          sql="$api/projects/$project/sql"
+          job=$(curl -sS --fail-with-body -X POST "$api/projects/$project/jobs" -H "$auth" \
+            -H 'Content-Type: application/json' -d '{"type":"sql_draft","payload":{"scope":"approved"}}' \
+            | jq -r '.data.job.id')
+          curl -sSN --fail --max-time 120 "$api/jobs/$job/events" -H "$auth" | sed -n 's/^data: //p' > "/tmp/sql-draft-$job"
+          echo "sql_draft job $job: $(jq -r '"\(.status) \(.progress)% \(.message)"' "/tmp/sql-draft-$job" | paste -sd ',' -)"
+          jq -s -e 'last | .status == "succeeded" and .result.testsPassed == true' "/tmp/sql-draft-$job" > /dev/null
+          version=$(jq -s -r 'last | .result.versionId' "/tmp/sql-draft-$job")
+          curl -sS --fail-with-body "$sql/versions/$version" -H "$auth" > /tmp/sql-version
+          jq -c '.data.version | {version, status, method, model, validation, tests: (.tests.checks | map({(.name): .status}) | add), rows: .tests.summary.rowCount}' /tmp/sql-version
+          jq -e '.data.version.status == "draft" and .data.version.testsPassed == true
+            and .data.version.validation.ok == true and all(.data.version.tests.checks[]; .status == "passed")' \
+            /tmp/sql-version > /dev/null
+          curl -sS --fail-with-body "$sql/versions" -H "$auth" | jq -e --arg v "$version" \
+            '.data.items | any(.id == $v) and all(.[]; has("sql") | not)' > /dev/null
+          curl -sS --fail-with-body -X POST "$sql/versions/$version/approve" -H "$auth" \
+            -H 'Content-Type: application/json' -d '{}' | jq -e '.data.version.status == "approved"' > /dev/null
+          job=$(curl -sS --fail-with-body -X POST "$api/projects/$project/jobs" -H "$auth" \
+            -H 'Content-Type: application/json' -d "{\"type\":\"sql_run\",\"payload\":{\"versionId\":\"$version\"}}" \
+            | jq -r '.data.job.id')
+          curl -sSN --fail --max-time 120 "$api/jobs/$job/events" -H "$auth" | sed -n 's/^data: //p' > "/tmp/sql-run-$job"
+          echo "sql_run job $job: $(jq -s -c 'last | {status, result: (.result | {passed, rowCount, failedChecks})}' "/tmp/sql-run-$job")"
+          jq -s -e 'last | .status == "succeeded" and .result.passed == true and .result.rowCount >= 1' "/tmp/sql-run-$job" > /dev/null
+          curl -sS --fail-with-body "$sql/versions/$version" -H "$auth" \
+            | jq -e '.data.version.lastRun.passed == true' > /dev/null
+          # A second approval of the same version is refused; a bad instruction never starts.
+          code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$sql/versions/$version/approve" -H "$auth" \
+            -H 'Content-Type: application/json' -d '{}')
+          test "$code" = 409
+          code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$api/projects/$project/jobs" -H "$auth" \
+            -H 'Content-Type: application/json' -d '{"type":"sql_draft","payload":{"scope":"maybe"}}')
+          test "$code" = 400
+          echo "ok: SQL drafted, all tests passed, approved and run against the current data"
+
       - name: AI service is not published to the host
         run: |
           if curl -s --max-time 3 http://localhost:8000/internal/v1/health; then
