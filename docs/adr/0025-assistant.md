@@ -34,7 +34,7 @@ instead of answering whenever it cannot ground the answer. The pipeline
    (the BM25 tokenizer: stop words removed, light stemming, refs' values included). A fused
    rank or cosine says nothing absolute about relevance (RRF scores depend only on ranks), but
    word coverage does: on the samples every answerable question reaches 0.67 or more and the
-   out-of-scope ones stay at 0.5 or below ("What is the CEO's salary?" 0.33). An empty index is
+   out-of-scope ones stay at 0.5 or below. An empty index is
    `409 KNOWLEDGE_NOT_BUILT`.
 4. **Prompt** `prompts/assistant_v1.txt` (`assistant.v1`, versioned like the other prompts):
    rules (answer only from the numbered sources, cite each factual sentence like `[1]`, the
@@ -88,13 +88,14 @@ conversations, users, questions, answered, refusals by reason, average latency, 
 
 `python -m dbeval.evaluate_assistant` builds the seed 42 samples' index (ADR 0024) and asks the
 23 retrieval questions (answerable, each with the chunks that answer it), 8 unanswerable ones
-(CEO's salary, weather, cricket, a capital, a translation, a stock price, and two naming a person
-who is not in the project) and 5 holding a personal value of the samples (an email, a phone, a
+(general knowledge, news, company finance, a translation, and two naming a person who is not
+in the project; their words are left out of this text on purpose, since the docs are indexed
+too) and 5 holding a personal value of the samples (an email, a phone, a
 full name, a lower-case full name, a PAN), with the Mock provider:
 
 | Mode    | Answer rate | Refusal (unanswerable) | PII refusal | Groundedness | Citation accuracy | Values in prompts / answers |
 | ------- | ----------: | ---------------------: | ----------: | -----------: | ----------------: | --------------------------: |
-| keyword |        1.00 |                   1.00 |        1.00 |         1.00 |              0.87 |                       0 / 0 |
+| keyword |        1.00 |                   1.00 |        1.00 |         1.00 |              0.83 |                       0 / 0 |
 | hybrid  |        1.00 |                   1.00 |        1.00 |         1.00 |              0.61 |                       0 / 0 |
 
 Groundedness is checked structurally: every answer has at least one valid citation and every
@@ -116,8 +117,8 @@ metrics plus tokens and latency.
 - An answer is either cited or the fixed sentence; a model that answers without citing loses the
   answer rather than showing an unsupported claim (a cost in answer rate, measured live).
 - The weak-retrieval check is lexical: a question phrased with words the index does not use may
-  be refused although an answer exists, and an off-topic question sharing many words ("How many
-  customers live on Mars?") reaches the model, which must then refuse by itself (rule 3).
+  be refused although an answer exists, and an off-topic question sharing many words with the index
+  reaches the model, which must then refuse by itself (rule 3).
 - Retrieval uses the question alone; a follow-up such as "and why?" retrieves poorly. History
   only helps the model read the question. Query rewriting is a follow-up if this matters.
 - The guard reads the project's staged values (cached 60 s per process); very large projects

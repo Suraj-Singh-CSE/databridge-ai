@@ -1098,7 +1098,7 @@ person who is not in the project) and 5 holding a personal value of the samples:
 
 | Mode    | Answer rate | Refusal (unanswerable) | PII refusal | Groundedness | Citation accuracy | Values in prompts / answers |
 | ------- | ----------: | ---------------------: | ----------: | -----------: | ----------------: | --------------------------: |
-| keyword |        1.00 |                   1.00 |        1.00 |         1.00 |              0.87 |                       0 / 0 |
+| keyword |        1.00 |                   1.00 |        1.00 |         1.00 |              0.83 |                       0 / 0 |
 | hybrid  |        1.00 |                   1.00 |        1.00 |         1.00 |              0.61 |                       0 / 0 |
 
 The Mock model cites the first two retrieved chunks, so citation accuracy follows retrieval; the

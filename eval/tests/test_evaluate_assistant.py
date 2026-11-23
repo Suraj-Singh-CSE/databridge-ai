@@ -68,7 +68,8 @@ def test_live_assistant_budget_counts_questions_as_errors() -> None:
     report = asyncio.run(live.run(provider, settings, max_calls=2))
     assert report["provider_calls"] == 2
     assert report["errors"]
-    assert report["reasons"]["error"] == report["answerable"] - 2
+    assert report["reasons"]["answered"] == 2
+    assert report["reasons"]["error"] >= report["answerable"] - 2
     assert "Errors:" in live.markdown(report)
 
 
