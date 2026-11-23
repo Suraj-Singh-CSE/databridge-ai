@@ -5,12 +5,23 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type {
   ExportView,
+  Job,
   ProjectRole,
   SqlCheck,
   SqlVersion,
   SqlVersionSummary,
 } from '@/lib/api-types';
-import { API, fail, makeProject, makeSession, ok, signedInHandlers } from '@/test/fixtures';
+import {
+  API,
+  fail,
+  jobFrame,
+  makeJob,
+  makeProject,
+  makeSession,
+  ok,
+  signedInHandlers,
+  sseChannel,
+} from '@/test/fixtures';
 import { renderApp } from '@/test/render-app';
 import { server } from '@/test/server';
 
@@ -162,12 +173,14 @@ interface Setup {
   versions?: SqlVersion[];
   exports?: ExportView[];
   member?: ProjectRole;
+  jobs?: Job[];
 }
 
 function setup({
   versions = [FAILED_DRAFT, APPROVED, OLD],
   exports = [CSV_EXPORT],
   member,
+  jobs = [],
 }: Setup = {}) {
   const project = makeProject({
     currentStep: 'pipeline',
@@ -186,6 +199,7 @@ function setup({
       return found ? ok({ version: found }) : fail(404, 'NOT_FOUND', 'SQL version not found.');
     }),
     http.get(`${API}/projects/:id/exports`, () => ok({ items: exports })),
+    http.get(`${API}/projects/:id/jobs`, () => ok({ items: jobs })),
   );
   return renderApp(PATH);
 }
@@ -422,5 +436,426 @@ describe('pipeline: exports', () => {
     );
     expect(await screen.findByText('We could not load the exports')).toBeInTheDocument();
     expect(within(section('Exports')).getByText('Exports are unavailable.')).toBeInTheDocument();
+  });
+});
+
+const PASSING_DRAFT = makeVersion({
+  id: '64b0000000000000000000e5',
+  version: 5,
+  status: 'draft',
+  lastRun: null,
+  approvedBy: null,
+  approvedAt: null,
+});
+
+function queuedJob(type: Job['type'], payload: Record<string, unknown>): Job {
+  return makeJob({
+    type,
+    status: 'queued',
+    progress: 0,
+    message: '',
+    payload,
+    projectId: PROJECT_ID,
+  });
+}
+
+/** POST .../jobs answering `job`; the request bodies are collected in `bodies`. */
+function acceptJobs(job: Job, bodies: unknown[]) {
+  return http.post(`${API}/projects/:id/jobs`, async ({ request }) => {
+    bodies.push(await request.json());
+    return ok({ job }, 202);
+  });
+}
+
+describe('pipeline: SQL actions', () => {
+  it('drafts SQL with scope and instructions, follows the job and opens the new version', async () => {
+    const events = sseChannel();
+    const bodies: unknown[] = [];
+    let versions = [APPROVED];
+    setup({ versions });
+    server.use(
+      acceptJobs(queuedJob('sql_draft', { scope: 'all' }), bodies),
+      http.get(`${API}/jobs/:id/events`, () => events.response()),
+      http.get(`${API}/projects/:id/sql/versions`, () => ok({ items: versions.map(summary) })),
+      http.get(`${API}/projects/:id/sql/versions/:versionId`, ({ params }) => {
+        const found = versions.find((v) => v.id === params.versionId);
+        return found ? ok({ version: found }) : fail(404, 'NOT_FOUND', 'SQL version not found.');
+      }),
+    );
+    const user = userEvent.setup();
+    const trigger = await screen.findByRole('button', { name: 'Draft SQL' });
+    await user.click(trigger);
+
+    const dialog = await screen.findByRole('dialog', { name: 'Draft SQL' });
+    expect(
+      within(dialog).getByText(
+        "Don't include customer details — describe the rule, e.g. 'prefer CRM for phone'.",
+      ),
+    ).toBeInTheDocument();
+    expect(within(dialog).getByText('0/500 characters')).toBeInTheDocument();
+    await user.click(within(dialog).getByRole('radio', { name: /All customers/ }));
+    await user.type(
+      within(dialog).getByRole('textbox', { name: 'Instructions (optional)' }),
+      'prefer CRM for phone',
+    );
+    expect(within(dialog).getByText('20/500 characters')).toBeInTheDocument();
+    await user.click(within(dialog).getByRole('button', { name: 'Start draft' }));
+
+    await waitFor(() => {
+      expect(bodies).toEqual([
+        { type: 'sql_draft', payload: { scope: 'all', instructions: 'prefer CRM for phone' } },
+      ]);
+    });
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    const draft = section('Draft SQL');
+    expect(await within(draft).findByText('Waiting to start')).toBeInTheDocument();
+    events.send(jobFrame({ status: 'running', progress: 50, message: 'Testing on the sample' }));
+    expect(await within(draft).findByText('50% done')).toBeInTheDocument();
+    expect(within(draft).getByRole('button', { name: 'Cancel: Draft SQL' })).toBeEnabled();
+
+    versions = [PASSING_DRAFT, APPROVED];
+    events.send(
+      jobFrame({
+        status: 'succeeded',
+        progress: 100,
+        result: { versionId: PASSING_DRAFT.id, version: 5 },
+      }),
+    );
+    events.close();
+    expect(
+      await within(draft).findByText('Version 5 is drafted. Its details and tests are open below.'),
+    ).toBeInTheDocument();
+    const details = await screen.findByRole('region', { name: 'Version 5 details' });
+    expect(within(details).getByRole('button', { name: 'Approve version 5' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Hide version 5' })).toHaveAttribute(
+      'aria-expanded',
+      'true',
+    );
+  });
+
+  it('explains instructions refused because they look like personal data', async () => {
+    const events = sseChannel();
+    setup();
+    server.use(
+      acceptJobs(queuedJob('sql_draft', { scope: 'approved' }), []),
+      http.get(`${API}/jobs/:id/events`, () => events.response()),
+    );
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Draft SQL' }));
+    await user.click(screen.getByRole('button', { name: 'Start draft' }));
+    const draft = section('Draft SQL');
+    expect(await within(draft).findByText('Waiting to start')).toBeInTheDocument();
+    events.send(
+      jobFrame({
+        status: 'failed',
+        progress: 10,
+        error: { code: 'INSTRUCTIONS_CONTAIN_PII', message: 'The instructions contain PII.' },
+      }),
+    );
+    events.close();
+    expect(
+      await within(draft).findByText(/look like they contain customer details/),
+    ).toBeInTheDocument();
+  });
+
+  it('keeps the draft dialog open with a plain message when the api refuses the start', async () => {
+    setup();
+    server.use(
+      http.post(`${API}/projects/:id/jobs`, () =>
+        fail(
+          409,
+          'CONFLICT',
+          'No customer is approved yet. Approve customers in Match Review, or draft the SQL for all customers.',
+          { reason: 'NOTHING_APPROVED' },
+        ),
+      ),
+    );
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Draft SQL' }));
+    await user.click(screen.getByRole('button', { name: 'Start draft' }));
+    const dialog = screen.getByRole('dialog', { name: 'Draft SQL' });
+    expect(await within(dialog).findByText(/No customer is approved yet/)).toBeInTheDocument();
+  });
+
+  it('disables Approve with the reason while a draft has failing tests', async () => {
+    setup();
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'View version 4' }));
+    const details = await screen.findByRole('region', { name: 'Version 4 details' });
+    const approve = await within(details).findByRole('button', { name: 'Approve version 4' });
+    expect(approve).toBeDisabled();
+    expect(approve).toHaveAccessibleDescription('All tests must pass before approval.');
+    expect(within(details).getByRole('button', { name: 'Reject version 4' })).toBeEnabled();
+  });
+
+  it('approves a passing draft after a confirm that explains the superseded version', async () => {
+    let approved = '';
+    let body: unknown = null;
+    setup({ versions: [PASSING_DRAFT, APPROVED] });
+    server.use(
+      http.post(
+        `${API}/projects/:id/sql/versions/:versionId/approve`,
+        async ({ params, request }) => {
+          approved = String(params.versionId);
+          body = await request.json();
+          return ok({ version: { ...PASSING_DRAFT, status: 'approved' } });
+        },
+      ),
+    );
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'View version 5' }));
+    const trigger = await screen.findByRole('button', { name: 'Approve version 5' });
+    await user.click(trigger);
+    const dialog = screen.getByRole('dialog', { name: 'Approve version 5?' });
+    expect(dialog).toHaveTextContent(
+      'Version 3 is the current SQL. It becomes Superseded and version 5 becomes the current SQL.',
+    );
+    await user.click(within(dialog).getByRole('button', { name: 'Approve' }));
+    await waitFor(() => {
+      expect(approved).toBe(PASSING_DRAFT.id);
+    });
+    expect(body).toEqual({});
+    expect(
+      await screen.findByText('Version 5 approved. It is now the current SQL.'),
+    ).toBeInTheDocument();
+  });
+
+  it('rejects a draft with a reason', async () => {
+    let body: unknown = null;
+    setup();
+    server.use(
+      http.post(`${API}/projects/:id/sql/versions/:versionId/reject`, async ({ request }) => {
+        body = await request.json();
+        return ok({ version: { ...FAILED_DRAFT, status: 'rejected' } });
+      }),
+    );
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'View version 4' }));
+    await user.click(await screen.findByRole('button', { name: 'Reject version 4' }));
+    const dialog = screen.getByRole('dialog', { name: 'Reject version 4?' });
+    await user.type(within(dialog).getByRole('textbox'), 'Duplicates in customer_id');
+    await user.click(within(dialog).getByRole('button', { name: 'Reject' }));
+    expect(await screen.findByText('Version 4 rejected.')).toBeInTheDocument();
+    expect(body).toEqual({ reason: 'Duplicates in customer_id' });
+  });
+
+  it('explains a refused approval in plain words', async () => {
+    setup({ versions: [PASSING_DRAFT, APPROVED] });
+    server.use(
+      http.post(`${API}/projects/:id/sql/versions/:versionId/approve`, () =>
+        fail(409, 'CONFLICT', 'Tests failed: row_count.', {
+          reason: 'SQL_TESTS_FAILED',
+          failedChecks: ['row_count'],
+        }),
+      ),
+    );
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'View version 5' }));
+    await user.click(await screen.findByRole('button', { name: 'Approve version 5' }));
+    await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Approve' }));
+    expect(await screen.findByText('All tests must pass before approval.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Approve version 5' })).toBeInTheDocument();
+  });
+
+  it('runs the approved SQL and reports the new last run', async () => {
+    const events = sseChannel();
+    const bodies: unknown[] = [];
+    let current = APPROVED;
+    setup();
+    server.use(
+      acceptJobs(queuedJob('sql_run', { versionId: APPROVED.id }), bodies),
+      http.get(`${API}/jobs/:id/events`, () => events.response()),
+      http.get(`${API}/projects/:id/sql/versions/:versionId`, () => ok({ version: current })),
+    );
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Run SQL version 3' }));
+    await waitFor(() => {
+      expect(bodies).toEqual([{ type: 'sql_run', payload: { versionId: APPROVED.id } }]);
+    });
+    const currentSql = section('Current SQL · version 3');
+    events.send(jobFrame({ status: 'running', progress: 30 }));
+    await waitFor(() => {
+      expect(within(currentSql).getByRole('progressbar', { name: 'Run SQL' })).toHaveAttribute(
+        'aria-valuenow',
+        '30',
+      );
+    });
+    expect(screen.getByRole('button', { name: 'Run SQL version 3' })).toHaveAttribute(
+      'aria-disabled',
+      'true',
+    );
+
+    current = makeVersion({
+      lastRun: { runId: 'r2', passed: false, rowCount: 4999, finishedAt: new Date().toISOString() },
+    });
+    events.send(
+      jobFrame({
+        status: 'succeeded',
+        progress: 100,
+        result: { passed: false, rowCount: 4999, failedChecks: ['row_count'] },
+      }),
+    );
+    events.close();
+    expect(
+      await within(currentSql).findByText(
+        'The SQL ran on 4,999 rows but some checks failed: Row count.',
+      ),
+    ).toBeInTheDocument();
+    expect(await within(currentSql).findByText(/4,999 rows · failed/)).toBeInTheDocument();
+  });
+});
+
+describe('pipeline: export actions and roles', () => {
+  const XLSX_EXPORT: ExportView = {
+    ...CSV_EXPORT,
+    id: '64b0000000000000000000f2',
+    format: 'xlsx',
+    scope: 'all',
+    includeSources: true,
+    filename: 'customer-360-demo-2026-11-23.xlsx',
+  };
+
+  it('starts an export with the chosen options and lists it when ready', async () => {
+    const events = sseChannel();
+    const bodies: unknown[] = [];
+    let exports = [CSV_EXPORT];
+    setup({ member: 'data_steward' });
+    server.use(
+      acceptJobs(queuedJob('export', {}), bodies),
+      http.get(`${API}/jobs/:id/events`, () => events.response()),
+      http.get(`${API}/projects/:id/exports`, () => ok({ items: exports })),
+    );
+    const user = userEvent.setup();
+    const trigger = await screen.findByRole('button', { name: 'New export' });
+    await user.click(trigger);
+    const dialog = screen.getByRole('dialog', { name: 'New export' });
+    expect(within(dialog).getByRole('radio', { name: 'CSV' })).toBeChecked();
+    expect(within(dialog).getByRole('radio', { name: /Approved only/ })).toBeChecked();
+    await user.click(within(dialog).getByRole('radio', { name: 'Excel' }));
+    await user.click(within(dialog).getByRole('radio', { name: /All with review status/ }));
+    await user.click(within(dialog).getByRole('checkbox', { name: /Include source record keys/ }));
+    await user.click(within(dialog).getByRole('button', { name: 'Start export' }));
+
+    await waitFor(() => {
+      expect(bodies).toEqual([
+        { type: 'export', payload: { format: 'xlsx', scope: 'all', includeSources: true } },
+      ]);
+    });
+    // Focus goes back to the button that opened the dialog; it cannot start another export now.
+    await waitFor(() => {
+      expect(trigger).toHaveFocus();
+    });
+    expect(trigger).toHaveAttribute('aria-disabled', 'true');
+    const exportsSection = section('Exports');
+    expect(
+      await within(exportsSection).findByRole('progressbar', { name: 'Export' }),
+    ).toBeInTheDocument();
+    // Stewards may start exports but only data engineers and up may cancel them.
+    expect(within(exportsSection).queryByRole('button', { name: 'Cancel: Export' })).toBeNull();
+
+    exports = [XLSX_EXPORT, CSV_EXPORT];
+    events.send(jobFrame({ status: 'succeeded', progress: 100, result: { rowCount: 4987 } }));
+    events.close();
+    expect(
+      await within(exportsSection).findByText(
+        'Export ready: 4,987 rows. Download it from the list.',
+      ),
+    ).toBeInTheDocument();
+    expect(
+      await within(exportsSection).findByRole('button', {
+        name: `Download ${XLSX_EXPORT.filename}`,
+      }),
+    ).toBeInTheDocument();
+    expect(trigger).toBeEnabled();
+  });
+
+  it('explains an export the api refuses', async () => {
+    setup();
+    server.use(
+      http.post(`${API}/projects/:id/jobs`, () =>
+        fail(
+          409,
+          'CONFLICT',
+          'The customers are out of date: the pairs were scored or reviewed again after grouping. Build clusters again first.',
+          { reason: 'CLUSTERS_OUTDATED' },
+        ),
+      ),
+    );
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'New export' }));
+    await user.click(screen.getByRole('button', { name: 'Start export' }));
+    expect(
+      await within(screen.getByRole('dialog')).findByText(/The customers are out of date/),
+    ).toBeInTheDocument();
+  });
+
+  it('deletes an export after a confirm', async () => {
+    let deleted = '';
+    let exports = [CSV_EXPORT];
+    setup();
+    server.use(
+      http.get(`${API}/projects/:id/exports`, () => ok({ items: exports })),
+      http.delete(`${API}/projects/:id/exports/:exportId`, ({ params }) => {
+        deleted = String(params.exportId);
+        exports = [];
+        return ok({ deleted: true });
+      }),
+    );
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: `Delete ${CSV_EXPORT.filename}` }));
+    const dialog = screen.getByRole('dialog', { name: 'Delete this export?' });
+    await user.click(within(dialog).getByRole('button', { name: 'Delete' }));
+    expect(await screen.findByText(`Deleted ${CSV_EXPORT.filename}.`)).toBeInTheDocument();
+    expect(deleted).toBe(CSV_EXPORT.id);
+    expect(await screen.findByRole('heading', { name: 'No exports yet' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Exports' })).toHaveFocus();
+  });
+
+  it('offers every action to a data engineer', async () => {
+    setup();
+    expect(await screen.findByRole('button', { name: 'Draft SQL' })).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: 'Run SQL version 3' })).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: 'New export' })).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: `Delete ${CSV_EXPORT.filename}` }),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/You can view the SQL/)).not.toBeInTheDocument();
+  });
+
+  it('lets a data steward export but not work on the SQL or delete exports', async () => {
+    setup({ member: 'data_steward' });
+    expect(await screen.findByRole('button', { name: 'New export' })).toBeInTheDocument();
+    expect(screen.getByText(/You can view the SQL, and start and download exports/)).toBeVisible();
+    expect(screen.queryByRole('button', { name: 'Draft SQL' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Run SQL/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^Delete / })).not.toBeInTheDocument();
+    await userEvent.setup().click(await screen.findByRole('button', { name: 'View version 4' }));
+    const details = await screen.findByRole('region', { name: 'Version 4 details' });
+    expect(await within(details).findByText('Tests on the sample')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Approve version/ })).not.toBeInTheDocument();
+  });
+
+  it('keeps a viewer read-only', async () => {
+    setup({ member: 'viewer' });
+    expect(
+      await screen.findByRole('button', { name: `Download ${CSV_EXPORT.filename}` }),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'New export' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Draft SQL' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Run SQL/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^Delete / })).not.toBeInTheDocument();
+  });
+
+  it('shows a running export job from the list with its progress', async () => {
+    setup({ jobs: [makeJob({ type: 'export', status: 'running', progress: 70, payload: {} })] });
+    server.use(http.get(`${API}/jobs/:id/events`, () => sseChannel().response()));
+    expect(await screen.findByRole('progressbar', { name: 'Export' })).toHaveAttribute(
+      'aria-valuenow',
+      '70',
+    );
+    expect(screen.getByRole('button', { name: 'New export' })).toHaveAttribute(
+      'aria-disabled',
+      'true',
+    );
   });
 });

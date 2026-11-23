@@ -1,8 +1,11 @@
+import { useState } from 'react';
+
 import { LoadFailed } from '@/components/LoadFailed';
 import { TimeAgo } from '@/components/TimeAgo';
 import { Skeleton } from '@/components/ui/skeleton';
 import type { QualityRuleOverride, QualityRun } from '@/lib/api-types';
 
+import { EditThresholdsDialog } from './EditThresholdsDialog';
 import { formatMetric, RULE_NAMES, unitOfRule } from './quality-labels';
 import { useQualityRules } from './queries';
 
@@ -34,17 +37,23 @@ function overrideText(override: QualityRuleOverride | undefined): string | null 
   return 'Changed for this project';
 }
 
-/** Read-only view of the thresholds: what the latest report used and what the project changed. */
+/**
+ * The thresholds: what the latest report used and what the project changed; those who manage
+ * quality can edit them.
+ */
 export function ThresholdsSection({
   projectId,
   latest,
   personOf,
+  canEdit,
 }: {
   projectId: string;
   latest: QualityRun | null;
   personOf: (userId: string | null) => string;
+  canEdit: boolean;
 }) {
   const rules = useQualityRules(projectId);
+  const [message, setMessage] = useState<string | null>(null);
 
   let body;
   if (rules.isPending) {
@@ -145,10 +154,24 @@ export function ThresholdsSection({
 
   return (
     <section aria-labelledby="thresholds" className="space-y-4 rounded-xl border px-5 py-4">
-      <h2 id="thresholds" className="text-base font-medium">
-        Thresholds in use
-      </h2>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <h2 id="thresholds" className="text-base font-medium">
+          Thresholds in use
+        </h2>
+        {canEdit && rules.isSuccess && (
+          <EditThresholdsDialog
+            projectId={projectId}
+            view={rules.data}
+            onSaved={() => {
+              setMessage('Thresholds saved. They apply from the next quality check.');
+            }}
+          />
+        )}
+      </div>
       {body}
+      <p role="status" aria-live="polite" className="text-sm">
+        {message}
+      </p>
     </section>
   );
 }

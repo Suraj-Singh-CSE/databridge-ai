@@ -1,20 +1,32 @@
-import { screen, within } from '@testing-library/react';
+import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { delay, http } from 'msw';
 import { describe, expect, it } from 'vitest';
 
 import type {
+  Job,
   ProjectRole,
   QualityResult,
   QualityRulesView,
   QualityRun,
   QualityRunSummary,
 } from '@/lib/api-types';
-import { API, fail, makeProject, makeSession, ok, signedInHandlers } from '@/test/fixtures';
+import {
+  API,
+  fail,
+  jobFrame,
+  makeJob,
+  makeProject,
+  makeSession,
+  ok,
+  signedInHandlers,
+  sseChannel,
+} from '@/test/fixtures';
 import { renderApp } from '@/test/render-app';
 import { server } from '@/test/server';
 
 import { groupByKind, thresholdText } from './quality-labels';
+import { DEFAULT_ROW, overridesOf, validateRow } from './threshold-form';
 
 /** The value, or a thrown error when a test's element or fixture is missing. */
 function present<T>(value: T | null | undefined): T {
@@ -142,9 +154,10 @@ interface Setup {
   latest?: QualityRun | null;
   history?: QualityRunSummary[];
   member?: ProjectRole;
+  jobs?: Job[];
 }
 
-function setup({ latest = RUN, history = HISTORY, member }: Setup = {}) {
+function setup({ latest = RUN, history = HISTORY, member, jobs = [] }: Setup = {}) {
   const project = makeProject({
     currentStep: 'quality',
     ownerId: member ? '64b000000000000000000009' : USER_ID,
@@ -158,6 +171,7 @@ function setup({ latest = RUN, history = HISTORY, member }: Setup = {}) {
       ok({ items: history, page: 1, limit: 20, total: history.length }),
     ),
     http.get(`${API}/projects/:id/quality/rules`, () => ok({ rules: RULES })),
+    http.get(`${API}/projects/:id/jobs`, () => ok({ items: jobs })),
   );
   return renderApp(PATH);
 }
@@ -282,7 +296,7 @@ describe('quality: latest report', () => {
     expect(await screen.findByRole('heading', { name: 'Latest report' })).toBeInTheDocument();
   });
 
-  it('shows a read-only note to members who cannot run the checks', async () => {
+  it('shows a note to data stewards, who run checks but cannot change thresholds', async () => {
     setup({ member: 'data_steward' });
     expect(await screen.findByText(/You can view the quality reports/)).toBeInTheDocument();
   });
@@ -356,5 +370,208 @@ describe('quality: history and thresholds', () => {
       'Consistency',
       'Freshness',
     ]);
+  });
+});
+
+describe('quality: actions', () => {
+  it('runs the quality checks with live progress and refreshes the report and history', async () => {
+    const events = sseChannel();
+    let body: unknown = null;
+    let reads = { latest: 0, runs: 0 };
+    setup({ member: 'data_steward' });
+    server.use(
+      http.post(`${API}/projects/:id/jobs`, async ({ request }) => {
+        body = await request.json();
+        return ok(
+          { job: makeJob({ type: 'quality', status: 'queued', progress: 0, payload: {} }) },
+          202,
+        );
+      }),
+      http.get(`${API}/jobs/:id/events`, () => events.response()),
+      http.get(`${API}/projects/:id/quality/latest`, () => {
+        reads = { ...reads, latest: reads.latest + 1 };
+        return ok({ run: RUN });
+      }),
+      http.get(`${API}/projects/:id/quality/runs`, () => {
+        reads = { ...reads, runs: reads.runs + 1 };
+        return ok({ items: HISTORY, page: 1, limit: 20, total: HISTORY.length });
+      }),
+    );
+    const user = userEvent.setup();
+    const button = await screen.findByRole('button', { name: 'Run quality checks' });
+    await screen.findByRole('table', { name: 'Past quality reports' });
+    const before = { ...reads };
+    await user.click(button);
+    await waitFor(() => {
+      expect(body).toEqual({ type: 'quality', payload: {} });
+    });
+    events.send(jobFrame({ status: 'running', progress: 60, message: 'Checking validity' }));
+    expect(await screen.findByText('60% done')).toBeInTheDocument();
+    expect(screen.getByRole('progressbar', { name: 'Run quality checks' })).toBeInTheDocument();
+    // Stewards cannot cancel jobs (the api allows data engineers and up).
+    expect(screen.queryByRole('button', { name: /^Cancel/ })).not.toBeInTheDocument();
+    expect(button).toHaveAttribute('aria-disabled', 'true');
+
+    events.send(
+      jobFrame({
+        status: 'succeeded',
+        progress: 100,
+        result: { statusCounts: { pass: 6, warn: 2, fail: 1, skipped: 0 } },
+      }),
+    );
+    events.close();
+    expect(
+      await screen.findByText(
+        'The quality check finished: 6 passed, 2 warnings, 1 failed. The report below is up to date.',
+      ),
+    ).toBeInTheDocument();
+    await waitFor(() => {
+      expect(reads.latest).toBeGreaterThan(before.latest);
+      expect(reads.runs).toBeGreaterThan(before.runs);
+    });
+  });
+
+  it('explains a check the api refuses', async () => {
+    setup();
+    server.use(
+      http.post(`${API}/projects/:id/jobs`, () =>
+        fail(409, 'CONFLICT', 'A quality check is already running. Wait for that job to finish.', {
+          reason: 'QUALITY_RUNNING',
+        }),
+      ),
+    );
+    await userEvent
+      .setup()
+      .click(await screen.findByRole('button', { name: 'Run quality checks' }));
+    expect(await screen.findByText(/A quality check is already running/)).toBeInTheDocument();
+  });
+
+  it('shows the actions each role may use', async () => {
+    setup({ member: 'viewer' });
+    expect(
+      await screen.findByText(
+        /Only the project owner, an admin, a data engineer or a data steward can run the checks/,
+      ),
+    ).toBeInTheDocument();
+    await screen.findByRole('table', { name: 'Thresholds in use' });
+    expect(screen.queryByRole('button', { name: 'Run quality checks' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Edit thresholds' })).not.toBeInTheDocument();
+  });
+
+  it('lets a data steward run the checks but not edit thresholds', async () => {
+    setup({ member: 'data_steward' });
+    expect(await screen.findByRole('button', { name: 'Run quality checks' })).toBeInTheDocument();
+    await screen.findByRole('table', { name: 'Thresholds in use' });
+    expect(screen.queryByRole('button', { name: 'Edit thresholds' })).not.toBeInTheDocument();
+  });
+
+  it('edits thresholds with validation, reset to default and a PUT of the overrides', async () => {
+    let body: unknown = null;
+    setup();
+    server.use(
+      http.put(`${API}/projects/:id/quality/rules`, async ({ request }) => {
+        body = await request.json();
+        return ok({ rules: { ...RULES, rules: { validity: { warn: 98, fail: 90 } } } });
+      }),
+    );
+    const user = userEvent.setup();
+    const trigger = await screen.findByRole('button', { name: 'Edit thresholds' });
+    expect(screen.queryByText(/You can view the quality reports/)).not.toBeInTheDocument();
+    await user.click(trigger);
+    const dialog = screen.getByRole('dialog', { name: 'Edit thresholds' });
+    const validity = within(dialog).getByRole('group', { name: 'Values in the expected format' });
+    const warn = within(validity).getByRole('spinbutton', { name: 'Warn below (%)' });
+    const fail = within(validity).getByRole('spinbutton', { name: 'Fail below (%)' });
+    expect(warn).toHaveValue(99);
+    expect(fail).toHaveValue(95);
+    const email = within(dialog).getByRole('group', { name: 'Customers sharing an email address' });
+    expect(within(email).getByRole('checkbox', { name: 'Check this rule' })).not.toBeChecked();
+    const freshness = within(dialog).getByRole('group', {
+      name: 'Hours since clusters were built',
+    });
+    expect(within(freshness).getByRole('spinbutton', { name: 'Warn above (hours)' })).toHaveValue(
+      null,
+    );
+
+    // Fail above warn on a rule that should stay high, and a value out of range.
+    await user.clear(fail);
+    await user.type(fail, '100');
+    const phone = within(dialog).getByRole('group', { name: 'Customers sharing a phone number' });
+    await user.type(within(phone).getByRole('spinbutton', { name: 'Warn above (%)' }), '120');
+    await user.click(within(dialog).getByRole('button', { name: 'Save thresholds' }));
+    expect(
+      within(dialog).getByText('Fail must be at or below warn: this value should stay high.'),
+    ).toBeInTheDocument();
+    expect(within(dialog).getByText('Enter a number from 0 to 100.')).toBeInTheDocument();
+    expect(fail).toHaveAttribute('aria-invalid', 'true');
+    expect(body).toBeNull();
+
+    await user.clear(warn);
+    await user.type(warn, '98');
+    await user.clear(fail);
+    await user.type(fail, '90');
+    await user.click(within(phone).getByRole('button', { name: /Reset .* to default/ }));
+    await user.click(
+      within(email).getByRole('button', {
+        name: 'Reset Customers sharing an email address to default',
+      }),
+    );
+    await user.click(within(freshness).getByRole('checkbox', { name: 'Only warn, never fail' }));
+    await user.click(within(dialog).getByRole('button', { name: 'Save thresholds' }));
+
+    await waitFor(() => {
+      expect(body).toEqual({
+        rules: { validity: { warn: 98, fail: 90 }, clustering_freshness: { fail: null } },
+        fields: { phone: { warn: 90, fail: null } },
+      });
+    });
+    expect(
+      await screen.findByText('Thresholds saved. They apply from the next quality check.'),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(trigger).toHaveFocus();
+  });
+
+  it('shows the api refusal of thresholds in the dialog', async () => {
+    setup();
+    server.use(
+      http.put(`${API}/projects/:id/quality/rules`, () =>
+        fail(403, 'FORBIDDEN', 'You do not have access to this project.'),
+      ),
+    );
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Edit thresholds' }));
+    await user.click(screen.getByRole('button', { name: 'Save thresholds' }));
+    expect(
+      await within(screen.getByRole('dialog')).findByText(
+        'You do not have permission to do this in this project.',
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it('validates threshold rows like the api', () => {
+    const min = { rule: 'validity', direction: 'min' as const, max: 100 };
+    const max = { rule: 'clustering_freshness', direction: 'max' as const, max: 8760 };
+    expect(validateRow({ ...DEFAULT_ROW, warn: '99', fail: '95' }, min)).toEqual({});
+    expect(validateRow({ ...DEFAULT_ROW, warn: '24', fail: '12' }, max)).toEqual({
+      fail: 'Fail must be at or above warn: this value should stay low.',
+    });
+    expect(validateRow({ ...DEFAULT_ROW, warn: '9000' }, max)).toEqual({
+      warn: 'Enter a number from 0 to 8760.',
+    });
+    expect(validateRow({ ...DEFAULT_ROW, warn: '-1' }, min).warn).toBe(
+      'Enter a number from 0 to 100.',
+    );
+    // "Never fail" ignores the typed fail value.
+    expect(validateRow({ ...DEFAULT_ROW, warn: '10', fail: '50', neverFails: true }, min)).toEqual(
+      {},
+    );
+    expect(
+      overridesOf({
+        validity: DEFAULT_ROW,
+        phone_shared: { enabled: false, warn: '', fail: '', neverFails: false },
+        email_shared: { enabled: true, warn: '2.5', fail: '', neverFails: true },
+      }),
+    ).toEqual({ phone_shared: { enabled: false }, email_shared: { warn: 2.5, fail: null } });
   });
 });

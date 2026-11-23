@@ -45,6 +45,8 @@ interface ConfirmActionProps {
   label: ReactNode;
   /** Accessible name of the trigger when `label` alone is ambiguous (e.g. per column). */
   ariaLabel?: string;
+  /** Id of the text that says why the trigger is disabled. */
+  describedBy?: string | undefined;
   title: string;
   description: ReactNode;
   confirmLabel: string;
@@ -60,6 +62,7 @@ interface ConfirmActionProps {
 export function ConfirmAction({
   label,
   ariaLabel,
+  describedBy,
   title,
   description,
   confirmLabel,
@@ -87,6 +90,7 @@ export function ConfirmAction({
           variant={variant}
           disabled={disabled || pending}
           aria-label={ariaLabel}
+          aria-describedby={describedBy}
         >
           {pending && <LoaderCircle aria-hidden="true" className="animate-spin" />}
           {label}
