@@ -734,6 +734,19 @@ Every route except sign-in, create-account and the 404 page needs a session; oth
   and plain errors (403, 409 reasons such as `NOTHING_APPROVED`, `CLUSTERS_OUTDATED`,
   `SQL_TESTS_FAILED`, `*_RUNNING`, network) are announced in `aria-live` regions. Only data
   engineers and up see Cancel, as the api allows. Viewers and stewards see a short note.
+- The e2e test `apps/web/e2e/pipeline-quality.spec.ts` walks both pages on the full stack (Mock
+  LLM), after the same setup as the matching test (shared steps in `apps/web/e2e/support/flow.ts`)
+  up to Approve all High. **Pipeline:** Draft SQL (approved customers, an instruction), all tests
+  of the new version passed, Approve after confirming (the version is Approved and is the Current
+  SQL), Run SQL (the last run passed); a CSV export of the approved customers (file name
+  `customers-*.csv`, header starting with `customer_id`, as many rows as the list says) and an
+  Excel export of all customers with source keys (a ZIP file, `PK`). **Data quality:** Run quality
+  checks (overall status and rule groups), Edit thresholds (fail on the wrong side of warn is
+  refused; a new completeness warn value is saved), run again and the report shows the new
+  threshold. It also checks the Draft SQL dialog by keyboard (Escape closes it, focus returns),
+  that no raw email is announced or in the page title, and runs axe WCAG 2 A/AA scans on both
+  pages. Screenshots: `09-pipeline.png`, `10-quality.png`. Approve disabled by a failing test is
+  covered by the component tests: the Mock provider's drafts pass their tests.
 
 **Run it in development** (Vite proxies `/api` to `http://localhost:4000`):
 
