@@ -27,6 +27,9 @@ from app.matching.store import CandidateStore
 from app.matching.survivorship import SurvivorshipConfig
 from app.profiling.store import ProfileStore
 from app.profiling.zip_guard import ZipLimits
+from app.sql.agent import AgentSettings
+from app.sql.sandbox import SandboxLimits
+from app.sql.store import SqlStore
 from app.standardise.store import StandardiseStore
 from app.worker.celery_config import create_celery
 from app.worker.handlers import build_registry
@@ -37,6 +40,7 @@ from app.worker.handlers.mapping import MappingHandler, MappingHandlerSettings
 from app.worker.handlers.pair_review import PairReviewHandler, PairReviewHandlerSettings
 from app.worker.handlers.profile import ProfileHandler, ProfilerSettings
 from app.worker.handlers.scoring import ScoringHandler
+from app.worker.handlers.sql import SqlDraftHandler, SqlRunHandler, SqlSettings
 from app.worker.handlers.standardise import StandardiseHandler
 from app.worker.runner import JobRunner, RetryPolicy
 from app.worker.signals import JobSignals
@@ -51,8 +55,9 @@ def build_runner(settings: Settings) -> JobRunner:
     ``target_schemas``, ``mapping_suggestions``, ``mapping_decisions``, ``staged_records``,
     ``candidate_pairs``, ``candidate_summaries``, ``pair_scores``, ``score_summaries``,
     ``match_decisions``, ``clusters``, ``golden_records``, ``cluster_summaries``,
-    ``cluster_approvals``, ``exports``, ``llm_calls``), Redis, the storage folder (uploads read,
-    exports written) and the LLM gateway. Clients connect lazily."""
+    ``cluster_approvals``, ``exports``, ``sql_versions``, ``sql_runs``, ``llm_calls``), Redis,
+    the storage folder (uploads read, exports written), the LLM gateway and an in-memory DuckDB
+    per SQL job. Clients connect lazily."""
     mongo: MongoClient[Document] = MongoClient(
         settings.mongodb_uri, serverSelectionTimeoutMS=CLIENT_TIMEOUT_SECONDS * 1000
     )
@@ -86,8 +91,19 @@ def build_runner(settings: Settings) -> JobRunner:
     reviewer = PairReviewHandler(PairReviewStore(database), gateway, review_settings(settings))
     clusterer = ClusteringHandler(ClusterStore(database), clustering_settings(settings))
     exporter = ExportHandler(ExportStore(database), export_settings(settings))
+    sql_store = SqlStore(database)
+    sql = sql_settings(settings)
     registry = build_registry(
-        profiler, mapper, standardiser, blocker, scorer, reviewer, clusterer, exporter
+        profiler,
+        mapper,
+        standardiser,
+        blocker,
+        scorer,
+        reviewer,
+        clusterer,
+        exporter,
+        sql_draft=SqlDraftHandler(sql_store, gateway, sql),
+        sql_run=SqlRunHandler(sql_store, sql),
     )
     return JobRunner(store, JobSignals(redis), registry, retry)
 
@@ -153,3 +169,20 @@ def clustering_settings(settings: Settings) -> ClusteringSettings:
 
 def export_settings(settings: Settings) -> ExportSettings:
     return ExportSettings(root=Path(settings.upload_dir), max_rows=settings.export_max_rows)
+
+
+def sql_settings(settings: Settings) -> SqlSettings:
+    return SqlSettings(
+        limits=SandboxLimits(
+            timeout_seconds=settings.sql_statement_timeout_seconds,
+            memory_limit_mb=settings.sql_memory_limit_mb,
+            threads=settings.sql_threads,
+        ),
+        agent=AgentSettings(
+            max_repairs=settings.sql_agent_max_repairs,
+            temperature=settings.sql_agent_temperature,
+            max_output_tokens=settings.sql_agent_max_output_tokens,
+        ),
+        llm_enabled=settings.sql_agent_llm_enabled,
+        max_records=settings.sql_max_records,
+    )

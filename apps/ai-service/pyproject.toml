@@ -24,6 +24,7 @@ dependencies = [
   "polars>=2.1",
   "fastexcel>=0.21",
   "xlsxwriter>=3.2",
+  "duckdb>=2.0,<3",
 ]
 
 [project.optional-dependencies]
@@ -46,6 +47,7 @@ include = ["app*"]
 "app" = ["py.typed"]
 "app.mapping" = ["prompts/*.txt"]
 "app.matching" = ["prompts/*.txt"]
+"app.sql" = ["prompts/*.txt"]
 
 [tool.ruff]
 target-version = "py312"
@@ -72,6 +74,8 @@ known-first-party = ["app"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S101"]
+# SQL tests build query text on purpose (it runs only in the sandbox or the validator).
+"tests/test_sql_*.py" = ["S101", "S608"]
 
 [tool.ruff.format]
 quote-style = "double"

@@ -417,6 +417,8 @@ def test_registry_rejects_duplicates_and_lists_names() -> None:
         "pair_review",
         "profile",
         "scoring",
+        "sql_draft",
+        "sql_run",
         "standardise",
     ]
     assert registry.get("nope") is None
