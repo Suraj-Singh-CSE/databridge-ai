@@ -27,6 +27,8 @@ from app.matching.store import CandidateStore
 from app.matching.survivorship import SurvivorshipConfig
 from app.profiling.store import ProfileStore
 from app.profiling.zip_guard import ZipLimits
+from app.quality.config import QualityDefaults
+from app.quality.store import QualityStore
 from app.sql.agent import AgentSettings
 from app.sql.sandbox import SandboxLimits
 from app.sql.store import SqlStore
@@ -39,6 +41,7 @@ from app.worker.handlers.export import ExportHandler, ExportSettings
 from app.worker.handlers.mapping import MappingHandler, MappingHandlerSettings
 from app.worker.handlers.pair_review import PairReviewHandler, PairReviewHandlerSettings
 from app.worker.handlers.profile import ProfileHandler, ProfilerSettings
+from app.worker.handlers.quality import QualityHandler, QualitySettings
 from app.worker.handlers.scoring import ScoringHandler
 from app.worker.handlers.sql import SqlDraftHandler, SqlRunHandler, SqlSettings
 from app.worker.handlers.standardise import StandardiseHandler
@@ -55,7 +58,8 @@ def build_runner(settings: Settings) -> JobRunner:
     ``target_schemas``, ``mapping_suggestions``, ``mapping_decisions``, ``staged_records``,
     ``candidate_pairs``, ``candidate_summaries``, ``pair_scores``, ``score_summaries``,
     ``match_decisions``, ``clusters``, ``golden_records``, ``cluster_summaries``,
-    ``cluster_approvals``, ``exports``, ``sql_versions``, ``sql_runs``, ``llm_calls``), Redis,
+    ``cluster_approvals``, ``exports``, ``sql_versions``, ``sql_runs``, ``quality_rules``,
+    ``quality_runs``, ``llm_calls``), Redis,
     the storage folder (uploads read, exports written), the LLM gateway and an in-memory DuckDB
     per SQL job. Clients connect lazily."""
     mongo: MongoClient[Document] = MongoClient(
@@ -104,6 +108,7 @@ def build_runner(settings: Settings) -> JobRunner:
         exporter,
         sql_draft=SqlDraftHandler(sql_store, gateway, sql),
         sql_run=SqlRunHandler(sql_store, sql),
+        quality=QualityHandler(QualityStore(database), quality_settings(settings)),
     )
     return JobRunner(store, JobSignals(redis), registry, retry)
 
@@ -185,4 +190,16 @@ def sql_settings(settings: Settings) -> SqlSettings:
         ),
         llm_enabled=settings.sql_agent_llm_enabled,
         max_records=settings.sql_max_records,
+    )
+
+
+def quality_settings(settings: Settings) -> QualitySettings:
+    return QualitySettings(
+        sql=sql_settings(settings),
+        defaults=QualityDefaults(
+            freshness_warn_hours=settings.quality_freshness_warn_hours,
+            freshness_fail_hours=settings.quality_freshness_fail_hours,
+            row_change_warn_percent=settings.quality_row_change_warn_percent,
+        ),
+        history_limit=settings.quality_history_limit,
     )

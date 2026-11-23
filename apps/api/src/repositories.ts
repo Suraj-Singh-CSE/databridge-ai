@@ -9,6 +9,8 @@ import type { CandidateRepository } from './modules/candidates/candidate.types.j
 import type { AuditRepository } from './modules/audit/audit.types.js';
 import { createMongoRefreshTokenRepository } from './modules/auth/refresh-token.repository.js';
 import type { RefreshTokenRepository } from './modules/auth/refresh-token.types.js';
+import { createMongoQualityRepository } from './modules/quality/quality.repository.js';
+import type { QualityRepository } from './modules/quality/quality.types.js';
 import { createMongoSqlVersionRepository } from './modules/sql/sql.repository.js';
 import type { SqlVersionRepository } from './modules/sql/sql.types.js';
 import { createMongoScoreRepository } from './modules/scores/score.repository.js';
@@ -50,6 +52,8 @@ export interface Repositories {
   exports: ExportRepository;
   /** SQL agent versions and their runs (ADR 0021). */
   sqlVersions: SqlVersionRepository;
+  /** Data quality reports and rule overrides (ADR 0022). */
+  quality: QualityRepository;
   audit: AuditRepository;
 }
 
@@ -70,6 +74,7 @@ export function createMongoRepositories(): Repositories {
     review: createMongoReviewRepository(),
     exports: createMongoExportRepository(),
     sqlVersions: createMongoSqlVersionRepository(),
+    quality: createMongoQualityRepository(),
     audit: createMongoAuditRepository(),
   };
 }

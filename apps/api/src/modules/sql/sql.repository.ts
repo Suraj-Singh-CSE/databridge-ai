@@ -84,6 +84,13 @@ export function createMongoSqlVersionRepository(): SqlVersionRepository {
       return doc ? toVersion(doc) : null;
     },
 
+    async findApproved(projectId) {
+      const doc = await SqlVersionModel.findOne({ projectId: oid(projectId), status: 'approved' })
+        .sort({ version: -1 })
+        .lean<StoredVersion>();
+      return doc ? toVersion(doc) : null;
+    },
+
     async approve(projectId, versionId, by, at) {
       const approved = await SqlVersionModel.findOneAndUpdate(
         { _id: oid(versionId), projectId: oid(projectId), status: 'draft', testsPassed: true },

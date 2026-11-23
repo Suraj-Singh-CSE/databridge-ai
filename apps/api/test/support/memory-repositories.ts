@@ -34,6 +34,11 @@ import type {
   ColumnProfile,
   ColumnProfileRepository,
 } from '../../src/modules/sources/column-profile.types.js';
+import type {
+  QualityRepository,
+  QualityRules,
+  QualityRun,
+} from '../../src/modules/quality/quality.types.js';
 import type { Source } from '../../src/modules/sources/source.types.js';
 import type {
   StagedRecord,
@@ -113,6 +118,7 @@ export interface MemoryRepositories extends Repositories {
   clusters: ClusterRepository & { workerSave(write: ClusterWrite): void };
   exports: ExportRepository & { workerSave(record: ExportRecord): void };
   sqlVersions: SqlVersionRepository & { workerSave(version: SqlVersion): void };
+  quality: QualityRepository & { workerSave(run: QualityRun): void };
 }
 
 /**
@@ -163,6 +169,13 @@ export function createMemoryRepositories(): MemoryRepositories {
     const found = sqlVersions.get(versionId.toLowerCase());
     return found?.projectId === projectId ? found : undefined;
   };
+  // key: quality run id (= the quality job's id); rules: one document per project.
+  const qualityRuns = new Map<string, QualityRun>();
+  const qualityRules = new Map<string, QualityRules>();
+  const runsOf = (projectId: string) =>
+    [...qualityRuns.values()]
+      .filter((r) => r.projectId === projectId)
+      .sort((a, b) => b.startedAt.getTime() - a.startedAt.getTime() || (a.id < b.id ? 1 : -1));
   const audit: AuditEntry[] = [];
   let firstAdminClaimed = false;
 
@@ -858,6 +871,13 @@ export function createMemoryRepositories(): MemoryRepositories {
         const found = versionIn(projectId, versionId);
         return found ? structuredClone(found) : null;
       },
+      async findApproved(projectId) {
+        await Promise.resolve();
+        const approved = [...sqlVersions.values()]
+          .filter((v) => v.projectId === projectId && v.status === 'approved')
+          .sort((a, b) => b.version - a.version);
+        return approved[0] ? structuredClone(approved[0]) : null;
+      },
       async approve(projectId, versionId, by, at) {
         await Promise.resolve();
         const found = versionIn(projectId, versionId);
@@ -890,6 +910,46 @@ export function createMemoryRepositories(): MemoryRepositories {
       },
       workerSave(version) {
         sqlVersions.set(version.id, structuredClone(version));
+      },
+    },
+
+    quality: {
+      async listRuns(projectId, { skip, limit }) {
+        await Promise.resolve();
+        const all = runsOf(projectId);
+        const items = all
+          .slice(skip, skip + limit)
+          .map(({ results: _results, config: _config, ...summary }) => summary);
+        return { items: structuredClone(items), total: all.length };
+      },
+      async findRun(projectId, runId) {
+        await Promise.resolve();
+        const found = qualityRuns.get(runId.toLowerCase());
+        return found?.projectId === projectId ? structuredClone(found) : null;
+      },
+      async latestRun(projectId) {
+        await Promise.resolve();
+        const [newest] = runsOf(projectId);
+        return newest ? structuredClone(newest) : null;
+      },
+      async findRules(projectId) {
+        await Promise.resolve();
+        const found = qualityRules.get(projectId);
+        return found ? structuredClone(found) : null;
+      },
+      async saveRules(projectId, overrides, by, at) {
+        await Promise.resolve();
+        const saved: QualityRules = { ...structuredClone(overrides), updatedBy: by, updatedAt: at };
+        qualityRules.set(projectId, saved);
+        return structuredClone(saved);
+      },
+      async deleteByProject(projectId) {
+        await Promise.resolve();
+        for (const [id, r] of qualityRuns) if (r.projectId === projectId) qualityRuns.delete(id);
+        qualityRules.delete(projectId);
+      },
+      workerSave(run) {
+        qualityRuns.set(run.id, structuredClone(run));
       },
     },
 

@@ -203,6 +203,15 @@ class Sandbox:
         columns = self._timed(work)
         return columns, time.monotonic() - started
 
+    def result_rows(self) -> tuple[list[str], list[tuple[Any, ...]]]:
+        """The column names and rows of ``sql_result`` (for later steps such as quality)."""
+
+        def work() -> tuple[list[str], list[tuple[Any, ...]]]:
+            relation = self._conn.table(RESULT_TABLE)
+            return list(relation.columns), relation.fetchall()
+
+        return self._timed(work)
+
     def query(self, sql: str, params: Sequence[Any] = ()) -> list[tuple[Any, ...]]:
         """Run one of the test runner's own queries (same time limit)."""
         return self._timed(lambda: self._conn.execute(sql, list(params)).fetchall())

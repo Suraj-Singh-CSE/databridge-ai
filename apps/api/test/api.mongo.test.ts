@@ -13,6 +13,8 @@ import {
   GoldenRecordModel,
 } from '../src/modules/clusters/cluster.model.js';
 import { ExportModel } from '../src/modules/exports/export.model.js';
+import { QualityRunModel } from '../src/modules/quality/quality.model.js';
+import type { SqlVersion } from '../src/modules/sql/sql.types.js';
 import { SqlVersionModel } from '../src/modules/sql/sql.model.js';
 import { JobModel } from '../src/modules/jobs/job.model.js';
 import { PairScoreModel, ScoreSummaryModel } from '../src/modules/scores/score.model.js';
@@ -33,6 +35,7 @@ import { defineApiSuite } from './support/api-suite.js';
 import { defineCandidatesSuite } from './support/candidates-suite.js';
 import { defineClustersSuite } from './support/clusters-suite.js';
 import { defineExportsSuite } from './support/exports-suite.js';
+import { defineQualitySuite } from './support/quality-suite.js';
 import { defineSqlSuite } from './support/sql-suite.js';
 import { defineScoresSuite } from './support/scores-suite.js';
 import { defineJobsSuite } from './support/jobs-suite.js';
@@ -256,20 +259,33 @@ describe.skipIf(!available)('MongoDB', () => {
     },
   });
 
-  defineSqlSuite('MongoDB repositories', {
+  const oid = (value: string) => new mongoose.Types.ObjectId(value);
+  const optional = (value: string | null) => (value ? oid(value) : null);
+  async function workerSqlVersion(_repos: unknown, { id, ...version }: SqlVersion) {
+    // What apps/ai-service/app/sql/store.py writes: _id = the sql_draft job id.
+    await SqlVersionModel.collection.insertOne({
+      ...version,
+      _id: oid(id),
+      projectId: oid(version.projectId),
+      jobId: oid(version.jobId),
+      createdBy: optional(version.createdBy),
+      approvedBy: optional(version.approvedBy),
+      rejectedBy: optional(version.rejectedBy),
+    });
+  }
+  defineSqlSuite('MongoDB repositories', { ...mongoClusters, workerSqlVersion });
+  defineQualitySuite('MongoDB repositories', {
     ...mongoClusters,
-    async workerSqlVersion(_repos, { id, ...version }) {
-      // What apps/ai-service/app/sql/store.py writes: _id = the sql_draft job id.
-      const oid = (value: string) => new mongoose.Types.ObjectId(value);
-      const optional = (value: string | null) => (value ? oid(value) : null);
-      await SqlVersionModel.collection.insertOne({
-        ...version,
+    workerSqlVersion,
+    async workerQualityRun(_repos, { id, ...run }) {
+      // What apps/ai-service/app/quality/store.py writes: _id = the quality job id.
+      await QualityRunModel.collection.insertOne({
+        ...run,
         _id: oid(id),
-        projectId: oid(version.projectId),
-        jobId: oid(version.jobId),
-        createdBy: optional(version.createdBy),
-        approvedBy: optional(version.approvedBy),
-        rejectedBy: optional(version.rejectedBy),
+        projectId: oid(run.projectId),
+        jobId: oid(run.jobId),
+        source: { ...run.source, versionId: optional(run.source.versionId) },
+        createdBy: optional(run.createdBy),
       });
     },
   });
