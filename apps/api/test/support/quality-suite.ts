@@ -446,7 +446,7 @@ export function defineQualitySuite(label: string, harness: QualityHarness): void
         const entries = (await auditEntries()).filter((e) => e.action === 'quality_rules.update');
         expect(entries).toHaveLength(2);
         const [latest, first] = entries;
-        expect(first?.before).toEqual({ rules: {}, fields: {} });
+        expect(first?.before).toBeNull();
         expect(first?.after).toEqual(body);
         expect(latest?.before).toEqual(body);
       });

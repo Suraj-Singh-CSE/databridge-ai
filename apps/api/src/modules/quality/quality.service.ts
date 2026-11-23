@@ -66,7 +66,7 @@ export function createQualityService(
     },
 
     async saveRules(actor, project, overrides) {
-      const before = (await repos.quality.findRules(project.id)) ?? EMPTY;
+      const before = await repos.quality.findRules(project.id);
       const saved = await repos.quality.saveRules(project.id, overrides, actor.user.userId, now());
       await audit.record({
         projectId: project.id,
@@ -74,7 +74,8 @@ export function createQualityService(
         action: 'quality_rules.update',
         entityType: 'quality_rules',
         entityId: project.id,
-        before: { rules: before.rules, fields: before.fields },
+        // null: the project used the defaults until now.
+        before: before ? { rules: before.rules, fields: before.fields } : null,
         after: { rules: saved.rules, fields: saved.fields },
         requestId: actor.requestId,
       });
