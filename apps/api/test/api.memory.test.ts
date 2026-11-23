@@ -1,11 +1,14 @@
 import { defineApiSuite } from './support/api-suite.js';
 import { defineCandidatesSuite } from './support/candidates-suite.js';
 import { defineClustersSuite } from './support/clusters-suite.js';
+import { defineDashboardSuite } from './support/dashboard-suite.js';
 import { defineExportsSuite } from './support/exports-suite.js';
 import { defineQualitySuite } from './support/quality-suite.js';
 import { defineSqlSuite } from './support/sql-suite.js';
 import { defineScoresSuite } from './support/scores-suite.js';
 import { defineJobsSuite } from './support/jobs-suite.js';
+import type { QualityRun } from '../src/modules/quality/quality.types.js';
+import type { SqlVersion } from '../src/modules/sql/sql.types.js';
 import type { Repositories } from '../src/repositories.js';
 
 import {
@@ -103,14 +106,30 @@ defineSqlSuite('in-memory repositories', {
     (repos as MemoryRepositories).sqlVersions.workerSave(version);
   },
 });
-defineQualitySuite('in-memory repositories', {
+const memoryQuality = {
   ...memoryClusters,
-  async workerSqlVersion(repos, version) {
+  async workerSqlVersion(repos: Repositories, version: SqlVersion) {
     await Promise.resolve();
     (repos as MemoryRepositories).sqlVersions.workerSave(version);
   },
-  async workerQualityRun(repos, run) {
+  async workerQualityRun(repos: Repositories, run: QualityRun) {
     await Promise.resolve();
     (repos as MemoryRepositories).quality.workerSave(run);
+  },
+};
+defineQualitySuite('in-memory repositories', memoryQuality);
+defineDashboardSuite('in-memory repositories', {
+  ...memoryQuality,
+  async workerExport(repos, record) {
+    await Promise.resolve();
+    (repos as MemoryRepositories).exports.workerSave(record);
+  },
+  async workerUpdate(repos, jobId, patch) {
+    await Promise.resolve();
+    (repos as MemoryRepositories).jobs.workerUpdate(jobId, patch);
+  },
+  async workerLlmCall(repos, call) {
+    await Promise.resolve();
+    (repos as MemoryRepositories).dashboard.workerLlmCall(call);
   },
 });

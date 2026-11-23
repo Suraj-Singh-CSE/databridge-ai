@@ -24,6 +24,8 @@ import { createCandidateService } from './modules/candidates/candidate.service.j
 import { createClusterRouter } from './modules/clusters/cluster.routes.js';
 import { createClusterService } from './modules/clusters/cluster.service.js';
 import { createReviewService } from './modules/clusters/review.service.js';
+import { createDashboardRouter } from './modules/dashboard/dashboard.routes.js';
+import { createDashboardService } from './modules/dashboard/dashboard.service.js';
 import { createExportRouter } from './modules/exports/export.routes.js';
 import { createExportService } from './modules/exports/export.service.js';
 import { createQualityRouter } from './modules/quality/quality.routes.js';
@@ -107,6 +109,7 @@ export function createApp({
   const exportService = createExportService(repos, files, audit);
   const sqlService = createSqlService(repos, audit);
   const qualityService = createQualityService(repos, audit);
+  const dashboardService = createDashboardService(repos);
   const jobDeps = {
     jobService,
     projects: repos.projects,
@@ -175,6 +178,10 @@ export function createApp({
   app.use(
     '/api/v1/projects/:projectId/quality',
     createQualityRouter({ qualityService, projects: repos.projects, tokens }),
+  );
+  app.use(
+    '/api/v1/projects/:projectId/dashboard',
+    createDashboardRouter({ dashboardService, projects: repos.projects, tokens, logger }),
   );
   app.use(
     '/api/v1/projects/:projectId/target-schema',
