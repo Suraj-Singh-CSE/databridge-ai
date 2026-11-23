@@ -90,12 +90,13 @@ export function useDownloadExport(projectId: string) {
 
 /* ---------- Actions: jobs, SQL decisions, export deletion ---------- */
 
-/** The jobs started from the Pipeline and Data quality pages, with their payloads. */
+/** The jobs started from the Pipeline, Data quality and Assistant pages, with their payloads. */
 export type PipelineJobRequest =
   | { type: 'sql_draft'; payload: { scope: DataScope; instructions?: string } }
   | { type: 'sql_run'; payload: { versionId: string } }
   | { type: 'export'; payload: { format: ExportFormat; scope: DataScope; includeSources: boolean } }
-  | { type: 'quality'; payload: Record<string, never> };
+  | { type: 'quality'; payload: Record<string, never> }
+  | { type: 'knowledge_index'; payload: Record<string, never> };
 
 export type PipelineJobType = PipelineJobRequest['type'];
 

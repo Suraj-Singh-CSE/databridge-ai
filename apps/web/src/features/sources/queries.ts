@@ -33,6 +33,8 @@ export const sourceKeys = {
   quality: (projectId: string) => ['projects', projectId, 'quality'] as const,
   /** Root of the dashboard keys (features/dashboard/queries.ts). */
   dashboard: (projectId: string) => ['projects', projectId, 'dashboard'] as const,
+  /** Root of the knowledge summary and assistant keys (features/assistant/queries.ts). */
+  assistant: (projectId: string) => ['projects', projectId, 'assistant'] as const,
 };
 
 export function useSources(projectId: string) {
@@ -161,7 +163,8 @@ export function useDeleteSource(projectId: string) {
 /**
  * After a job ends: the source's status, counts and profile have changed, and so may the
  * matching results (candidates, scores, clusters), the SQL versions and exports, and the
- * quality reports that the later jobs write, and the dashboard that counts all of them.
+ * quality reports that the later jobs write, the dashboard that counts all of them, and the
+ * assistant's knowledge summary (written by `knowledge_index`).
  */
 export async function refreshAfterJob(queryClient: QueryClient, projectId: string): Promise<void> {
   await Promise.all([
@@ -171,5 +174,6 @@ export async function refreshAfterJob(queryClient: QueryClient, projectId: strin
     queryClient.invalidateQueries({ queryKey: sourceKeys.pipeline(projectId) }),
     queryClient.invalidateQueries({ queryKey: sourceKeys.quality(projectId) }),
     queryClient.invalidateQueries({ queryKey: sourceKeys.dashboard(projectId) }),
+    queryClient.invalidateQueries({ queryKey: sourceKeys.assistant(projectId) }),
   ]);
 }

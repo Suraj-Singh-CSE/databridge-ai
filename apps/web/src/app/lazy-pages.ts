@@ -29,3 +29,6 @@ export const QualityPage = lazy(() =>
 export const DashboardPage = lazy(() =>
   import('@/features/dashboard/DashboardPage').then((m) => ({ default: m.DashboardPage })),
 );
+export const AssistantPage = lazy(() =>
+  import('@/features/assistant/AssistantPage').then((m) => ({ default: m.AssistantPage })),
+);

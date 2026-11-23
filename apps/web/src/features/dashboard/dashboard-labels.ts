@@ -19,6 +19,7 @@ export const JOB_TYPE_LABELS: Record<JobType, string> = {
   sql_draft: 'Draft SQL',
   sql_run: 'Test SQL',
   quality: 'Quality checks',
+  knowledge_index: 'Build project knowledge',
 };
 
 export const REVIEW_TYPE_LABELS: Record<ReviewType, string> = {

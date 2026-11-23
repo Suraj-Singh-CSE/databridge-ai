@@ -231,10 +231,13 @@ describe('project pages', () => {
     server.use(
       ...signedInHandlers(),
       http.get(`${API}/projects/:id`, () => ok({ project })),
+      http.get(`${API}/projects/:id/knowledge/summary`, () => ok({ summary: null })),
+      http.get(`${API}/projects/:id/assistant/conversations`, () => ok({ items: [] })),
+      http.get(`${API}/projects/:id/jobs`, () => ok({ items: [] })),
     );
     renderApp(`/projects/${project.id}/assistant`);
 
-    expect(await screen.findByText('Coming in milestone M6')).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Project knowledge' })).toBeInTheDocument();
     expect(screen.queryByRole('list', { name: 'Project steps' })).not.toBeInTheDocument();
   });
 

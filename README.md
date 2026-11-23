@@ -734,7 +734,7 @@ React 18 + Vite + Tailwind with shadcn/ui components (`apps/web/src/components/u
 | `/projects/:id/pipeline`      | Pipeline: draft, approve and run SQL; start and get exports  |
 | `/projects/:id/quality`       | Data quality: run checks, report, history, edit thresholds   |
 | `/projects/:id/dashboard`     | Dashboard: progress, quality, AI usage, reviews, jobs        |
-| `/projects/:id/assistant`     | Assistant (placeholder until M6)                             |
+| `/projects/:id/assistant`     | Assistant: build project knowledge, ask, cited answers       |
 
 Every route except sign-in, create-account and the 404 page needs a session; others redirect to
 `/sign-in?next=<where you were going>`.
@@ -869,6 +869,23 @@ Every route except sign-in, create-account and the 404 page needs a session; oth
 - Bars are plain CSS in theme colours, marked `role="img"` with a one-sentence summary, and each
   has a visually hidden table with the numbers. No chart library.
 - A finished job refreshes the dashboard (`refreshAfterJob`), like the other step pages.
+
+**Assistant (M6.3b)**
+
+- A **Project knowledge** strip reads `GET /projects/:id/knowledge/summary`: when it was built,
+  pieces of knowledge per kind, and the search mode (Smart search = hybrid, Keyword search).
+  Owners, admins and data engineers get **Build / Rebuild knowledge** (a `knowledge_index` job
+  with live progress; the summary refreshes when it ends). Others are told to ask an engineer.
+- Any member, viewers included, can ask (`POST /assistant/ask`, ADR 0025): a 500-character box
+  (Enter sends, Shift+Enter adds a line), example questions, and a privacy note asking for a
+  customer ID instead of customer details. Focus stays in the box after sending.
+- Answers are plain text: `[n]` markers are split out (no HTML is injected) and become links to
+  the numbered source below, which shows its kind, title and an "Open in …" link to the page it
+  came from (mapping opens the cited source file; design docs show their title and section).
+  Confidence is a pill with text. Refusals (personal data, weak retrieval, not answerable, no
+  citation) get a calm message of their own; new answers are announced (`aria-live="polite"`).
+- History lists the user's own conversations (open, delete with confirmation, new
+  conversation). 409 not built, 429 rate limit, 503 and network errors each have plain words.
 
 **Run it in development** (Vite proxies `/api` to `http://localhost:4000`):
 
