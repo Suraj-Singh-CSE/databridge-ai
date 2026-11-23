@@ -1,7 +1,14 @@
 import { http, HttpResponse } from 'msw';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { api, ApiError, fieldErrorsOf, REFRESH_LOCK, refreshSession } from '@/lib/api';
+import {
+  api,
+  ApiError,
+  fieldErrorsOf,
+  filenameFromDisposition,
+  REFRESH_LOCK,
+  refreshSession,
+} from '@/lib/api';
 import { getAccessToken, getAuthState, receiveAuthMessage, setSession } from '@/lib/session';
 import { API, fail, makeSession, ok } from '@/test/fixtures';
 import { server } from '@/test/server';
@@ -222,5 +229,20 @@ describe('refresh across tabs (Web Locks)', () => {
 
     await expect(pending).resolves.toMatchObject({ accessToken: 'shared' });
     expect(refreshCalls()).toBe(0);
+  });
+});
+
+describe('filenameFromDisposition', () => {
+  it('reads quoted, bare and UTF-8 names and drops any path', () => {
+    expect(filenameFromDisposition('attachment; filename="demo-2026-11-22.csv"')).toBe(
+      'demo-2026-11-22.csv',
+    );
+    expect(filenameFromDisposition('attachment; filename=demo.xlsx')).toBe('demo.xlsx');
+    expect(filenameFromDisposition("attachment; filename*=UTF-8''my%20file.csv")).toBe(
+      'my file.csv',
+    );
+    expect(filenameFromDisposition('attachment; filename="../../etc/passwd"')).toBe('passwd');
+    expect(filenameFromDisposition('attachment')).toBeNull();
+    expect(filenameFromDisposition(null)).toBeNull();
   });
 });

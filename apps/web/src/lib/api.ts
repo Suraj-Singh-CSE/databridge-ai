@@ -187,6 +187,39 @@ export function authorizedGet(path: string, signal: AbortSignal): Promise<Respon
   );
 }
 
+/** A downloaded file: its bytes and the name the server suggested (null when it sent none). */
+export interface DownloadedFile {
+  blob: Blob;
+  filename: string | null;
+}
+
+/** The `filename` of a `Content-Disposition: attachment; filename="..."` header. */
+export function filenameFromDisposition(header: string | null): string | null {
+  const match = header ? /filename\*?=(?:UTF-8'')?"?([^";]+)"?/i.exec(header) : null;
+  const name = match?.[1]?.trim();
+  if (!name) return null;
+  // Never trust a path: keep only the last segment.
+  return decodeURIComponent(name).split(/[/\\]/).pop() ?? null;
+}
+
+/**
+ * Downloads a file with the bearer token (a plain link cannot send it), refreshing the session
+ * once on a 401. Throws ApiError for an error response.
+ */
+export async function downloadFile(path: string, signal?: AbortSignal): Promise<DownloadedFile> {
+  const options: RequestOptions = { accept: '*/*' };
+  if (signal) options.signal = signal;
+  const response = await withSessionRetry(
+    () => send(path, options),
+    (res) => res.status === 401,
+  );
+  if (!response.ok) throw await errorFromResponse(response);
+  return {
+    blob: await response.blob(),
+    filename: filenameFromDisposition(response.headers.get('Content-Disposition')),
+  };
+}
+
 /** The ApiError described by a failed response (its JSON envelope, or a generic one). */
 export async function errorFromResponse(response: Response): Promise<ApiError> {
   try {

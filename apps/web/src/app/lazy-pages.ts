@@ -20,3 +20,9 @@ export const MappingPage = lazy(() =>
 export const MatchingPage = lazy(() =>
   import('@/features/matching/MatchingPage').then((m) => ({ default: m.MatchingPage })),
 );
+export const PipelinePage = lazy(() =>
+  import('@/features/pipeline/PipelinePage').then((m) => ({ default: m.PipelinePage })),
+);
+export const QualityPage = lazy(() =>
+  import('@/features/quality/QualityPage').then((m) => ({ default: m.QualityPage })),
+);

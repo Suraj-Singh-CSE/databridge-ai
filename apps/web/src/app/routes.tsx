@@ -5,7 +5,9 @@ import {
   CreateAccountPage,
   MappingPage,
   MatchingPage,
+  PipelinePage,
   ProfilePage,
+  QualityPage,
   SignInPage,
   SourcesPage,
 } from '@/app/lazy-pages';
@@ -24,6 +26,8 @@ const STEP_PAGES: Partial<Record<ProjectPage['slug'], ComponentType>> = {
   profile: ProfilePage,
   mapping: MappingPage,
   matching: MatchingPage,
+  pipeline: PipelinePage,
+  quality: QualityPage,
 };
 
 function stepElement(page: ProjectPage) {
