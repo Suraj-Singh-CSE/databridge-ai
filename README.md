@@ -723,17 +723,18 @@ React 18 + Vite + Tailwind with shadcn/ui components (`apps/web/src/components/u
 (data router), TanStack Query for server data and react-hook-form + Zod for forms. Design notes:
 [ADR 0007](docs/adr/0007-frontend-architecture-and-sessions.md).
 
-| Route                                 | What                                                         |
-| ------------------------------------- | ------------------------------------------------------------ |
-| `/sign-in`, `/create-account`         | Sign in / register (signed-in users are sent to `/projects`) |
-| `/projects`                           | Your projects; admins and data engineers can create one      |
-| `/projects/:id/sources`               | Upload CSV/XLSX files, watch profiling live, preview, remove |
-| `/projects/:id/profile`               | Column profile per file: types, empty %, patterns, flags     |
-| `/projects/:id/mapping`               | Mapping Review: run mapping, accept/reject/change per column |
-| `/projects/:id/matching`              | Match Review: run the matching steps, browse customers       |
-| `/projects/:id/pipeline`              | Pipeline: draft, approve and run SQL; start and get exports  |
-| `/projects/:id/quality`               | Data quality: run checks, report, history, edit thresholds   |
-| `/projects/:id/{dashboard,assistant}` | Dashboard and assistant (placeholders until M6)              |
+| Route                         | What                                                         |
+| ----------------------------- | ------------------------------------------------------------ |
+| `/sign-in`, `/create-account` | Sign in / register (signed-in users are sent to `/projects`) |
+| `/projects`                   | Your projects; admins and data engineers can create one      |
+| `/projects/:id/sources`       | Upload CSV/XLSX files, watch profiling live, preview, remove |
+| `/projects/:id/profile`       | Column profile per file: types, empty %, patterns, flags     |
+| `/projects/:id/mapping`       | Mapping Review: run mapping, accept/reject/change per column |
+| `/projects/:id/matching`      | Match Review: run the matching steps, browse customers       |
+| `/projects/:id/pipeline`      | Pipeline: draft, approve and run SQL; start and get exports  |
+| `/projects/:id/quality`       | Data quality: run checks, report, history, edit thresholds   |
+| `/projects/:id/dashboard`     | Dashboard: progress, quality, AI usage, reviews, jobs        |
+| `/projects/:id/assistant`     | Assistant (placeholder until M6)                             |
 
 Every route except sign-in, create-account and the 404 page needs a session; others redirect to
 `/sign-in?next=<where you were going>`.
@@ -853,6 +854,21 @@ Every route except sign-in, create-account and the 404 page needs a session; oth
   that no raw email is announced or in the page title, and runs axe WCAG 2 A/AA scans on both
   pages. Screenshots: `09-pipeline.png`, `10-quality.png`. Approve disabled by a failing test is
   covered by the component tests: the Mock provider's drafts pass their tests.
+
+**Dashboard (M6.3a)**
+
+- One call to `GET /projects/:id/dashboard?range=` (ADR 0023) feeds the page; a segmented control
+  (native radios, arrow keys move) picks the last 7, 30 or 90 days (default 30). Every member,
+  viewers included, sees everything; there are no actions on the page.
+- Sections: the next step (with a link to its page), pipeline cards with an **Out of date** pill
+  where a step must rerun, data quality (latest rule statuses and an upright pass / warn / fail bar
+  per check), AI usage (calls, tokens, cost shown as "₹0 (free tier)" when nothing was billed,
+  typical and slowest-5% response time, cache hits, fallbacks to rules, a per-task table and calls
+  per day), human review by decision type and role with median time to decide, job health, and
+  the benchmarks, labelled as measured on synthetic test data with their ADR and date.
+- Bars are plain CSS in theme colours, marked `role="img"` with a one-sentence summary, and each
+  has a visually hidden table with the numbers. No chart library.
+- A finished job refreshes the dashboard (`refreshAfterJob`), like the other step pages.
 
 **Run it in development** (Vite proxies `/api` to `http://localhost:4000`):
 

@@ -3,6 +3,7 @@ import { Navigate, type RouteObject } from 'react-router';
 
 import {
   CreateAccountPage,
+  DashboardPage,
   MappingPage,
   MatchingPage,
   PipelinePage,
@@ -28,6 +29,7 @@ const STEP_PAGES: Partial<Record<ProjectPage['slug'], ComponentType>> = {
   matching: MatchingPage,
   pipeline: PipelinePage,
   quality: QualityPage,
+  dashboard: DashboardPage,
 };
 
 function stepElement(page: ProjectPage) {
