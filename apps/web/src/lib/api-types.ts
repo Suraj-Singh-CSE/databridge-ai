@@ -720,3 +720,168 @@ export interface QualityRulesView {
   updatedAt: string | null;
   catalogue: { rule: string; direction: 'min' | 'max'; max: number }[];
 }
+
+/* ---------- Dashboard (apps/api dashboard.service.ts, ADR 0023) ---------- */
+
+export const DASHBOARD_RANGES = ['7d', '30d', '90d'] as const;
+export type DashboardRange = (typeof DASHBOARD_RANGES)[number];
+
+export interface DashboardPipeline {
+  sources: { count: number; byStatus: Record<SourceStatus, number>; rowsUploaded: number };
+  mapping: {
+    sourcesMapped: number;
+    columns: number;
+    decided: number;
+    pending: number;
+    sourcesOnRules: number;
+    outdated: boolean;
+  };
+  standardise: { sources: number; rows: number; rowsWithIssues: number; outdated: boolean };
+  candidates: { ran: boolean; pairs: number; outdated: boolean };
+  scores: { ran: boolean; pairs: number; byBand: Record<ScoreBand, number>; outdated: boolean };
+  aiReview: { ran: boolean; pairs: number; reviewed: number; unavailable: number };
+  clusters: {
+    ran: boolean;
+    customers: number;
+    multiRecord: number;
+    recordsMerged: number;
+    needsReview: number;
+    approved: number;
+    proposed: number;
+    outdated: boolean;
+  };
+  sql: {
+    latest: { version: number; status: SqlStatus; testsPassed: boolean; method: SqlMethod } | null;
+    approvedVersion: number | null;
+    outdated: boolean;
+  };
+  exports: { count: number; outdated: boolean };
+  quality: {
+    latest: { status: Exclude<QualityStatus, 'skipped'>; at: string } | null;
+    outdated: boolean;
+  };
+  nextStep: { text: string; step: ProjectStep };
+}
+
+export interface DashboardQuality {
+  runs: {
+    at: string;
+    status: Exclude<QualityStatus, 'skipped'>;
+    pass: number;
+    warn: number;
+    fail: number;
+  }[];
+  latestRules: {
+    rule: string;
+    field: string | null;
+    label: string;
+    status: QualityStatus;
+    metric: number | null;
+    unit: 'percent' | 'hours';
+  }[];
+}
+
+export interface DashboardAiTotals {
+  calls: number;
+  ok: number;
+  failed: number;
+  failedBy: {
+    status: string | null;
+    httpCode: number | null;
+    errorType: string | null;
+    count: number;
+  }[];
+  cacheHits: number;
+  schemaFallbacks: number;
+  inputTokens: number;
+  outputTokens: number;
+  costInr: number;
+  costLabel: 'free tier' | 'paid';
+  latencyMs: { p50: number | null; p95: number | null; samples: number };
+  models: string[];
+}
+
+export interface DashboardAiTask extends DashboardAiTotals {
+  task: string;
+}
+
+export interface DashboardAi {
+  tasks: DashboardAiTask[];
+  total: DashboardAiTotals;
+  fallbacks: {
+    mappingSourcesOnRules: number;
+    sqlReferenceVersions: number;
+    pairReviewUnavailable: number;
+  };
+  daily: { date: string; calls: number; tokens: number; costInr: number }[];
+}
+
+export const REVIEW_TYPES = [
+  'mapping_accept',
+  'mapping_reject',
+  'mapping_override',
+  'mapping_accept_high',
+  'match_approve',
+  'match_approve_high',
+  'match_split',
+  'match_merge',
+  'match_undo',
+  'sql_approve',
+  'sql_reject',
+  'quality_rules_change',
+] as const;
+export type ReviewType = (typeof REVIEW_TYPES)[number];
+export type ReviewerRole = 'owner' | ProjectRole | 'admin' | 'former_member';
+
+export interface DashboardReview {
+  total: number;
+  byType: Record<ReviewType, number>;
+  byRole: Partial<Record<ReviewerRole, number>>;
+  medianTimeToDecisionMs: Partial<
+    Record<'mapping' | 'match_approve' | 'sql', { medianMs: number; samples: number }>
+  >;
+}
+
+export interface DashboardJobType {
+  type: JobType;
+  total: number;
+  succeeded: number;
+  failed: number;
+  failedBy: { code: string; count: number }[];
+  cancelled: number;
+  active: number;
+  durationMs: { median: number | null; p95: number | null };
+}
+
+export interface DashboardJobs {
+  byType: DashboardJobType[];
+  recentFailures: { type: JobType; code: string | null; at: string }[];
+}
+
+export interface BenchmarkMetric {
+  name: string;
+  value: number;
+  unit: 'percent' | 'count';
+  display: string;
+}
+
+export interface Benchmark {
+  id: string;
+  title: string;
+  dataset: 'synthetic';
+  set: string;
+  source: string;
+  measuredOn: string;
+  metrics: BenchmarkMetric[];
+  evidence: string[];
+}
+
+export interface Dashboard {
+  range: { key: DashboardRange; days: number; since: string; until: string };
+  pipeline: DashboardPipeline;
+  quality: DashboardQuality;
+  ai: DashboardAi;
+  review: DashboardReview;
+  jobs: DashboardJobs;
+  benchmarks: { version: number; items: Benchmark[] };
+}

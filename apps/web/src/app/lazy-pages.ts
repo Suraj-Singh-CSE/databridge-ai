@@ -26,3 +26,6 @@ export const PipelinePage = lazy(() =>
 export const QualityPage = lazy(() =>
   import('@/features/quality/QualityPage').then((m) => ({ default: m.QualityPage })),
 );
+export const DashboardPage = lazy(() =>
+  import('@/features/dashboard/DashboardPage').then((m) => ({ default: m.DashboardPage })),
+);
