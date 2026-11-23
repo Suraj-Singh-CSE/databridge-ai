@@ -3,6 +3,8 @@ import { createMongoDashboardRepository } from './modules/dashboard/dashboard.re
 import type { DashboardRepository } from './modules/dashboard/dashboard.types.js';
 import { createMongoExportRepository } from './modules/exports/export.repository.js';
 import type { ExportRepository } from './modules/exports/export.types.js';
+import { createMongoKnowledgeRepository } from './modules/knowledge/knowledge.repository.js';
+import type { KnowledgeRepository } from './modules/knowledge/knowledge.types.js';
 import { createMongoClusterRepository } from './modules/clusters/cluster.repository.js';
 import type { ClusterRepository, ReviewRepository } from './modules/clusters/cluster.types.js';
 import { createMongoReviewRepository } from './modules/clusters/review.repository.js';
@@ -59,6 +61,8 @@ export interface Repositories {
   audit: AuditRepository;
   /** Read-only aggregates across the modules' collections and `llm_calls` (ADR 0023). */
   dashboard: DashboardRepository;
+  /** The knowledge index's summary per project, written by the ai-worker (ADR 0024). */
+  knowledge: KnowledgeRepository;
 }
 
 export function createMongoRepositories(): Repositories {
@@ -81,5 +85,6 @@ export function createMongoRepositories(): Repositories {
     quality: createMongoQualityRepository(),
     audit: createMongoAuditRepository(),
     dashboard: createMongoDashboardRepository(),
+    knowledge: createMongoKnowledgeRepository(),
   };
 }

@@ -413,6 +413,7 @@ def test_registry_rejects_duplicates_and_lists_names() -> None:
         "clustering",
         "demo",
         "export",
+        "knowledge_index",
         "mapping",
         "pair_review",
         "profile",

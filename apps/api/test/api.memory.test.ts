@@ -7,6 +7,7 @@ import { defineQualitySuite } from './support/quality-suite.js';
 import { defineSqlSuite } from './support/sql-suite.js';
 import { defineScoresSuite } from './support/scores-suite.js';
 import { defineJobsSuite } from './support/jobs-suite.js';
+import { defineKnowledgeSuite } from './support/knowledge-suite.js';
 import type { QualityRun } from '../src/modules/quality/quality.types.js';
 import type { SqlVersion } from '../src/modules/sql/sql.types.js';
 import type { Repositories } from '../src/repositories.js';
@@ -131,5 +132,12 @@ defineDashboardSuite('in-memory repositories', {
   async workerLlmCall(repos, call) {
     await Promise.resolve();
     (repos as MemoryRepositories).dashboard.workerLlmCall(call);
+  },
+});
+defineKnowledgeSuite('in-memory repositories', {
+  ...harness,
+  async workerKnowledgeSummary(repos, summary) {
+    await Promise.resolve();
+    (repos as MemoryRepositories).knowledge.workerSave(summary);
   },
 });

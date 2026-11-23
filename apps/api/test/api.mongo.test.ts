@@ -14,6 +14,7 @@ import {
 } from '../src/modules/clusters/cluster.model.js';
 import { LlmCallModel } from '../src/modules/dashboard/llm-call.model.js';
 import { ExportModel } from '../src/modules/exports/export.model.js';
+import { KnowledgeSummaryModel } from '../src/modules/knowledge/knowledge.model.js';
 import type { ExportRecord } from '../src/modules/exports/export.types.js';
 import { QualityRunModel } from '../src/modules/quality/quality.model.js';
 import type { QualityRun } from '../src/modules/quality/quality.types.js';
@@ -43,6 +44,7 @@ import { defineQualitySuite } from './support/quality-suite.js';
 import { defineSqlSuite } from './support/sql-suite.js';
 import { defineScoresSuite } from './support/scores-suite.js';
 import { defineJobsSuite } from './support/jobs-suite.js';
+import { defineKnowledgeSuite } from './support/knowledge-suite.js';
 import { defineMappingsSuite, suggested } from './support/mappings-suite.js';
 import { columnProfile, defineProfilesSuite } from './support/profiles-suite.js';
 import { defineSourcesSuite } from './support/sources-suite.js';
@@ -321,6 +323,18 @@ describe.skipIf(!available)('MongoDB', () => {
         project_id: call.projectId,
         request_id: null,
         created_at: call.createdAt,
+      });
+    },
+  });
+  defineKnowledgeSuite('MongoDB repositories', {
+    ...mongoHarness,
+    async workerKnowledgeSummary(_repos, summary) {
+      // What apps/ai-service/app/worker/handlers/knowledge.py stores.
+      await KnowledgeSummaryModel.collection.insertOne({
+        ...summary,
+        projectId: new mongoose.Types.ObjectId(summary.projectId),
+        jobId: new mongoose.Types.ObjectId(summary.jobId),
+        removed: 0,
       });
     },
   });

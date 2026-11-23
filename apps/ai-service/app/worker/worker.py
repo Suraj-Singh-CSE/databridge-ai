@@ -9,6 +9,9 @@ from redis import Redis
 
 from app.config import Settings
 from app.export.store import ExportStore
+from app.knowledge.docs import docs_root
+from app.knowledge.index import Embedder
+from app.knowledge.store import KnowledgeStore
 from app.llm.cache import SyncRedisCache
 from app.llm.cost import SyncMongoCostLogger
 from app.llm.factory import build_gateway
@@ -38,6 +41,7 @@ from app.worker.handlers import build_registry
 from app.worker.handlers.candidates import CandidatesHandler
 from app.worker.handlers.clustering import ClusteringHandler, ClusteringSettings
 from app.worker.handlers.export import ExportHandler, ExportSettings
+from app.worker.handlers.knowledge import KnowledgeIndexHandler, KnowledgeSettings
 from app.worker.handlers.mapping import MappingHandler, MappingHandlerSettings
 from app.worker.handlers.pair_review import PairReviewHandler, PairReviewHandlerSettings
 from app.worker.handlers.profile import ProfileHandler, ProfilerSettings
@@ -59,7 +63,8 @@ def build_runner(settings: Settings) -> JobRunner:
     ``candidate_pairs``, ``candidate_summaries``, ``pair_scores``, ``score_summaries``,
     ``match_decisions``, ``clusters``, ``golden_records``, ``cluster_summaries``,
     ``cluster_approvals``, ``exports``, ``sql_versions``, ``sql_runs``, ``quality_rules``,
-    ``quality_runs``, ``llm_calls``), Redis,
+    ``quality_runs``, ``audit_logs``, ``users``, ``projects``, ``knowledge_chunks``,
+    ``knowledge_summaries``, ``llm_calls``), Redis,
     the storage folder (uploads read, exports written), the LLM gateway and an in-memory DuckDB
     per SQL job. Clients connect lazily."""
     mongo: MongoClient[Document] = MongoClient(
@@ -86,6 +91,10 @@ def build_runner(settings: Settings) -> JobRunner:
             settings, SyncRedisCache(redis), SyncMongoCostLogger(database["llm_calls"])
         )
 
+    def embedder() -> tuple[Embedder, str | None, int | None]:
+        built = gateway()
+        return built, built.provider.embedding_model, built.provider.embedding_dimensions
+
     mapper = MappingHandler(MappingStore(database), gateway, mapping_settings(settings))
     standardiser = StandardiseHandler(StandardiseStore(database), reading)
     blocker = CandidatesHandler(
@@ -109,6 +118,9 @@ def build_runner(settings: Settings) -> JobRunner:
         sql_draft=SqlDraftHandler(sql_store, gateway, sql),
         sql_run=SqlRunHandler(sql_store, sql),
         quality=QualityHandler(QualityStore(database), quality_settings(settings)),
+        knowledge_index=KnowledgeIndexHandler(
+            KnowledgeStore(database), embedder, knowledge_settings(settings)
+        ),
     )
     return JobRunner(store, JobSignals(redis), registry, retry)
 
@@ -202,4 +214,13 @@ def quality_settings(settings: Settings) -> QualitySettings:
             row_change_warn_percent=settings.quality_row_change_warn_percent,
         ),
         history_limit=settings.quality_history_limit,
+    )
+
+
+def knowledge_settings(settings: Settings) -> KnowledgeSettings:
+    return KnowledgeSettings(
+        embeddings_enabled=settings.knowledge_embeddings_enabled,
+        docs_root=docs_root(settings.knowledge_docs_dir),
+        quality_runs=settings.knowledge_quality_runs,
+        batch_size=settings.embedding_batch_size,
     )

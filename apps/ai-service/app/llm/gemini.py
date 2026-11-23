@@ -12,7 +12,14 @@ from google import genai
 from google.genai import errors as genai_errors
 from google.genai import types
 
-from app.llm.base import LLMProvider, LLMRequest, LLMResponse
+from app.llm.base import (
+    EmbeddingKind,
+    EmbeddingResponse,
+    LLMProvider,
+    LLMRequest,
+    LLMResponse,
+    approx_tokens,
+)
 from app.llm.errors import (
     LLMBadRequestError,
     LLMConfigError,
@@ -39,6 +46,24 @@ class GenerateContent(Protocol):
     ) -> types.GenerateContentResponse: ...
 
 
+class EmbedContent(Protocol):
+    """``client.aio.models.embed_content`` of the SDK; a protocol so tests can pass a fake."""
+
+    async def embed_content(
+        self,
+        *,
+        model: str,
+        contents: list[str],
+        config: types.EmbedContentConfig,
+    ) -> types.EmbedContentResponse: ...
+
+
+_EMBEDDING_TASK: dict[EmbeddingKind, str] = {
+    "document": "RETRIEVAL_DOCUMENT",
+    "query": "RETRIEVAL_QUERY",
+}
+
+
 class GeminiProvider(LLMProvider):
     name = "gemini"
 
@@ -50,10 +75,18 @@ class GeminiProvider(LLMProvider):
         timeout_seconds: float = 30.0,
         thinking_level: ThinkingLevelName | None = None,
         models: GenerateContent | None = None,
+        embedding_model: str | None = None,
+        embedding_dimensions: int | None = None,
+        embedder: EmbedContent | None = None,
     ) -> None:
-        """``thinking_level`` None leaves the model's default (``medium`` on Gemini 3 Flash)."""
+        """``thinking_level`` None leaves the model's default (``medium`` on Gemini 3 Flash).
+        ``embedding_model`` None: no embeddings. ``models`` and ``embedder`` replace the SDK
+        client in tests; without them both come from one client."""
         self.model = model
         self.thinking_level = thinking_level
+        self.embedding_model = embedding_model
+        self.embedding_dimensions = embedding_dimensions
+        self._embedder = embedder
         if models is None:
             if not api_key:
                 raise LLMConfigError("GeminiProvider needs an API key (set GEMINI_API_KEY).")
@@ -65,6 +98,7 @@ class GeminiProvider(LLMProvider):
                 ),
             )
             models = client.aio.models
+            self._embedder = embedder or client.aio.models
         self._models = models
 
     async def complete(self, request: LLMRequest) -> LLMResponse:
@@ -121,6 +155,51 @@ class GeminiProvider(LLMProvider):
             output_tokens=output_tokens,
             latency_ms=round(latency_ms, 3),
         )
+
+    async def embed(self, texts: list[str], *, kind: EmbeddingKind) -> EmbeddingResponse:
+        """One ``embed_content`` call for the whole batch (one vector per text)."""
+        if self.embedding_model is None or self._embedder is None:
+            raise LLMConfigError("No Gemini embedding model is configured.")
+        config = types.EmbedContentConfig(
+            task_type=_EMBEDDING_TASK[kind], output_dimensionality=self.embedding_dimensions
+        )
+        started = time.perf_counter()
+        try:
+            response = await self._embedder.embed_content(
+                model=self.embedding_model, contents=list(texts), config=config
+            )
+        except genai_errors.APIError as error:
+            raise _map_api_error(error) from None
+        except httpx.TimeoutException:
+            raise LLMTimeoutError("Gemini request timed out", status="HTTP_TIMEOUT") from None
+        except httpx.TransportError as error:
+            raise LLMUnavailableError(f"Gemini unreachable ({type(error).__name__})") from None
+        latency_ms = (time.perf_counter() - started) * 1000
+        vectors = [list(e.values or []) for e in response.embeddings or []]
+        if len(vectors) != len(texts) or any(not v for v in vectors):
+            raise LLMResponseError(
+                f"Gemini returned {len(vectors)} embeddings for {len(texts)} texts",
+                status="BAD_EMBEDDINGS",
+            )
+        return EmbeddingResponse(
+            vectors=vectors,
+            model=self.embedding_model,
+            input_tokens=_embedding_tokens(response, texts),
+            latency_ms=round(latency_ms, 3),
+        )
+
+
+def _embedding_tokens(response: types.EmbedContentResponse, texts: list[str]) -> int:
+    """Token count from the response when the API reports it (Vertex AI does), else an
+    estimate (the Gemini API reports none for embeddings)."""
+    counted = [
+        int(e.statistics.token_count)
+        for e in response.embeddings or []
+        if e.statistics is not None and e.statistics.token_count is not None
+    ]
+    if len(counted) == len(texts):
+        return sum(counted)
+    return sum(approx_tokens(text) for text in texts)
 
 
 def _finish(response: types.GenerateContentResponse) -> str:

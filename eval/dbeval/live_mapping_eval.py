@@ -18,7 +18,10 @@ the run exits non-zero if any prompt failed it.
 ``--task pair_review`` runs the AI review of hard pairs instead (``live_pair_review_eval``,
 ADR 0017; default budget 15 calls, ``--pairs-per-call`` pairs per call). ``--task sql_agent``
 asks the SQL agent for the customers query on the samples (``live_sql_agent_eval``, ADR 0021;
-default budget 12 calls; schema and statistics only in the prompt).
+default budget 12 calls; schema and statistics only in the prompt). ``--task
+embedding_retrieval`` embeds the samples' value-free knowledge index and the retrieval
+questions with ``--embedding-model`` (``live_retrieval_eval``, ADR 0024; default budget 20
+calls) and compares keyword-only and hybrid search.
 
 The key is read from the environment only and is never printed or written.
 """
@@ -37,7 +40,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
-from app.config import DEFAULT_GEMINI_MODEL, Settings
+from app.config import DEFAULT_GEMINI_EMBEDDING_MODEL, DEFAULT_GEMINI_MODEL, Settings
 from app.llm.base import LLMProvider, LLMRequest, LLMResponse
 from app.llm.cache import InMemoryCache
 from app.llm.cost import InMemoryCostLogger, LLMCallRecord, cost_inr
@@ -65,8 +68,8 @@ from dbeval.evaluate_mapping import (
 from dbeval.loaders import read_csv, read_xlsx
 
 ProviderName = Literal["gemini", "mock"]
-TASKS = ("mapping", "pair_review", "sql_agent")
-DEFAULT_MAX_CALLS = {"mapping": 30, "pair_review": 15, "sql_agent": 12}
+TASKS = ("mapping", "pair_review", "sql_agent", "embedding_retrieval")
+DEFAULT_MAX_CALLS = {"mapping": 30, "pair_review": 15, "sql_agent": 12, "embedding_retrieval": 20}
 ThinkingLevel = Literal["", "minimal", "low", "medium", "high"]
 THINKING_LEVELS: tuple[ThinkingLevel, ...] = ("", "minimal", "low", "medium", "high")
 # A provider call cut off by the gateway's timeout ends in cancellation, not an LLMError.
@@ -425,8 +428,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         default=None,
         help=(
             "provider calls at most (retries count); default 30 for mapping, 15 for "
-            "pair_review, 12 for sql_agent"
+            "pair_review, 12 for sql_agent, 20 for embedding_retrieval"
         ),
+    )
+    parser.add_argument(
+        "--embedding-model",
+        default=os.environ.get("GEMINI_EMBEDDING_MODEL") or DEFAULT_GEMINI_EMBEDDING_MODEL,
+        help="embedding_retrieval only: the embedding model",
     )
     parser.add_argument(
         "--requests-per-minute",
@@ -484,7 +492,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         args.requests_per_minute,
         args.pairs_per_call,
     )
-    settings = settings_for(args.provider, args.model, api_key, options)
+    settings = settings_for(args.provider, args.model, api_key, options).model_copy(
+        update={"gemini_embedding_model": args.embedding_model}
+    )
     provider = build_provider(settings)
     if args.task == "pair_review":
         # Imported here: live_pair_review_eval builds on this module's guard and settings.
@@ -492,6 +502,12 @@ def main(argv: Sequence[str] | None = None) -> int:
 
         report = asyncio.run(live.run(provider, settings, args.max_calls))
         summary, names = live.markdown(report), (live.REPORT_JSON, live.REPORT_MD)
+    elif args.task == "embedding_retrieval":
+        from dbeval import live_retrieval_eval as retrieval
+
+        report = asyncio.run(retrieval.run(provider, settings, args.max_calls))
+        summary = retrieval.markdown(report)
+        names = (retrieval.REPORT_JSON, retrieval.REPORT_MD)
     elif args.task == "sql_agent":
         from dbeval import live_sql_agent_eval as sql_live
 

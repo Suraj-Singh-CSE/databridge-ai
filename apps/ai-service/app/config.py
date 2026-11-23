@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 DEFAULT_GEMINI_MODEL = "gemini-3.5-flash-lite"
+DEFAULT_GEMINI_EMBEDDING_MODEL = "gemini-embedding-001"
 MIB = 1024 * 1024
 
 
@@ -26,6 +27,8 @@ def _default_prices() -> dict[str, ModelPrice]:
         "mock": ModelPrice(input=0, output=0),
         "gemini-3.5-flash-lite": ModelPrice(input=0, output=0),
         "gemini-3.8-flash": ModelPrice(input=0, output=0),
+        "mock-embedding": ModelPrice(input=0, output=0),
+        DEFAULT_GEMINI_EMBEDDING_MODEL: ModelPrice(input=0, output=0),
     }
 
 
@@ -155,6 +158,20 @@ class Settings(BaseSettings):
     quality_row_change_warn_percent: float = Field(default=20.0, ge=0, le=1000)
     # Quality runs kept per project (older ones are deleted after each run).
     quality_history_limit: int = Field(default=50, ge=1, le=1000)
+
+    # ---- knowledge index for the project assistant (ADR 0024)
+    # Embedding model of the Gemini provider (the mock provider hashes words instead).
+    gemini_embedding_model: str = Field(default=DEFAULT_GEMINI_EMBEDDING_MODEL, min_length=1)
+    # Vector length asked of the embedding model (Gemini embeddings accept 128-3072).
+    embedding_dimensions: int = Field(default=768, ge=64, le=3072)
+    # Texts per embedding request; every request is paced like a chat call.
+    embedding_batch_size: int = Field(default=32, ge=1, le=100)
+    # false = keyword search only (BM25); no text is sent for embedding.
+    knowledge_embeddings_enabled: bool = True
+    # Folder holding README.md and adr/*.md to index; "" = the repository the code runs from.
+    knowledge_docs_dir: str = ""
+    # Quality runs indexed per project (newest first); the latest gets one chunk per rule.
+    knowledge_quality_runs: int = Field(default=5, ge=1, le=50)
 
     @property
     def source_trust(self) -> tuple[str, ...]:

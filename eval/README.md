@@ -74,6 +74,16 @@ ids, 4 impossible birth dates, 5 cities in the wrong PIN region) and reports det
 and recall per fault. `tests/test_evaluate_quality.py` requires 100% for both
 ([ADR 0022](../docs/adr/0022-data-quality.md)).
 
+## Knowledge retrieval
+
+`python -m dbeval.evaluate_retrieval [--data eval/samples]` builds the samples' project with the
+pure pipeline, turns it into the value-free knowledge index (privacy guard included), embeds it
+with the Mock embedder and searches a hand-written question set with known answers, reporting
+recall@1/@3/@5 and MRR for keyword-only and hybrid search and the privacy guard's counts.
+`tests/test_evaluate_retrieval.py` holds floors and requires no dropped chunk and no staged
+value in the index. The live counterpart is `python -m dbeval.live_mapping_eval --task
+embedding_retrieval` ([ADR 0024](../docs/adr/0024-knowledge-index.md)).
+
 ## What it writes
 
 | File                          | What                                                                                                                                                |

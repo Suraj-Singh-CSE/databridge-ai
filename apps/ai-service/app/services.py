@@ -9,6 +9,7 @@ from redis import Redis as SyncRedis
 from redis.asyncio import Redis
 
 from app.config import Settings
+from app.knowledge.search import KnowledgeReader, MongoKnowledgeReader
 from app.llm.cache import RedisCache
 from app.llm.cost import MongoCostLogger
 from app.llm.factory import build_gateway
@@ -30,6 +31,10 @@ class Services:
     readiness_checks: dict[str, ReadinessCheck]
     jobs: JobQueue
     job_registry: JobRegistry = field(default_factory=build_registry)
+    # The knowledge index's chunks (ADR 0024); None: search answers 503.
+    knowledge: KnowledgeReader | None = None
+    # false: search is keyword-only (KNOWLEDGE_EMBEDDINGS_ENABLED).
+    knowledge_embeddings: bool = True
     closers: list[Callable[[], Awaitable[None]]] = field(default_factory=list)
 
     async def readiness(self) -> dict[str, str]:
@@ -86,5 +91,7 @@ def build_services(settings: Settings) -> Services:
         gateway=gateway,
         readiness_checks={"redis": ping_redis, "mongodb": ping_mongo},
         jobs=CeleryJobQueue(celery, JobSignals(sync_redis)),
+        knowledge=MongoKnowledgeReader(database["knowledge_chunks"]),
+        knowledge_embeddings=settings.knowledge_embeddings_enabled,
         closers=[redis.aclose, mongo.close, close_sync_clients],
     )
