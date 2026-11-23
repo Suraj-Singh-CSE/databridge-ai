@@ -173,6 +173,19 @@ class Settings(BaseSettings):
     # Quality runs indexed per project (newest first); the latest gets one chunk per rule.
     knowledge_quality_runs: int = Field(default=5, ge=1, le=50)
 
+    # ---- project assistant: grounded answers (ADR 0025)
+    # Chunks retrieved and numbered in the prompt for each question.
+    assistant_top_k: int = Field(default=8, ge=1, le=20)
+    # Weak retrieval: refuse without a model call when no retrieved chunk holds at least this
+    # share of the question's words (stop words removed, stemmed).
+    assistant_min_term_overlap: float = Field(default=0.6, ge=0.0, le=1.0)
+    # Earlier turns of the conversation given to the model (questions and answers only).
+    assistant_history_turns: int = Field(default=4, ge=0, le=10)
+    assistant_temperature: float = Field(default=0.0, ge=0.0, le=1.0)
+    assistant_max_output_tokens: int = Field(default=1024, ge=256, le=8192)
+    # How long a project's staged personal values (the question guard) are kept in memory.
+    assistant_guard_cache_seconds: float = Field(default=60.0, ge=0, le=3600)
+
     @property
     def source_trust(self) -> tuple[str, ...]:
         """``survivorship_source_trust`` as a tuple of lower-case names."""

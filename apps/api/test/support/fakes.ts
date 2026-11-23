@@ -1,4 +1,9 @@
-import type { AiServiceClient, EnqueueJobInput } from '../../src/ai-service.client.js';
+import type {
+  AiServiceClient,
+  AskAssistantInput,
+  AssistantAnswer,
+  EnqueueJobInput,
+} from '../../src/ai-service.client.js';
 import { AiServiceError } from '../../src/ai-service.client.js';
 import type {
   JobEventBus,
@@ -10,7 +15,31 @@ import type {
 export class FakeAiService implements AiServiceClient {
   readonly enqueued: { input: EnqueueJobInput; requestId: string }[] = [];
   readonly cancelled: { jobId: string; requestId: string }[] = [];
+  readonly asked: { input: AskAssistantInput; requestId: string }[] = [];
   down = false;
+  /** The ai-service's error code to fail `askAssistant` with (e.g. `KNOWLEDGE_NOT_BUILT`). */
+  askError: { status: number; code: string } | null = null;
+  /** What `askAssistant` answers; by default a grounded answer citing one quality chunk. */
+  answer: (input: AskAssistantInput) => AssistantAnswer = () => ({
+    answer: 'The PIN code rule failed because some customers have no PIN code [1].',
+    citations: [
+      {
+        n: 1,
+        chunkId: 'quality:q1:completeness_optional:pin_code',
+        kind: 'quality',
+        title: 'Quality rule Optional field filled in of pin_code: fail',
+        link: { page: 'quality', params: { rule: 'completeness_optional:pin_code' } },
+      },
+    ],
+    confidence: 'high',
+    answerable: true,
+    refusalReason: null,
+    mode: 'hybrid',
+    model: 'mock',
+    latencyMs: 12,
+    redactions: 0,
+    invalidCitations: 0,
+  });
 
   async enqueueJob(input: EnqueueJobInput, requestId: string): Promise<void> {
     await Promise.resolve();
@@ -22,6 +51,16 @@ export class FakeAiService implements AiServiceClient {
     await Promise.resolve();
     if (this.down) throw new AiServiceError('ai-service unreachable');
     this.cancelled.push({ jobId, requestId });
+  }
+
+  async askAssistant(input: AskAssistantInput, requestId: string): Promise<AssistantAnswer> {
+    await Promise.resolve();
+    if (this.down) throw new AiServiceError('ai-service unreachable');
+    if (this.askError) {
+      throw new AiServiceError('ai-service answered', this.askError.status, this.askError.code);
+    }
+    this.asked.push({ input: structuredClone(input), requestId });
+    return this.answer(input);
   }
 }
 

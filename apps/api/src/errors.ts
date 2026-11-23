@@ -11,6 +11,8 @@ export type ErrorCode =
   | 'LIMIT_REACHED'
   | 'RATE_LIMITED'
   | 'QUEUE_UNAVAILABLE'
+  | 'KNOWLEDGE_NOT_BUILT'
+  | 'AI_SERVICE_UNAVAILABLE'
   | 'INTERNAL_ERROR';
 
 /**

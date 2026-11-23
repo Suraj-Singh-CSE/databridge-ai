@@ -59,6 +59,7 @@ export function createProjectService(
     | 'exports'
     | 'sqlVersions'
     | 'quality'
+    | 'assistant'
     | 'audit'
   >,
   audit: AuditService,
@@ -130,6 +131,7 @@ export function createProjectService(
       await repos.exports.deleteByProject(project.id);
       await repos.sqlVersions.deleteByProject(project.id);
       await repos.quality.deleteByProject(project.id);
+      await repos.assistant.deleteByProject(project.id);
       await repos.targetSchemas.deleteByProject(project.id);
       await repos.sources.deleteByProject(project.id);
       await repos.jobs.deleteByProject(project.id);

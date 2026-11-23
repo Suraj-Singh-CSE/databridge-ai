@@ -3,7 +3,9 @@ name: Live eval
 # Manual only: calls the real model (Gemini) on synthetic data only. Task "mapping": the committed
 # samples and the unseen-header holdout (ADR 0013). Task "pair_review": hard pairs of the seed 42,
 # 2027 and 2028 sets, as evidence without values (ADR 0017). Task "sql_agent": the SQL agent drafts
-# the customers query on the samples' golden records, schema and statistics only (ADR 0021). Never
+# the customers query on the samples' golden records, schema and statistics only (ADR 0021). Task
+# "embedding_retrieval": embeddings of the value-free knowledge index (ADR 0024). Task "assistant":
+# grounded answers from that index, keyword retrieval, value-free chunks only (ADR 0025). Never
 # runs on push or pull request;
 # regular CI uses the Mock provider. Needs the repository secret GEMINI_API_KEY.
 on:
@@ -12,7 +14,7 @@ on:
       task:
         description: What to evaluate
         type: choice
-        options: [mapping, pair_review, sql_agent, embedding_retrieval]
+        options: [mapping, pair_review, sql_agent, embedding_retrieval, assistant]
         default: mapping
       model:
         description: Gemini model name
@@ -25,7 +27,7 @@ on:
         default: gemini-embedding-001
         required: true
       max_calls:
-        description: Most provider calls this run may make, retries included (empty = 30 for mapping, 15 for pair_review, 12 for sql_agent, 20 for embedding_retrieval)
+        description: Most provider calls this run may make, retries included (empty = 30 for mapping, 15 for pair_review, 12 for sql_agent, 20 for embedding_retrieval, 40 for assistant)
         type: string
         default: ''
         required: false
@@ -107,7 +109,7 @@ jobs:
             --embedding-model "$EMBEDDING_MODEL" \
             --out "$RUNNER_TEMP/live-eval-report" || status=$?
           for report in live_mapping_report.md live_pair_review_report.md live_sql_agent_report.md \
-            live_retrieval_report.md; do
+            live_retrieval_report.md live_assistant_report.md; do
             if [ -f "$RUNNER_TEMP/live-eval-report/$report" ]; then
               cat "$RUNNER_TEMP/live-eval-report/$report" >> "$GITHUB_STEP_SUMMARY"
             fi

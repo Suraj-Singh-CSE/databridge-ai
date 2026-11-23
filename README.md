@@ -673,12 +673,49 @@ curl -s http://localhost:8080/api/v1/projects/$PROJECT/knowledge/summary \
   `docs`), `droppedByPrivacyGuard`, `maskedDocs`, `mode`, `embeddingModel`, `embedded` / `reused`
   (vectors kept for unchanged chunks), `embeddingError` (e.g. a quota code; the index is then
   keyword-only until the next run), `finishedAt`.
-- **Search** (internal; the public route comes with the assistant's answers): `{ projectId, query
+- **Search** (internal; the assistant below uses it): `{ projectId, query
 (1-500 chars), k (1-20, default 5), filters: { kinds, refs: { customerId, sourceId, column,
 ruleId, sqlVersionId, adr } } }`. The query is masked before it is searched or embedded.
 - **Settings**: `GEMINI_EMBEDDING_MODEL` (`gemini-embedding-001`), `EMBEDDING_DIMENSIONS` (768),
   `EMBEDDING_BATCH_SIZE` (32), `KNOWLEDGE_EMBEDDINGS_ENABLED`, `KNOWLEDGE_QUALITY_RUNS` (5),
   `KNOWLEDGE_DOCS_DIR` (the Docker image ships the README and ADRs in `/app/knowledge-docs`).
+
+**Project assistant** (answers; the chat screen comes with M6.3b). A member asks a question in
+plain words ("Why did PIN completeness fail?", "Who approved the SQL?") and gets a short answer
+built **only from the retrieved chunks**, with every claim citing a numbered source (`[1]`) that
+links to the page holding it. Otherwise it answers "I don't have enough information in this
+project to answer that.": when no retrieved chunk shares enough of the question's words (no
+model call), when the model says so, or when its answer has no valid citation. A question holding
+a customer's personal details (an email, a phone, a name of the project's records) is refused
+before retrieval with "Please ask without customer details — use a customer ID instead." and is
+never stored. Answers are scanned again for personal values. Design notes:
+[ADR 0025](docs/adr/0025-assistant.md).
+
+```bash
+curl -s -X POST http://localhost:8080/api/v1/projects/$PROJECT/assistant/ask \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"question":"Why did PIN completeness fail?"}' | jq '.data.turn | {answer, citations}'
+```
+
+| Method | Path                                               | Who                         | Answer                                                                    |
+| ------ | -------------------------------------------------- | --------------------------- | ------------------------------------------------------------------------- |
+| POST   | `/projects/:projectId/assistant/ask`               | members                     | 200 `{ conversationId, turn }`; `409 KNOWLEDGE_NOT_BUILT`; 429; 503       |
+| GET    | `/projects/:projectId/assistant/conversations`     | members (own only)          | 200 `{ items }` (`?limit=` 1-100, default 20; `turnCount`, no turns)      |
+| GET    | `/projects/:projectId/assistant/conversations/:id` | the conversation's owner    | 200 `{ conversation }` with its turns; anyone else 404                    |
+| DELETE | `/projects/:projectId/assistant/conversations/:id` | the conversation's owner    | 200 `{ deleted: true }` (audited `assistant_conversation.delete`)         |
+| GET    | `/projects/:projectId/assistant/usage`             | owner, admin, data_engineer | 200 `{ usage }`: questions, answered, refusals by reason, latency, tokens |
+| POST   | `/internal/v1/assistant/ask` (ai-service only)     | service token               | 200 answer, citations, confidence, answerable, refusalReason, mode, model |
+
+- **Ask**: `{ question (1-500 chars), conversationId? }`. A turn holds the question (null when
+  refused for personal data), `answer`, `citations` (`n`, `chunkId`, `kind`, `title`,
+  `link { page, params }`), `confidence` (`high` / `medium` / `low`), `answerable`,
+  `refusalReason` (`personal_data`, `weak_retrieval`, `not_answerable`, `no_citation` or null),
+  `mode`, `model`, `latencyMs`. Questions are rate-limited per user (`ASSISTANT_RATE_LIMIT_MAX`
+  per `ASSISTANT_RATE_LIMIT_WINDOW_MS`, in memory) and not audited; conversations keep their
+  newest `ASSISTANT_MAX_TURNS` turns.
+- **Settings** (ai-service): `ASSISTANT_TOP_K` (8), `ASSISTANT_MIN_TERM_OVERLAP` (0.6),
+  `ASSISTANT_HISTORY_TURNS` (4), `ASSISTANT_TEMPERATURE` (0), `ASSISTANT_MAX_OUTPUT_TOKENS`
+  (1024), `ASSISTANT_GUARD_CACHE_SECONDS` (60); (api) `ASSISTANT_TIMEOUT_MS` (30000).
 
 ## Web app
 
@@ -1053,6 +1090,20 @@ below keyword-only here; the live-eval workflow's `task=embedding_retrieval` mea
 Gemini embeddings on the same synthetic index (same metrics, tokens and latency). CI holds floors
 a little below these numbers (`eval/tests/test_evaluate_retrieval.py`).
 
+### Assistant answers
+
+`python -m dbeval.evaluate_assistant` asks the same project, through the real assistant code with
+the Mock provider, the 23 retrieval questions, 8 unanswerable ones (out of scope, or naming a
+person who is not in the project) and 5 holding a personal value of the samples:
+
+| Mode    | Answer rate | Refusal (unanswerable) | PII refusal | Groundedness | Citation accuracy | Values in prompts / answers |
+| ------- | ----------: | ---------------------: | ----------: | -----------: | ----------------: | --------------------------: |
+| keyword |        1.00 |                   1.00 |        1.00 |         1.00 |              0.83 |                       0 / 0 |
+| hybrid  |        1.00 |                   1.00 |        1.00 |         1.00 |              0.61 |                       0 / 0 |
+
+The Mock model cites the first two retrieved chunks, so citation accuracy follows retrieval; the
+live-eval workflow's `task=assistant` measures the real model (same metrics, tokens, latency).
+
 ## CI
 
 GitHub Actions (`.github/workflows/ci.yml`) runs on every pull request and on pushes to `main`:
@@ -1064,7 +1115,7 @@ GitHub Actions (`.github/workflows/ci.yml`) runs on every pull request and on pu
 - **eval**: the same checks for the ground-truth data generator in `eval/` ([eval/README](eval/README.md)).
 
 The **Live eval** workflow (`.github/workflows/live-eval.yml`, task `mapping`, `pair_review`,
-`sql_agent` or `embedding_retrieval`) is
+`sql_agent`, `embedding_retrieval` or `assistant`) is
 separate: manual only, never on push or pull request (see "Evaluating mapping accuracy").
 
 - **docker**: builds every image, starts the full stack with throwaway secrets, and smoke-tests the
@@ -1078,7 +1129,9 @@ separate: manual only, never on push or pull request (see "Evaluating mapping ac
   exports, the SQL agent (draft with all tests passing, approve, run), data quality checks (a
   report whose `latest` matches, `customer_id_unique` passing, a changed threshold applied on the
   next run), the project dashboard, the knowledge index (every chunk kind, nothing dropped by the
-  privacy guard, an internal search from the api container), that the AI service is not
+  privacy guard, an internal search from the api container), the project assistant (a cited
+  answer, refusals for an unanswerable question and for one holding a sample email, one stored
+  conversation), that the AI service is not
   reachable from the host, and that containers run as non-root. Then it runs the Playwright e2e
   tests against the stack and uploads screenshots (`web-screenshots`) and, on failure, the
   Playwright report (`playwright-report`).

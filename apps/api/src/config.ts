@@ -56,6 +56,13 @@ const envSchema = z
     AI_SERVICE_TOKEN: required().min(16, 'must be at least 16 characters'),
     // Timeout for one api -> ai-service call (enqueue or cancel a job).
     AI_SERVICE_TIMEOUT_MS: z.coerce.number().int().min(100).default(5000),
+    // Project assistant (ADR 0025): one answer may wait for the model, so a longer timeout.
+    ASSISTANT_TIMEOUT_MS: z.coerce.number().int().min(100).default(30_000),
+    // Questions per user per window (in memory, per api process; Redis at Gate 3).
+    ASSISTANT_RATE_LIMIT_MAX: positiveInt(20),
+    ASSISTANT_RATE_LIMIT_WINDOW_MS: z.coerce.number().int().min(1000).default(60_000),
+    // Turns kept per conversation (the oldest are dropped).
+    ASSISTANT_MAX_TURNS: positiveInt(50),
     CORS_ORIGIN: z.url({ error: 'is required and must be a valid URL' }),
     TRUST_PROXY: trustProxy,
     AUTH_RATE_LIMIT_MAX: z.coerce.number().int().min(1).default(20),

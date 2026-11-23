@@ -21,7 +21,9 @@ asks the SQL agent for the customers query on the samples (``live_sql_agent_eval
 default budget 12 calls; schema and statistics only in the prompt). ``--task
 embedding_retrieval`` embeds the samples' value-free knowledge index and the retrieval
 questions with ``--embedding-model`` (``live_retrieval_eval``, ADR 0024; default budget 20
-calls) and compares keyword-only and hybrid search.
+calls) and compares keyword-only and hybrid search. ``--task assistant`` asks the project
+assistant the answerable, unanswerable and personal-value questions (``live_assistant_eval``,
+ADR 0025; default budget 40 calls; value-free chunks only in the prompt).
 
 The key is read from the environment only and is never printed or written.
 """
@@ -68,8 +70,14 @@ from dbeval.evaluate_mapping import (
 from dbeval.loaders import read_csv, read_xlsx
 
 ProviderName = Literal["gemini", "mock"]
-TASKS = ("mapping", "pair_review", "sql_agent", "embedding_retrieval")
-DEFAULT_MAX_CALLS = {"mapping": 30, "pair_review": 15, "sql_agent": 12, "embedding_retrieval": 20}
+TASKS = ("mapping", "pair_review", "sql_agent", "embedding_retrieval", "assistant")
+DEFAULT_MAX_CALLS = {
+    "mapping": 30,
+    "pair_review": 15,
+    "sql_agent": 12,
+    "embedding_retrieval": 20,
+    "assistant": 40,
+}
 ThinkingLevel = Literal["", "minimal", "low", "medium", "high"]
 THINKING_LEVELS: tuple[ThinkingLevel, ...] = ("", "minimal", "low", "medium", "high")
 # A provider call cut off by the gateway's timeout ends in cancellation, not an LLMError.
@@ -428,7 +436,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         default=None,
         help=(
             "provider calls at most (retries count); default 30 for mapping, 15 for "
-            "pair_review, 12 for sql_agent, 20 for embedding_retrieval"
+            "pair_review, 12 for sql_agent, 20 for embedding_retrieval, 40 for assistant"
         ),
     )
     parser.add_argument(
@@ -508,6 +516,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         report = asyncio.run(retrieval.run(provider, settings, args.max_calls))
         summary = retrieval.markdown(report)
         names = (retrieval.REPORT_JSON, retrieval.REPORT_MD)
+    elif args.task == "assistant":
+        from dbeval import live_assistant_eval as assistant
+
+        report = asyncio.run(assistant.run(provider, settings, args.max_calls))
+        summary = assistant.markdown(report)
+        names = (assistant.REPORT_JSON, assistant.REPORT_MD)
     elif args.task == "sql_agent":
         from dbeval import live_sql_agent_eval as sql_live
 

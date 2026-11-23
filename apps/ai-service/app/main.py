@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import APIRouter, Depends, FastAPI
 
-from app.api import health, jobs, knowledge, llm
+from app.api import assistant, health, jobs, knowledge, llm
 from app.config import Settings, get_settings
 from app.errors import register_error_handlers
 from app.logging import configure_logging
@@ -50,5 +50,6 @@ def create_app(settings: Settings | None = None, services: Services | None = Non
     protected.include_router(llm.router)
     protected.include_router(jobs.router)
     protected.include_router(knowledge.router)
+    protected.include_router(assistant.router)
     app.include_router(protected)
     return app

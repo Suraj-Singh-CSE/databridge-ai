@@ -45,6 +45,7 @@ import { defineSqlSuite } from './support/sql-suite.js';
 import { defineScoresSuite } from './support/scores-suite.js';
 import { defineJobsSuite } from './support/jobs-suite.js';
 import { defineKnowledgeSuite } from './support/knowledge-suite.js';
+import { defineAssistantSuite } from './support/assistant-suite.js';
 import { defineMappingsSuite, suggested } from './support/mappings-suite.js';
 import { columnProfile, defineProfilesSuite } from './support/profiles-suite.js';
 import { defineSourcesSuite } from './support/sources-suite.js';
@@ -335,6 +336,40 @@ describe.skipIf(!available)('MongoDB', () => {
         projectId: new mongoose.Types.ObjectId(summary.projectId),
         jobId: new mongoose.Types.ObjectId(summary.jobId),
         removed: 0,
+      });
+    },
+  });
+  defineAssistantSuite('MongoDB repositories', {
+    ...mongoHarness,
+    async workerKnowledgeSummary(_repos, summary) {
+      await KnowledgeSummaryModel.collection.insertOne({
+        ...summary,
+        projectId: new mongoose.Types.ObjectId(summary.projectId),
+        jobId: new mongoose.Types.ObjectId(summary.jobId),
+      });
+    },
+    async workerLlmCall(_repos, call) {
+      // What apps/ai-service/app/llm/cost.py appends.
+      await LlmCallModel.collection.insertOne({
+        task: call.task,
+        provider: 'mock',
+        model: call.model,
+        prompt_version: 'assistant.v1',
+        input_tokens: call.inputTokens,
+        output_tokens: call.outputTokens,
+        cost_inr: call.costInr,
+        latency_ms: call.latencyMs,
+        cache_hit: call.cacheHit,
+        attempts: 1,
+        outcome: call.outcome,
+        error_type: null,
+        error_code: null,
+        error_status: null,
+        error_detail: null,
+        schema_fallback: false,
+        project_id: call.projectId,
+        request_id: null,
+        created_at: call.createdAt,
       });
     },
   });

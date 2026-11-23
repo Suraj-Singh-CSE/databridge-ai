@@ -63,6 +63,11 @@ class PrivacyGuard:
         """Whether a staged personal value occurs in ``text`` as whole words."""
         return bool(_found(text, self._values, first_only=True))
 
+    def values_in(self, text: str) -> list[str]:
+        """The staged personal values (name words included) occurring in ``text`` as whole
+        words. For redaction by the caller; never log what this returns."""
+        return _found(text, self._values)
+
     def holds_whole_value(self, text: str) -> bool:
         """Whether a complete staged value (not a single name word) occurs in ``text``."""
         return bool(_found(text, self._whole, first_only=True))

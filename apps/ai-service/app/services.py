@@ -8,7 +8,9 @@ from pymongo import AsyncMongoClient
 from redis import Redis as SyncRedis
 from redis.asyncio import Redis
 
+from app.assistant.guard import MongoStagedValues, StagedValues, ordinary_words
 from app.config import Settings
+from app.knowledge.docs import docs_root, load_docs
 from app.knowledge.search import KnowledgeReader, MongoKnowledgeReader
 from app.llm.cache import RedisCache
 from app.llm.cost import MongoCostLogger
@@ -35,6 +37,11 @@ class Services:
     knowledge: KnowledgeReader | None = None
     # false: search is keyword-only (KNOWLEDGE_EMBEDDINGS_ENABLED).
     knowledge_embeddings: bool = True
+    # The project's staged personal values for the assistant's question guard (ADR 0025);
+    # None: the assistant answers 503.
+    staged_values: StagedValues | None = None
+    # Words the docs write in lower case: not treated as names by the question guard.
+    ordinary_words: frozenset[str] = frozenset()
     closers: list[Callable[[], Awaitable[None]]] = field(default_factory=list)
 
     async def readiness(self) -> dict[str, str]:
@@ -93,5 +100,11 @@ def build_services(settings: Settings) -> Services:
         jobs=CeleryJobQueue(celery, JobSignals(sync_redis)),
         knowledge=MongoKnowledgeReader(database["knowledge_chunks"]),
         knowledge_embeddings=settings.knowledge_embeddings_enabled,
+        staged_values=MongoStagedValues(
+            database["target_schemas"],
+            database["staged_records"],
+            settings.assistant_guard_cache_seconds,
+        ),
+        ordinary_words=ordinary_words(load_docs(docs_root(settings.knowledge_docs_dir))),
         closers=[redis.aclose, mongo.close, close_sync_clients],
     )
