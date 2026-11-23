@@ -729,6 +729,28 @@ jobs:
           test "$code" = 400
           echo "ok: quality checked, latest report matches, a changed threshold applied on the next run"
 
+          # Dashboard (ADR 0023): its counts agree with the other endpoints. Only counts are printed.
+          curl -sS --fail-with-body "$api/projects/$project/dashboard?range=7d" -H "$auth" > /tmp/dashboard
+          curl -sS --fail-with-body "$clusters/summary" -H "$auth" > /tmp/clusters-now
+          curl -sS --fail-with-body "$quality/latest" -H "$auth" > /tmp/quality-now
+          jq -c '.data | {sources: .pipeline.sources.count, customers: .pipeline.clusters.customers,
+            approved: .pipeline.clusters.approved, sql: .pipeline.sql.latest.status,
+            quality: .pipeline.quality.latest.status, aiCalls: .ai.total.calls,
+            qualityRuns: (.quality.runs | length), decisions: .review.total,
+            jobs: ([.jobs.byType[].total] | add), nextStep: .pipeline.nextStep.step}' /tmp/dashboard
+          jq -e --slurpfile c /tmp/clusters-now --slurpfile q /tmp/quality-now '.data
+            | .pipeline.clusters.customers == $c[0].data.summary.clusterCount
+            and .pipeline.clusters.approved == $c[0].data.review.approvedCount
+            and .pipeline.clusters.outdated == $c[0].data.outdated
+            and .pipeline.quality.latest.status == $q[0].data.run.status
+            and .pipeline.sql.approvedVersion != null
+            and .ai.total.calls >= 0 and (.quality.runs | length) >= 2
+            and .review.byType.sql_approve >= 1 and .review.byType.match_approve >= 1
+            and all(.benchmarks.items[]; .dataset == "synthetic")' /tmp/dashboard > /dev/null
+          code=$(curl -s -o /dev/null -w '%{http_code}' "$api/projects/$project/dashboard?range=1y" -H "$auth")
+          test "$code" = 400
+          echo "ok: dashboard counts match the clusters, quality and SQL endpoints"
+
       - name: AI service is not published to the host
         run: |
           if curl -s --max-time 3 http://localhost:8000/internal/v1/health; then

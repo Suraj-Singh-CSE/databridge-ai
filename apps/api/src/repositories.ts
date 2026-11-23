@@ -1,4 +1,6 @@
 import { createMongoAuditRepository } from './modules/audit/audit.repository.js';
+import { createMongoDashboardRepository } from './modules/dashboard/dashboard.repository.js';
+import type { DashboardRepository } from './modules/dashboard/dashboard.types.js';
 import { createMongoExportRepository } from './modules/exports/export.repository.js';
 import type { ExportRepository } from './modules/exports/export.types.js';
 import { createMongoClusterRepository } from './modules/clusters/cluster.repository.js';
@@ -55,6 +57,8 @@ export interface Repositories {
   /** Data quality reports and rule overrides (ADR 0022). */
   quality: QualityRepository;
   audit: AuditRepository;
+  /** Read-only aggregates across the modules' collections and `llm_calls` (ADR 0023). */
+  dashboard: DashboardRepository;
 }
 
 export function createMongoRepositories(): Repositories {
@@ -76,5 +80,6 @@ export function createMongoRepositories(): Repositories {
     sqlVersions: createMongoSqlVersionRepository(),
     quality: createMongoQualityRepository(),
     audit: createMongoAuditRepository(),
+    dashboard: createMongoDashboardRepository(),
   };
 }

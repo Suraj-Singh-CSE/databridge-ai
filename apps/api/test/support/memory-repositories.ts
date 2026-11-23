@@ -7,7 +7,16 @@ import type {
   CandidateRepository,
   CandidateSummary,
 } from '../../src/modules/candidates/candidate.types.js';
-import type { Job, JobRepository } from '../../src/modules/jobs/job.types.js';
+import type {
+  AuditCount,
+  DashboardRepository,
+  JobCount,
+  LlmCall,
+  LlmDay,
+  LlmErrorCount,
+  LlmTaskTotals,
+} from '../../src/modules/dashboard/dashboard.types.js';
+import type { Job, JobRepository, JobType } from '../../src/modules/jobs/job.types.js';
 import type {
   MappingDecision,
   MappingRepository,
@@ -119,6 +128,8 @@ export interface MemoryRepositories extends Repositories {
   exports: ExportRepository & { workerSave(record: ExportRecord): void };
   sqlVersions: SqlVersionRepository & { workerSave(version: SqlVersion): void };
   quality: QualityRepository & { workerSave(run: QualityRun): void };
+  /** `workerLlmCall`: what the ai-service LLM gateway appends to `llm_calls`. */
+  dashboard: DashboardRepository & { workerLlmCall(call: LlmCall): void };
 }
 
 /**
@@ -177,6 +188,7 @@ export function createMemoryRepositories(): MemoryRepositories {
       .filter((r) => r.projectId === projectId)
       .sort((a, b) => b.startedAt.getTime() - a.startedAt.getTime() || (a.id < b.id ? 1 : -1));
   const audit: AuditEntry[] = [];
+  const llmCalls: LlmCall[] = [];
   let firstAdminClaimed = false;
 
   const publicUser = ({ passwordHash: _hash, ...user }: User & { passwordHash: string }): User =>
@@ -970,6 +982,169 @@ export function createMemoryRepositories(): MemoryRepositories {
           limit,
           total: entries.length,
         };
+      },
+    },
+    dashboard: {
+      async mappingBySource(projectId) {
+        await Promise.resolve();
+        return [...suggestions.entries()]
+          .filter(([key, stored]) => key.startsWith(`${projectId}/`) && stored.length > 0)
+          .map(([key, stored]) => {
+            const sourceId = key.slice(projectId.length + 1);
+            return {
+              sourceId,
+              columns: stored.length,
+              decisions: decisions.get(key)?.size ?? 0,
+              schemaVersion: Math.max(...stored.map((s) => s.run.schemaVersion)),
+              rulesOnly: stored.some((s) => s.run.method === 'rules'),
+            };
+          });
+      },
+      async mappingDecisionLagsMs(projectId, since) {
+        await Promise.resolve();
+        const lags: number[] = [];
+        for (const [key, byColumn] of decisions) {
+          if (!key.startsWith(`${projectId}/`)) continue;
+          const stored = suggestions.get(key) ?? [];
+          for (const d of byColumn.values()) {
+            const made = stored.find((s) => s.column === d.column)?.run.createdAt;
+            const ms = made ? d.decidedAt.getTime() - made.getTime() : -1;
+            if (d.decidedAt >= since && ms >= 0) lags.push(ms);
+          }
+        }
+        return lags.sort((a, b) => a - b);
+      },
+      async countExports(projectId) {
+        await Promise.resolve();
+        return [...exportRecords.values()].filter((e) => e.projectId === projectId).length;
+      },
+      async auditCounts(projectId, since, actions) {
+        await Promise.resolve();
+        const counts = new Map<string, AuditCount>();
+        for (const e of audit) {
+          if (e.projectId !== projectId || e.createdAt < since || !actions.includes(e.action)) {
+            continue;
+          }
+          const raw = e.action === 'mapping.decide' ? e.after?.decision : null;
+          const decision = typeof raw === 'string' ? raw : null;
+          const key = `${e.action}|${decision ?? ''}|${e.actorId}`;
+          const found = counts.get(key);
+          if (found) found.count += 1;
+          else counts.set(key, { action: e.action, decision, actorId: e.actorId, count: 1 });
+        }
+        return [...counts.values()];
+      },
+      async jobStats(projectId, since) {
+        await Promise.resolve();
+        const inRange = [...jobs.values()].filter(
+          (j) => j.projectId === projectId && j.createdAt >= since,
+        );
+        const counts = new Map<string, JobCount>();
+        const durations = new Map<JobType, number[]>();
+        for (const j of inRange) {
+          const errorCode = j.error?.code ?? null;
+          const key = `${j.type}|${j.status}|${errorCode ?? ''}`;
+          const found = counts.get(key);
+          if (found) found.count += 1;
+          else counts.set(key, { type: j.type, status: j.status, errorCode, count: 1 });
+          if (j.status === 'succeeded' && j.startedAt && j.finishedAt) {
+            const list = durations.get(j.type) ?? [];
+            list.push(j.finishedAt.getTime() - j.startedAt.getTime());
+            durations.set(j.type, list);
+          }
+        }
+        const failures = inRange
+          .filter((j) => j.status === 'failed')
+          .map((j) => ({
+            type: j.type,
+            code: j.error?.code ?? null,
+            at: j.finishedAt ?? j.updatedAt,
+          }))
+          .sort((a, b) => b.at.getTime() - a.at.getTime())
+          .slice(0, 5);
+        return {
+          counts: [...counts.values()],
+          durations: [...durations].map(([type, ms]) => ({
+            type,
+            durationsMs: ms.sort((a, b) => a - b),
+          })),
+          failures,
+        };
+      },
+      async llmStats(projectId, since) {
+        await Promise.resolve();
+        const calls = llmCalls.filter((c) => c.projectId === projectId && c.createdAt >= since);
+        const tasks = new Map<string, LlmTaskTotals>();
+        const errors = new Map<string, LlmErrorCount>();
+        const days = new Map<string, LlmDay>();
+        for (const c of calls) {
+          const t = tasks.get(c.task) ?? {
+            task: c.task,
+            calls: 0,
+            ok: 0,
+            cacheHits: 0,
+            schemaFallbacks: 0,
+            inputTokens: 0,
+            outputTokens: 0,
+            costInr: 0,
+            models: [],
+            latenciesMs: [],
+          };
+          t.calls += 1;
+          t.ok += c.outcome === 'ok' ? 1 : 0;
+          t.cacheHits += c.cacheHit ? 1 : 0;
+          t.schemaFallbacks += c.schemaFallback ? 1 : 0;
+          t.inputTokens += c.inputTokens;
+          t.outputTokens += c.outputTokens;
+          t.costInr += c.costInr;
+          if (!t.models.includes(c.model)) t.models.push(c.model);
+          if (c.outcome === 'ok' && !c.cacheHit) t.latenciesMs.push(c.latencyMs);
+          tasks.set(c.task, t);
+          if (c.outcome === 'error') {
+            const key = `${c.task}|${c.errorStatus ?? ''}|${c.errorCode ?? ''}|${c.errorType ?? ''}`;
+            const e = errors.get(key) ?? {
+              task: c.task,
+              status: c.errorStatus,
+              httpCode: c.errorCode,
+              errorType: c.errorType,
+              count: 0,
+            };
+            e.count += 1;
+            errors.set(key, e);
+          }
+          const date = c.createdAt.toISOString().slice(0, 10);
+          const d = days.get(date) ?? { date, calls: 0, tokens: 0, costInr: 0 };
+          d.calls += 1;
+          d.tokens += c.inputTokens + c.outputTokens;
+          d.costInr += c.costInr;
+          days.set(date, d);
+        }
+        return {
+          tasks: [...tasks.values()].map((t) => ({
+            ...t,
+            models: t.models.sort(),
+            latenciesMs: t.latenciesMs.sort((a, b) => a - b),
+          })),
+          errors: [...errors.values()],
+          days: [...days.values()],
+        };
+      },
+      async qualitySeries(projectId, since, limit) {
+        await Promise.resolve();
+        return runsOf(projectId)
+          .filter((r) => r.startedAt >= since)
+          .slice(0, limit)
+          .reverse()
+          .map((r) => ({
+            at: r.startedAt,
+            status: r.status,
+            pass: r.statusCounts.pass,
+            warn: r.statusCounts.warn,
+            fail: r.statusCounts.fail,
+          }));
+      },
+      workerLlmCall(call) {
+        llmCalls.push(structuredClone(call));
       },
     },
   };

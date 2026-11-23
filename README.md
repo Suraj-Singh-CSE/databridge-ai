@@ -535,6 +535,39 @@ curl -s -X PUT http://localhost:8080/api/v1/projects/$PROJECT/quality/rules \
   `SQL_RUN_FAILED` when the approved SQL no longer runs, `QUALITY_RULES_INVALID` for bad stored
   rules. The newest `QUALITY_HISTORY_LIMIT` (50) reports per project are kept.
 
+**Project dashboard** (one call, counts only). `GET /projects/:projectId/dashboard?range=7d|30d|90d`
+(default `30d`; any member, viewers included; `404` for non-members, `400` for another range)
+answers where the project stands and what the AI and the reviewers did. It never holds a record
+value: counts, statuses, durations, token and cost totals, rule labels and source names only.
+Design notes: [ADR 0023](docs/adr/0023-dashboard.md).
+
+```bash
+curl -s "http://localhost:8080/api/v1/projects/$PROJECT/dashboard?range=7d" \
+  -H "Authorization: Bearer $TOKEN" | jq '.data.pipeline.nextStep'
+```
+
+- **`pipeline`** (current state, not range-bound): sources by status and rows uploaded, mapped
+  columns decided / pending, standardised rows, candidate pairs, scored pairs by band, AI-reviewed
+  pairs, customers, multi-record customers, records merged, needs review, approved / proposed,
+  latest SQL version, exports, latest quality status; an `outdated` flag wherever the module has
+  one; `nextStep` (`{ text, step }`, e.g. "Approve the mapping for billing_export.xlsx" → `mapping`).
+- **`quality`**: each report in the range (time, overall status, pass / warn / fail counts) and
+  the latest report's per-rule status.
+- **`ai`**: from `llm_calls` in the range, per task (`column_mapping`, `pair_review`,
+  `sql_agent`) and in total: calls, ok / failed by provider status and HTTP code, cache hits,
+  schema fallbacks, input / output tokens, cost in INR (`costLabel: "free tier"` when 0), latency
+  p50 / p95 of successful provider calls, models; a daily series; and fallbacks to the
+  deterministic path counted from the modules (mapping on rules, reference SQL, unavailable
+  reviews).
+- **`review`**: people's decisions in the range from the audit log, by type and by project role
+  (never names), and the median time from suggestion to decision for mappings, customer approvals
+  and SQL versions.
+- **`jobs`**: per job type in the range: total, succeeded, failed by error code, cancelled,
+  active, median and p95 duration; the last 5 failures (type, code, time).
+- **`benchmarks`**: offline evaluation results quoted from the ADRs, each with `dataset:
+"synthetic"`, `source` (the ADR) and `measuredOn`; a unit test fails when an ADR and the numbers
+  disagree.
+
 | Method | Path (under `/projects/:projectId/sql`) | Who                         | Result                                                   |
 | ------ | --------------------------------------- | --------------------------- | -------------------------------------------------------- |
 | GET    | `/versions?limit=`                      | any member                  | 200 `{ items }` newest first, without the query text     |

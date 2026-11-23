@@ -12,8 +12,11 @@ import {
   ClusterSummaryModel,
   GoldenRecordModel,
 } from '../src/modules/clusters/cluster.model.js';
+import { LlmCallModel } from '../src/modules/dashboard/llm-call.model.js';
 import { ExportModel } from '../src/modules/exports/export.model.js';
+import type { ExportRecord } from '../src/modules/exports/export.types.js';
 import { QualityRunModel } from '../src/modules/quality/quality.model.js';
+import type { QualityRun } from '../src/modules/quality/quality.types.js';
 import type { SqlVersion } from '../src/modules/sql/sql.types.js';
 import { SqlVersionModel } from '../src/modules/sql/sql.model.js';
 import { JobModel } from '../src/modules/jobs/job.model.js';
@@ -34,6 +37,7 @@ import { createMongoRepositories } from '../src/repositories.js';
 import { defineApiSuite } from './support/api-suite.js';
 import { defineCandidatesSuite } from './support/candidates-suite.js';
 import { defineClustersSuite } from './support/clusters-suite.js';
+import { defineDashboardSuite } from './support/dashboard-suite.js';
 import { defineExportsSuite } from './support/exports-suite.js';
 import { defineQualitySuite } from './support/quality-suite.js';
 import { defineSqlSuite } from './support/sql-suite.js';
@@ -244,23 +248,20 @@ describe.skipIf(!available)('MongoDB', () => {
     },
   };
   defineClustersSuite('MongoDB repositories', mongoClusters);
-  defineExportsSuite('MongoDB repositories', {
-    ...mongoClusters,
-    async workerExport(_repos, { id, ...record }) {
-      // What apps/ai-service/app/export/store.py writes: _id = the job id.
-      const oid = (value: string) => new mongoose.Types.ObjectId(value);
-      await ExportModel.collection.insertOne({
-        ...record,
-        _id: oid(id),
-        projectId: oid(record.projectId),
-        jobId: oid(record.jobId),
-        createdBy: record.createdBy ? oid(record.createdBy) : null,
-      });
-    },
-  });
-
   const oid = (value: string) => new mongoose.Types.ObjectId(value);
   const optional = (value: string | null) => (value ? oid(value) : null);
+  async function workerExport(_repos: unknown, { id, ...record }: ExportRecord) {
+    // What apps/ai-service/app/export/store.py writes: _id = the job id.
+    await ExportModel.collection.insertOne({
+      ...record,
+      _id: oid(id),
+      projectId: oid(record.projectId),
+      jobId: oid(record.jobId),
+      createdBy: optional(record.createdBy),
+    });
+  }
+  defineExportsSuite('MongoDB repositories', { ...mongoClusters, workerExport });
+
   async function workerSqlVersion(_repos: unknown, { id, ...version }: SqlVersion) {
     // What apps/ai-service/app/sql/store.py writes: _id = the sql_draft job id.
     await SqlVersionModel.collection.insertOne({
@@ -274,18 +275,52 @@ describe.skipIf(!available)('MongoDB', () => {
     });
   }
   defineSqlSuite('MongoDB repositories', { ...mongoClusters, workerSqlVersion });
+  async function workerQualityRun(_repos: unknown, { id, ...run }: QualityRun) {
+    // What apps/ai-service/app/quality/store.py writes: _id = the quality job id.
+    await QualityRunModel.collection.insertOne({
+      ...run,
+      _id: oid(id),
+      projectId: oid(run.projectId),
+      jobId: oid(run.jobId),
+      source: { ...run.source, versionId: optional(run.source.versionId) },
+      createdBy: optional(run.createdBy),
+    });
+  }
   defineQualitySuite('MongoDB repositories', {
     ...mongoClusters,
     workerSqlVersion,
-    async workerQualityRun(_repos, { id, ...run }) {
-      // What apps/ai-service/app/quality/store.py writes: _id = the quality job id.
-      await QualityRunModel.collection.insertOne({
-        ...run,
-        _id: oid(id),
-        projectId: oid(run.projectId),
-        jobId: oid(run.jobId),
-        source: { ...run.source, versionId: optional(run.source.versionId) },
-        createdBy: optional(run.createdBy),
+    workerQualityRun,
+  });
+  defineDashboardSuite('MongoDB repositories', {
+    ...mongoClusters,
+    workerSqlVersion,
+    workerQualityRun,
+    workerExport,
+    async workerUpdate(_repos, jobId, patch) {
+      await JobModel.updateOne({ _id: jobId }, { $set: patch });
+    },
+    async workerLlmCall(_repos, call) {
+      // What apps/ai-service/app/llm/cost.py (LLMCallRecord.model_dump()) appends.
+      await LlmCallModel.collection.insertOne({
+        task: call.task,
+        provider: call.model === 'mock' ? 'mock' : 'gemini',
+        model: call.model,
+        prompt_version: 'v1',
+        input_tokens: call.inputTokens,
+        output_tokens: call.outputTokens,
+        cost_inr: call.costInr,
+        latency_ms: call.latencyMs,
+        cache_hit: call.cacheHit,
+        attempts: 1,
+        outcome: call.outcome,
+        error_type: call.errorType,
+        error_code: call.errorCode,
+        error_status: call.errorStatus,
+        error_detail: call.outcome === 'error' ? 'The model is overloaded.' : null,
+        schema_fallback: call.schemaFallback,
+        project_id: call.projectId,
+        request_id: null,
+        created_at: call.createdAt,
       });
     },
   });
