@@ -2,6 +2,7 @@ import { defineApiSuite } from './support/api-suite.js';
 import { defineCandidatesSuite } from './support/candidates-suite.js';
 import { defineClustersSuite } from './support/clusters-suite.js';
 import { defineExportsSuite } from './support/exports-suite.js';
+import { defineQualitySuite } from './support/quality-suite.js';
 import { defineSqlSuite } from './support/sql-suite.js';
 import { defineScoresSuite } from './support/scores-suite.js';
 import { defineJobsSuite } from './support/jobs-suite.js';
@@ -100,5 +101,16 @@ defineSqlSuite('in-memory repositories', {
   async workerSqlVersion(repos, version) {
     await Promise.resolve();
     (repos as MemoryRepositories).sqlVersions.workerSave(version);
+  },
+});
+defineQualitySuite('in-memory repositories', {
+  ...memoryClusters,
+  async workerSqlVersion(repos, version) {
+    await Promise.resolve();
+    (repos as MemoryRepositories).sqlVersions.workerSave(version);
+  },
+  async workerQualityRun(repos, run) {
+    await Promise.resolve();
+    (repos as MemoryRepositories).quality.workerSave(run);
   },
 });

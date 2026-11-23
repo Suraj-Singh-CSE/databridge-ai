@@ -64,6 +64,16 @@ tuned on; it has no threshold, and must never be used to tune the rules. The tab
 runs the real model through the gateway on both sets (manual workflow only;
 [ADR 0013](../docs/adr/0013-mapping-evaluation-and-holdout.md)); `--provider mock` is a dry run.
 
+## Data quality
+
+`python -m dbeval.evaluate_quality [--data eval/samples]` builds the final customer table with
+the pure pipeline (golden records, reference query in the SQL sandbox), runs the quality rules
+on it and on `answers/golden_records.csv` (which must pass every rule: no false alarms), then
+injects known faults into a copy (blank 10% of emails, break 5 phones, duplicate 3 customer
+ids, 4 impossible birth dates, 5 cities in the wrong PIN region) and reports detection precision
+and recall per fault. `tests/test_evaluate_quality.py` requires 100% for both
+([ADR 0022](../docs/adr/0022-data-quality.md)).
+
 ## What it writes
 
 | File                          | What                                                                                                                                                |

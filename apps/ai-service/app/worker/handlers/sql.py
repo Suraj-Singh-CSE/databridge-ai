@@ -79,7 +79,7 @@ class _Loaded:
     schema_version: int | None
 
 
-class _SqlJob:
+class SqlJob:
     def __init__(self, store: SqlStore, settings: SqlSettings) -> None:
         self._store = store
         self._settings = settings
@@ -164,7 +164,7 @@ class _SqlJob:
             raise JobCancelledError(ctx.job_id)
 
 
-class SqlDraftHandler(_SqlJob):
+class SqlDraftHandler(SqlJob):
     def __init__(
         self, store: SqlStore, gateway: GatewayFactory | None, settings: SqlSettings
     ) -> None:
@@ -267,7 +267,7 @@ class SqlDraftHandler(_SqlJob):
         return asyncio.run(run())
 
 
-class SqlRunHandler(_SqlJob):
+class SqlRunHandler(SqlJob):
     def __call__(self, ctx: JobContext, payload: SqlRunPayload) -> JobResult:
         version = self._store.version_of(ctx.project_id, payload.version_id)
         if version is None:

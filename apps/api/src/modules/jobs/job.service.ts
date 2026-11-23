@@ -136,6 +136,14 @@ const SQL = {
   notApproved: 'Only an approved SQL version can be run. Approve it first.',
 };
 
+const QUALITY = {
+  outdated: EXPORT.outdated,
+  clustering: 'Clusters are being built. Wait for that job to finish, then check the quality.',
+  busy: 'A quality check is already running. Wait for that job to finish, or cancel it first.',
+  nothingApproved:
+    'There is no approved SQL version and no approved customer yet. Approve customers in Match Review or approve an SQL version first.',
+};
+
 function pendingMessage(count: number): string {
   const noun = count === 1 ? 'column still needs' : 'columns still need';
   return `${count} ${noun} a decision. Accept, reject or change every column's mapping first.`;
@@ -421,6 +429,33 @@ export function createJobService({
   }
 
   /**
+   * `quality` checks the final table built from the current clusters (CLUSTERS_NOT_RUN,
+   * CLUSTERS_OUTDATED, CLUSTERING_RUNNING), one check at a time (QUALITY_RUNNING). Without an
+   * approved SQL version the approved golden records are checked, so at least one customer must
+   * be approved (NOTHING_APPROVED). The worker checks again.
+   */
+  async function checkQualityJob(project: Project) {
+    const { summary, outdated } = await currentClusters(repos, project);
+    if (outdated) throw AppError.conflict(QUALITY.outdated, { reason: 'CLUSTERS_OUTDATED' });
+    if (await isActive(project, 'clustering')) {
+      throw AppError.conflict(QUALITY.clustering, { reason: 'CLUSTERING_RUNNING' });
+    }
+    if (await isActive(project, 'quality')) {
+      throw AppError.conflict(QUALITY.busy, { reason: 'QUALITY_RUNNING' });
+    }
+    if (await repos.sqlVersions.findApproved(project.id)) return;
+    const approvals = await repos.review.listApprovals(project.id);
+    const approved = await repos.clusters.countWithIds(
+      project.id,
+      summary.runId,
+      approvals.map((a) => a.customerId),
+    );
+    if (approved === 0) {
+      throw AppError.conflict(QUALITY.nothingApproved, { reason: 'NOTHING_APPROVED' });
+    }
+  }
+
+  /**
    * Source jobs need a source of this project (404 otherwise) that no other job of the same
    * type is working on (409). Mapping and standardise also need the source profiled (409);
    * mapping needs the project's target schema stored, standardise a fully reviewed mapping.
@@ -456,6 +491,7 @@ export function createJobService({
       if (type === 'export') await checkExportJob(project, payload);
       if (type === 'sql_draft') await checkSqlDraftJob(project, payload);
       if (type === 'sql_run') await checkSqlRunJob(project, payload);
+      if (type === 'quality') await checkQualityJob(project);
       const job = await repos.jobs.create({
         projectId: project.id,
         type,

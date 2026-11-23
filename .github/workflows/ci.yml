@@ -692,6 +692,43 @@ jobs:
           test "$code" = 400
           echo "ok: SQL drafted, all tests passed, approved and run against the current data"
 
+          # Data quality (ADR 0022): check the approved SQL's table, then change a threshold and
+          # check again to see it applied. Only statuses, counts and thresholds are printed.
+          quality="$api/projects/$project/quality"
+          run_quality() {
+            local job
+            job=$(curl -sS --fail-with-body -X POST "$api/projects/$project/jobs" -H "$auth" \
+              -H 'Content-Type: application/json' -d '{"type":"quality","payload":{}}' | jq -r '.data.job.id') || return 1
+            curl -sSN --fail --max-time 120 "$api/jobs/$job/events" -H "$auth" | sed -n 's/^data: //p' > "/tmp/quality-$job" || return 1
+            echo "quality job $job: $(jq -s -c 'last | {status, result: (.result | {status, source, rowCount, ruleCount, statusCounts})}' "/tmp/quality-$job")" >&2
+            jq -s -e 'last | .status == "succeeded" and (.result.status | IN("pass", "warn", "fail"))
+              and .result.ruleCount > 0 and .result.source == "sql_version"' "/tmp/quality-$job" > /dev/null || return 1
+            echo "$job"
+          }
+          first=$(run_quality)
+          curl -sS --fail-with-body "$quality/latest" -H "$auth" > /tmp/quality-latest
+          jq -c '.data.run | {status, rowCount, ruleCount, statusCounts, results: [.results[] | {rule, field, status}]}' /tmp/quality-latest
+          jq -e --arg id "$first" '.data.run.id == $id and .data.run.ruleCount > 0
+            and (.data.run.results | any(.rule == "customer_id_unique" and .status == "pass"))
+            and all(.data.run.results[]; (.exampleIds | length) <= 10)' /tmp/quality-latest > /dev/null
+          curl -sS --fail-with-body "$quality/runs" -H "$auth" | jq -e --arg id "$first" \
+            '.data.total >= 1 and .data.items[0].id == $id and all(.data.items[]; has("results") | not)' > /dev/null
+          curl -sS --fail-with-body -X PUT "$quality/rules" -H "$auth" -H 'Content-Type: application/json' \
+            -d '{"rules":{"validity":{"warn":100,"fail":100}},"fields":{"email":{"warn":100,"fail":null}}}' \
+            | jq -e '.data.rules.rules.validity.warn == 100' > /dev/null
+          second=$(run_quality)
+          curl -sS --fail-with-body "$quality/runs/$second" -H "$auth" > /tmp/quality-second
+          jq -c '.data.run | {status, thresholds: [.results[] | select(.rule == "validity" and .status != "skipped") | .threshold] | unique}' /tmp/quality-second
+          jq -e '.data.run.config.rules.validity == {"enabled": true, "warn": 100, "fail": 100}
+            and all(.data.run.results[] | select(.rule == "validity" and .status != "skipped"); .threshold == {"warn": 100, "fail": 100})
+            and (.data.run.results | any(.rule == "completeness_optional" and .field == "email" and .threshold.fail == null))' \
+            /tmp/quality-second > /dev/null
+          curl -sS --fail-with-body "$quality/latest" -H "$auth" | jq -e --arg id "$second" '.data.run.id == $id' > /dev/null
+          code=$(curl -s -o /dev/null -w '%{http_code}' -X PUT "$quality/rules" -H "$auth" \
+            -H 'Content-Type: application/json' -d '{"rules":{"customer_id_unique":{"enabled":false}}}')
+          test "$code" = 400
+          echo "ok: quality checked, latest report matches, a changed threshold applied on the next run"
+
       - name: AI service is not published to the host
         run: |
           if curl -s --max-time 3 http://localhost:8000/internal/v1/health; then

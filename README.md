@@ -498,6 +498,43 @@ curl -s -X POST http://localhost:8080/api/v1/projects/$PROJECT/jobs \
   `SQL_DRAFT_RUNNING`, `SQL_VERSION_NOT_APPROVED`. Instructions that look like personal data fail
   the job with `INSTRUCTIONS_CONTAIN_PII` (they would be sent to the model).
 
+**Data quality checks** (on the final customer table). A `quality` job builds the table with the
+project's approved SQL version in the same sandbox (without one: the approved customers' golden
+records, labelled `source.kind: "golden_records"`), runs the rules and stores a report. No LLM is
+involved. Design notes: [ADR 0022](docs/adr/0022-data-quality.md).
+
+```bash
+curl -s -X POST http://localhost:8080/api/v1/projects/$PROJECT/jobs \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"type":"quality","payload":{}}'
+curl -s http://localhost:8080/api/v1/projects/$PROJECT/quality/latest -H "Authorization: Bearer $TOKEN"
+curl -s -X PUT http://localhost:8080/api/v1/projects/$PROJECT/quality/rules \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"rules":{"validity":{"warn":99.5,"fail":97}},"fields":{"email":{"warn":90}}}'
+```
+
+| Method | Path (under `/api/v1/projects/:projectId/quality`) | Who                         | Answer                                        |
+| ------ | -------------------------------------------------- | --------------------------- | --------------------------------------------- |
+| GET    | `/runs?page&limit`                                 | members                     | 200 page of reports, newest first, no results |
+| GET    | `/runs/:runId`                                     | members                     | 200 `{ run }` with every rule result          |
+| GET    | `/latest`                                          | members                     | 200 `{ run }` (`null` before the first check) |
+| GET    | `/rules`                                           | members                     | 200 `{ rules }`: overrides and the catalogue  |
+| PUT    | `/rules`                                           | owner, admin, data_engineer | 200 `{ rules }`; audited                      |
+
+- **Rules** (each: metric, `pass` / `warn` / `fail` / `skipped`, counts, up to 10 example
+  customer ids, never values): completeness per field (required fields 100% / 99%, optional 80% /
+  50%), validity with the standardiser's cleaners (E.164 Indian mobile, email, 6-digit PIN,
+  `YYYY-MM-DD` dates, birth date not in the future and age at most 120, names with letters),
+  `customer_id_unique` (always 100%), customers sharing a phone or email (warn above 2%), city vs
+  PIN region (a small zone table; unknown cities skipped and counted), freshness of the clusters
+  and of the approved SQL's last run (`QUALITY_FRESHNESS_*`), and row count change since the
+  previous check (`QUALITY_ROW_CHANGE_WARN_PERCENT`). The overall status is the worst rule.
+- **Start** (`quality`): owner, admin, data_engineer, data_steward. `409` (`details.reason`):
+  `CLUSTERS_NOT_RUN`, `CLUSTERS_OUTDATED`, `CLUSTERING_RUNNING`, `QUALITY_RUNNING`,
+  `NOTHING_APPROVED` (no approved SQL version and no approved customer). The job fails with
+  `SQL_RUN_FAILED` when the approved SQL no longer runs, `QUALITY_RULES_INVALID` for bad stored
+  rules. The newest `QUALITY_HISTORY_LIMIT` (50) reports per project are kept.
+
 | Method | Path (under `/projects/:projectId/sql`) | Who                         | Result                                                   |
 | ------ | --------------------------------------- | --------------------------- | -------------------------------------------------------- |
 | GET    | `/versions?limit=`                      | any member                  | 200 `{ items }` newest first, without the query text     |
@@ -841,6 +878,27 @@ statements, `read_csv`/`read_parquet`/`glob`, `getenv`, `current_setting`, file 
 workflow's `task=sql_agent` measures a real model (first-try pass rate, pass after repairs,
 tokens, latency) on the same synthetic samples.
 
+### Data quality
+
+`python -m dbeval.evaluate_quality` builds the final table of the seed 42 samples (pipeline to
+golden records, reference query in the sandbox, 301 customers), runs every rule on it and on the
+answer key's `golden_records.csv` (300 people, clean by construction: every rule passes, so no
+false alarms), then injects known faults into a copy and checks that each rule flags exactly the
+injected customers:
+
+| Fault                    | Rule                          | Injected | Detected | Precision | Recall |
+| ------------------------ | ----------------------------- | -------: | -------: | --------: | -----: |
+| blank 10% of emails      | completeness_optional (email) |       28 |       28 |      100% |   100% |
+| break 5 phones           | validity (phone)              |        5 |        5 |      100% |   100% |
+| duplicate 3 customer ids | customer_id_unique            |        3 |        3 |      100% |   100% |
+| impossible birth dates   | validity (date_of_birth)      |        4 |        4 |      100% |   100% |
+| wrong city for the PIN   | city_pin_consistency (city)   |        5 |        5 |      100% |   100% |
+
+On the pipeline's table validity is 100% for every checked field and `customer_id_unique` and
+city-PIN consistency pass; completeness is what the sources hold (PIN code and address 44.9%,
+birth date 78.7%, against 100% in the answer key), so the report flags those fields, which is the
+point. CI holds these floors (`eval/tests/test_evaluate_quality.py`).
+
 ## CI
 
 GitHub Actions (`.github/workflows/ci.yml`) runs on every pull request and on pushes to `main`:
@@ -863,7 +921,9 @@ separate: manual only, never on push or pull request (see "Evaluating mapping ac
   `failAtStep` job that fails with the handler's code, a long job cancelled mid-run), profiling,
   mapping, standardising, finding and scoring candidate pairs for the CRM sample, the AI review of
   maybe pairs (or its `NO_MAYBE_PAIRS` refusal when there are none), clusters, review decisions,
-  exports, the SQL agent (draft with all tests passing, approve, run), that the AI service is not
+  exports, the SQL agent (draft with all tests passing, approve, run), data quality checks (a
+  report whose `latest` matches, `customer_id_unique` passing, a changed threshold applied on the
+  next run), that the AI service is not
   reachable from the host, and that containers run as non-root. Then it runs the Playwright e2e
   tests against the stack and uploads screenshots (`web-screenshots`) and, on failure, the
   Playwright report (`playwright-report`).

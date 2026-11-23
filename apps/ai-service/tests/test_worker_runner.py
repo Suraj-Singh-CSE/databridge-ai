@@ -416,6 +416,7 @@ def test_registry_rejects_duplicates_and_lists_names() -> None:
         "mapping",
         "pair_review",
         "profile",
+        "quality",
         "scoring",
         "sql_draft",
         "sql_run",

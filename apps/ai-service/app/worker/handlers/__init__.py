@@ -10,6 +10,7 @@ from app.worker.handlers.export import ExportPayload
 from app.worker.handlers.mapping import MappingPayload
 from app.worker.handlers.pair_review import PairReviewPayload
 from app.worker.handlers.profile import ProfilePayload
+from app.worker.handlers.quality import QualityPayload
 from app.worker.handlers.scoring import ScoringPayload
 from app.worker.handlers.sql import SqlDraftPayload, SqlRunPayload
 from app.worker.handlers.standardise import StandardisePayload
@@ -31,6 +32,7 @@ def build_registry(
     export: Handler[ExportPayload] | None = None,
     sql_draft: Handler[SqlDraftPayload] | None = None,
     sql_run: Handler[SqlRunPayload] | None = None,
+    quality: Handler[QualityPayload] | None = None,
 ) -> JobRegistry:
     """All job types. The HTTP service only validates payloads, so it passes no handlers; the
     worker passes handlers wired to MongoDB, the storage volume and the LLM gateway."""
@@ -46,4 +48,5 @@ def build_registry(
     registry.register("export", ExportPayload, export or _runs_in_worker_only)
     registry.register("sql_draft", SqlDraftPayload, sql_draft or _runs_in_worker_only)
     registry.register("sql_run", SqlRunPayload, sql_run or _runs_in_worker_only)
+    registry.register("quality", QualityPayload, quality or _runs_in_worker_only)
     return registry

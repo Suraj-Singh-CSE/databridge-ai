@@ -147,6 +147,15 @@ class Settings(BaseSettings):
     # Most staged records loaded into the sandbox.
     sql_max_records: int = Field(default=200_000, ge=1, le=2_000_000)
 
+    # ---- data quality checks (ADR 0022)
+    # Freshness of the clustering run and of the approved SQL's last run: warn, then fail.
+    quality_freshness_warn_hours: float = Field(default=24.0, gt=0, le=8760)
+    quality_freshness_fail_hours: float = Field(default=168.0, gt=0, le=8760)
+    # Warn when the table's row count changed by more than this since the previous check.
+    quality_row_change_warn_percent: float = Field(default=20.0, ge=0, le=1000)
+    # Quality runs kept per project (older ones are deleted after each run).
+    quality_history_limit: int = Field(default=50, ge=1, le=1000)
+
     @property
     def source_trust(self) -> tuple[str, ...]:
         """``survivorship_source_trust`` as a tuple of lower-case names."""
@@ -161,6 +170,14 @@ class Settings(BaseSettings):
     def _hard_limit_after_soft_limit(self) -> Self:
         if self.job_hard_time_limit_seconds <= self.job_soft_time_limit_seconds:
             raise ValueError("JOB_HARD_TIME_LIMIT_SECONDS must be greater than the soft limit")
+        return self
+
+    @model_validator(mode="after")
+    def _quality_warn_before_fail(self) -> Self:
+        if self.quality_freshness_fail_hours < self.quality_freshness_warn_hours:
+            raise ValueError(
+                "QUALITY_FRESHNESS_FAIL_HOURS must not be lower than QUALITY_FRESHNESS_WARN_HOURS"
+            )
         return self
 
     @model_validator(mode="after")

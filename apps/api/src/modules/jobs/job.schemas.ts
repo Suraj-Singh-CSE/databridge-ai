@@ -67,6 +67,12 @@ const sqlDraftPayload = z.strictObject({
 const sqlRunPayload = z.strictObject({ versionId: objectId });
 
 /**
+ * `quality`: project-level, data quality checks on the final customer table: the approved SQL
+ * version's result, or the approved golden records without one (handlers/quality.py, ADR 0022).
+ */
+const qualityPayload = z.strictObject({});
+
+/**
  * One entry per job type that can be started. A new type adds its payload schema here and its
  * handler in apps/ai-service/app/worker/handlers (the ai-service validates the payload again).
  */
@@ -84,6 +90,7 @@ export const createJobBody = z.discriminatedUnion(
     z.strictObject({ type: z.literal('export'), payload: exportPayload }),
     z.strictObject({ type: z.literal('sql_draft'), payload: sqlDraftPayload }),
     z.strictObject({ type: z.literal('sql_run'), payload: sqlRunPayload }),
+    z.strictObject({ type: z.literal('quality'), payload: qualityPayload }),
   ],
   { error: 'unknown job type' },
 );

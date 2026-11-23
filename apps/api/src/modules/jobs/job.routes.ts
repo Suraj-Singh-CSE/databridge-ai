@@ -35,8 +35,14 @@ export interface JobRouterDeps extends ProjectJobsRouterDeps {
 
 /** Starting and cancelling jobs: owner, admin or a data_engineer member. */
 const WRITE: MinimumAccess = 'data_engineer';
-/** Job types data stewards may start too: an export of the customers they review (ADR 0020). */
-const START: Partial<Record<JobType, MinimumAccess>> = { export: 'data_steward' };
+/**
+ * Job types data stewards may start too: an export of the customers they review (ADR 0020)
+ * and a quality check of the final table (ADR 0022).
+ */
+const START: Partial<Record<JobType, MinimumAccess>> = {
+  export: 'data_steward',
+  quality: 'data_steward',
+};
 
 function actorOf(req: Request): Actor {
   return { user: currentUser(req), requestId: requestIdOf(req) };
