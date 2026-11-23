@@ -32,6 +32,9 @@ import { createExportService } from './modules/exports/export.service.js';
 import { createQualityRouter } from './modules/quality/quality.routes.js';
 import { createQualityService } from './modules/quality/quality.service.js';
 import { createSqlRouter } from './modules/sql/sql.routes.js';
+import { createAssistantRouter } from './modules/assistant/assistant.routes.js';
+import { createAssistantService } from './modules/assistant/assistant.service.js';
+import { createQuestionLimiter } from './modules/assistant/rate-limit.js';
 import { createSqlService } from './modules/sql/sql.service.js';
 import { createScoreRouter } from './modules/scores/score.routes.js';
 import { createScoreService } from './modules/scores/score.service.js';
@@ -97,12 +100,13 @@ export function createApp({
   const candidateService = createCandidateService(repos);
   const scoreService = createScoreService(repos);
   const clusterService = createClusterService(repos);
+  const aiClient = aiService ?? createAiServiceClient(config);
   const jobService = createJobService({
     repos,
     targetSchemas,
     audit,
     events: jobEvents,
-    aiService: aiService ?? createAiServiceClient(config),
+    aiService: aiClient,
     logger,
     staleAfterMs: config.JOB_STALE_AFTER_SECONDS * 1000,
   });
@@ -111,6 +115,19 @@ export function createApp({
   const sqlService = createSqlService(repos, audit);
   const qualityService = createQualityService(repos, audit);
   const dashboardService = createDashboardService(repos);
+  const assistantService = createAssistantService({
+    conversations: repos.assistant,
+    knowledge: repos.knowledge,
+    dashboard: repos.dashboard,
+    aiService: aiClient,
+    audit,
+    limiter: createQuestionLimiter(
+      config.ASSISTANT_RATE_LIMIT_MAX,
+      config.ASSISTANT_RATE_LIMIT_WINDOW_MS,
+    ),
+    logger,
+    maxTurns: config.ASSISTANT_MAX_TURNS,
+  });
   const jobDeps = {
     jobService,
     projects: repos.projects,
@@ -187,6 +204,10 @@ export function createApp({
   app.use(
     '/api/v1/projects/:projectId/knowledge',
     createKnowledgeRouter({ knowledge: repos.knowledge, projects: repos.projects, tokens }),
+  );
+  app.use(
+    '/api/v1/projects/:projectId/assistant',
+    createAssistantRouter({ assistantService, projects: repos.projects, tokens }),
   );
   app.use(
     '/api/v1/projects/:projectId/target-schema',

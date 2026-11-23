@@ -2,6 +2,7 @@
 
 from functools import lru_cache
 
+from app.assistant.prompt import ASSISTANT_TASK, mock_assistant_answer
 from app.config import Settings
 from app.llm.base import LLMProvider
 from app.llm.cache import LLMCache
@@ -26,6 +27,7 @@ def build_provider(settings: Settings) -> LLMProvider:
                 MAPPING_TASK: mock_mapping_answer,
                 REVIEW_TASK: mock_pair_review_answer,
                 SQL_TASK: mock_sql_answer,
+                ASSISTANT_TASK: mock_assistant_answer,
             }
         )
     api_key = settings.gemini_api_key.get_secret_value() if settings.gemini_api_key else ""

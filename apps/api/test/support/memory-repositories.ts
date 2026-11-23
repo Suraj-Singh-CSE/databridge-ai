@@ -1,6 +1,11 @@
 import { randomBytes } from 'node:crypto';
 
 import { DuplicateKeyError } from '../../src/errors.js';
+import {
+  REFUSAL_REASONS,
+  type AssistantConversation,
+  type AssistantRepository,
+} from '../../src/modules/assistant/assistant.types.js';
 import type { AuditEntry } from '../../src/modules/audit/audit.types.js';
 import type {
   CandidatePair,
@@ -136,6 +141,7 @@ export interface MemoryRepositories extends Repositories {
   dashboard: DashboardRepository & { workerLlmCall(call: LlmCall): void };
   /** `workerSave`: what the `knowledge_index` job stores in `knowledge_summaries`. */
   knowledge: KnowledgeRepository & { workerSave(summary: KnowledgeSummary): void };
+  assistant: AssistantRepository;
 }
 
 /**
@@ -144,6 +150,7 @@ export interface MemoryRepositories extends Repositories {
  */
 export function createMemoryRepositories(): MemoryRepositories {
   const knowledgeSummaries = new Map<string, KnowledgeSummary>();
+  const conversations = new Map<string, AssistantConversation>();
   const users = new Map<string, User & { passwordHash: string }>();
   const tokens = new Map<string, RefreshTokenRecord>();
   const projects = new Map<string, Project>();
@@ -1162,6 +1169,74 @@ export function createMemoryRepositories(): MemoryRepositories {
       },
       workerSave(summary) {
         knowledgeSummaries.set(summary.projectId, structuredClone(summary));
+      },
+    },
+    assistant: {
+      async create({ projectId, userId, title }) {
+        await Promise.resolve();
+        const at = new Date();
+        const conversation = {
+          id: newId(),
+          projectId,
+          userId,
+          title,
+          turns: [],
+          createdAt: at,
+          updatedAt: at,
+        };
+        conversations.set(conversation.id, conversation);
+        return structuredClone(conversation);
+      },
+      async findById(projectId, conversationId) {
+        await Promise.resolve();
+        const found = conversations.get(conversationId);
+        return found?.projectId === projectId ? structuredClone(found) : null;
+      },
+      async appendTurn(conversationId, turn, maxTurns) {
+        await Promise.resolve();
+        const found = conversations.get(conversationId);
+        if (!found) return;
+        found.turns = [...found.turns, structuredClone(turn)].slice(-maxTurns);
+        found.updatedAt = new Date();
+      },
+      async listByUser(projectId, userId, limit) {
+        await Promise.resolve();
+        return [...conversations.values()]
+          .filter((c) => c.projectId === projectId && c.userId === userId)
+          .sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime())
+          .slice(0, limit)
+          .map(({ turns, ...summary }) => ({
+            ...structuredClone(summary),
+            turnCount: turns.length,
+          }));
+      },
+      async delete(projectId, conversationId) {
+        await Promise.resolve();
+        const found = conversations.get(conversationId);
+        if (found?.projectId !== projectId) return false;
+        conversations.delete(conversationId);
+        return true;
+      },
+      async deleteByProject(projectId) {
+        await Promise.resolve();
+        for (const [id, c] of conversations)
+          if (c.projectId === projectId) conversations.delete(id);
+      },
+      async usage(projectId) {
+        await Promise.resolve();
+        const mine = [...conversations.values()].filter((c) => c.projectId === projectId);
+        const turns = mine.flatMap((c) => c.turns);
+        const latency = turns.reduce((sum, t) => sum + t.latencyMs, 0);
+        return {
+          conversations: mine.length,
+          users: new Set(mine.map((c) => c.userId)).size,
+          questions: turns.length,
+          answered: turns.filter((t) => t.refusalReason === null).length,
+          refusals: Object.fromEntries(
+            REFUSAL_REASONS.map((r) => [r, turns.filter((t) => t.refusalReason === r).length]),
+          ) as Record<(typeof REFUSAL_REASONS)[number], number>,
+          avgLatencyMs: turns.length ? Math.round(latency / turns.length) : null,
+        };
       },
     },
   };

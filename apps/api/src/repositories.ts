@@ -1,3 +1,5 @@
+import { createMongoAssistantRepository } from './modules/assistant/assistant.repository.js';
+import type { AssistantRepository } from './modules/assistant/assistant.types.js';
 import { createMongoAuditRepository } from './modules/audit/audit.repository.js';
 import { createMongoDashboardRepository } from './modules/dashboard/dashboard.repository.js';
 import type { DashboardRepository } from './modules/dashboard/dashboard.types.js';
@@ -63,6 +65,8 @@ export interface Repositories {
   dashboard: DashboardRepository;
   /** The knowledge index's summary per project, written by the ai-worker (ADR 0024). */
   knowledge: KnowledgeRepository;
+  /** The project assistant's conversations, one per user thread (ADR 0025). */
+  assistant: AssistantRepository;
 }
 
 export function createMongoRepositories(): Repositories {
@@ -86,5 +90,6 @@ export function createMongoRepositories(): Repositories {
     audit: createMongoAuditRepository(),
     dashboard: createMongoDashboardRepository(),
     knowledge: createMongoKnowledgeRepository(),
+    assistant: createMongoAssistantRepository(),
   };
 }

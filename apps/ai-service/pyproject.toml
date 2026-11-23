@@ -49,6 +49,7 @@ include = ["app*"]
 "app.mapping" = ["prompts/*.txt"]
 "app.matching" = ["prompts/*.txt"]
 "app.sql" = ["prompts/*.txt"]
+"app.assistant" = ["prompts/*.txt"]
 
 [tool.ruff]
 target-version = "py312"
