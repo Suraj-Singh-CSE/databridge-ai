@@ -54,6 +54,19 @@ const exportPayload = z.strictObject({
 });
 
 /**
+ * `sql_draft`: project-level, the SQL agent drafts, validates and tests the query that builds
+ * the final customers table (handlers/sql.py, ADR 0021). `instructions` are sent to the LLM
+ * (the worker refuses ones that look like personal data); `scope` as for exports.
+ */
+const sqlDraftPayload = z.strictObject({
+  instructions: z.string().trim().max(500).optional(),
+  scope: z.enum(['approved', 'all']).default('approved'),
+});
+
+/** `sql_run`: runs an approved SQL version against the current data and re-runs its tests. */
+const sqlRunPayload = z.strictObject({ versionId: objectId });
+
+/**
  * One entry per job type that can be started. A new type adds its payload schema here and its
  * handler in apps/ai-service/app/worker/handlers (the ai-service validates the payload again).
  */
@@ -69,6 +82,8 @@ export const createJobBody = z.discriminatedUnion(
     z.strictObject({ type: z.literal('pair_review'), payload: pairReviewPayload }),
     z.strictObject({ type: z.literal('clustering'), payload: clusteringPayload }),
     z.strictObject({ type: z.literal('export'), payload: exportPayload }),
+    z.strictObject({ type: z.literal('sql_draft'), payload: sqlDraftPayload }),
+    z.strictObject({ type: z.literal('sql_run'), payload: sqlRunPayload }),
   ],
   { error: 'unknown job type' },
 );

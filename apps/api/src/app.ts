@@ -26,6 +26,8 @@ import { createClusterService } from './modules/clusters/cluster.service.js';
 import { createReviewService } from './modules/clusters/review.service.js';
 import { createExportRouter } from './modules/exports/export.routes.js';
 import { createExportService } from './modules/exports/export.service.js';
+import { createSqlRouter } from './modules/sql/sql.routes.js';
+import { createSqlService } from './modules/sql/sql.service.js';
 import { createScoreRouter } from './modules/scores/score.routes.js';
 import { createScoreService } from './modules/scores/score.service.js';
 import { createMappingRouter } from './modules/mappings/mapping.routes.js';
@@ -101,6 +103,7 @@ export function createApp({
   });
   const reviewService = createReviewService(repos, jobService, audit);
   const exportService = createExportService(repos, files, audit);
+  const sqlService = createSqlService(repos, audit);
   const jobDeps = {
     jobService,
     projects: repos.projects,
@@ -161,6 +164,10 @@ export function createApp({
   app.use(
     '/api/v1/projects/:projectId/exports',
     createExportRouter({ exportService, projects: repos.projects, tokens }),
+  );
+  app.use(
+    '/api/v1/projects/:projectId/sql',
+    createSqlRouter({ sqlService, projects: repos.projects, tokens }),
   );
   app.use(
     '/api/v1/projects/:projectId/target-schema',

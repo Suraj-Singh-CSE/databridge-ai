@@ -5,20 +5,16 @@ import type { Express } from 'express';
 import request from 'supertest';
 import { beforeEach, describe, expect, it } from 'vitest';
 
-import { CANDIDATE_KEY_TYPES } from '../../src/modules/candidates/candidate.types.js';
-import type {
-  Cluster,
-  ClusterSummary,
-  GoldenRecord,
-} from '../../src/modules/clusters/cluster.types.js';
+import type { Cluster } from '../../src/modules/clusters/cluster.types.js';
 import type { ExportRecord } from '../../src/modules/exports/export.types.js';
-import type { ScoreSummary } from '../../src/modules/scores/score.types.js';
 import type { Repositories } from '../../src/repositories.js';
 import type { LocalDiskStorage } from '../../src/storage/local-disk.storage.js';
 
 import { buildTestApp, fastPasswords, tempStorage } from './build-app.js';
 import type { ClustersHarness } from './clusters-suite.js';
 import { FakeAiService } from './fakes.js';
+import * as fixtures from './pipeline-fixtures.js';
+import type { PipelineContext } from './pipeline-fixtures.js';
 
 export interface ExportsHarness extends ClustersHarness {
   /** Saves an export record as the Python export job does (the file is written separately). */
@@ -49,7 +45,6 @@ export function defineExportsSuite(label: string, harness: ExportsHarness): void
     let owner: Session;
     let projectId: string;
     let clusters: Cluster[];
-    let scores: ScoreSummary;
 
     async function register(email: string): Promise<Session> {
       const res = await request(app)
@@ -81,193 +76,12 @@ export function defineExportsSuite(label: string, harness: ExportsHarness): void
       return { id: body.data.user.id, token: body.data.accessToken };
     }
 
-    /** One source of 4 staged records; returns their ids. */
-    async function addSource(name: string): Promise<{ id: string; ids: string[] }> {
-      const id = newId();
-      await repos.sources.create({
-        id,
-        projectId,
-        name,
-        systemName: null,
-        originalFilename: `${name}.csv`,
-        fileKey: `projects/${projectId}/sources/${id}/original.csv`,
-        format: 'csv',
-        sizeBytes: 100,
-        sha256: randomBytes(32).toString('hex'),
-        rowCount: 4,
-        columnCount: 2,
-        uploadedBy: owner.id,
-      });
-      const runId = `${newId()}:1`;
-      const ids = Array.from({ length: 4 }, newId).sort();
-      await harness.workerStage(repos, {
-        projectId,
-        sourceId: id,
-        runId,
-        rows: ids.map((rowId, index) => ({
-          id: rowId,
-          rowNumber: index + 1,
-          sourceRecordId: `R${index + 1}`,
-          fields: { full_name: 'Asha Rao', phone: '+919820012345' },
-          issues: [],
-        })),
-        source: {
-          status: 'standardised',
-          standardisedAt: new Date('2026-11-22T10:00:00Z'),
-          standardisation: { runId, rowCount: 4, rowsWithIssues: 0, issues: [] },
-        },
-      });
-      return { id, ids };
-    }
-
-    async function findCandidates(pair: [string, string]): Promise<string> {
-      const sources = await repos.sources.listByProject(projectId);
-      const runId = `${newId()}:1`;
-      const zero = CANDIDATE_KEY_TYPES.map((key) => ({ key, count: 0 }));
-      await harness.workerCandidates(repos, {
-        projectId,
-        pairs: [{ position: 1, recordA: pair[0], recordB: pair[1], keys: ['phone'] }],
-        summary: {
-          jobId: runId.split(':')[0] ?? '',
-          runId,
-          sources: sources.map((s) => ({
-            sourceId: s.id,
-            runId: s.standardisation?.runId ?? '',
-            rowCount: s.rowCount ?? 0,
-          })),
-          recordCount: 4,
-          possiblePairs: 6,
-          pairCount: 1,
-          reductionRatio: 0.8,
-          pairsByKey: zero,
-          pairsOnlyByKey: zero,
-          oversizeBlocksSkipped: 0,
-          oversizeBlocksByKey: zero,
-          maxBlockSize: 200,
-          finishedAt: new Date('2026-11-22T11:00:00Z'),
-        },
-      });
-      return runId;
-    }
-
-    async function score(candidatesRunId: string, pair: [string, string]): Promise<ScoreSummary> {
-      const runId = `${newId()}:1`;
-      const summary: ScoreSummary = {
-        jobId: runId.split(':')[0] ?? '',
-        runId,
-        candidatesRunId,
-        pairCount: 1,
-        bandCounts: [
-          { band: 'match', count: 1 },
-          { band: 'maybe', count: 0 },
-          { band: 'non_match', count: 0 },
-        ],
-        thresholds: { match: 0.9, maybe: 0.5 },
-        model: {
-          method: 'defaults',
-          emIterations: 0,
-          emConverged: false,
-          fallbackReason: 'too few pairs',
-          matchProportion: 0.5,
-          priorWeight: 0,
-          fields: [],
-        },
-        finishedAt: new Date('2026-11-22T12:00:00Z'),
-        aiReview: null,
-      };
-      await harness.workerScores(repos, {
-        projectId,
-        summary,
-        scores: [
-          {
-            position: 1,
-            recordA: pair[0],
-            recordB: pair[1],
-            score: 0.999,
-            band: 'match',
-            matchWeight: 10,
-            fieldLevels: { phone: 'exact' },
-            reasons: [{ field: 'phone', level: 'exact', weight: 7.1, text: 'Same phone' }],
-            aiStatus: null,
-            aiDecision: null,
-            aiConfidence: null,
-            aiReason: null,
-            aiModel: null,
-            aiPromptVersion: null,
-            reviewedAt: null,
-            suggestedBand: 'match',
-          },
-        ],
-      });
-      return summary;
-    }
-
-    function cluster(position: number, members: string[]): Cluster {
-      const [first = '', second = ''] = members;
-      return {
-        position,
-        customerId: `C${randomBytes(6).toString('hex').toUpperCase()}`,
-        memberRecordIds: members,
-        size: members.length,
-        confidence: members.length > 1 ? 0.999 : null,
-        label: members.length > 1 ? 'High' : null,
-        status: 'proposed',
-        flags: [],
-        reasons: [],
-        aiSuggested: false,
-        links:
-          members.length > 1
-            ? [{ recordA: first, recordB: second, score: 0.999, kind: 'match', tree: true }]
-            : [],
-      };
-    }
-
-    const golden = (c: Cluster): GoldenRecord => ({
-      customerId: c.customerId,
-      status: 'proposed',
-      fields: { customer_id: c.customerId, full_name: 'Asha Rao' },
-      provenance: {},
-    });
-
-    async function buildClusters(): Promise<void> {
-      const runId = `${newId()}:1`;
-      const summary: ClusterSummary = {
-        jobId: runId.split(':')[0] ?? '',
-        runId,
-        scoresRunId: scores.runId,
-        candidatesRunId: scores.candidatesRunId,
-        aiReviewJobId: null,
-        recordCount: 4,
-        clusterCount: clusters.length,
-        singletonCount: clusters.filter((c) => c.size === 1).length,
-        multiRecordCount: clusters.filter((c) => c.size > 1).length,
-        needsReviewCount: 0,
-        aiSuggestedCount: 0,
-        averageSize: 1.33,
-        largestCluster: 2,
-        decisionCount: 0,
-        staleDecisionCount: 0,
-        cutLinkCount: 0,
-        conflictingDecisionCount: 0,
-        settings: { includeAiSuggested: true, maxClusterSize: 6, sourceTrust: ['crm'] },
-        finishedAt: new Date('2026-11-22T13:00:00Z'),
-      };
-      await harness.workerClusters(repos, {
-        projectId,
-        clusters,
-        golden: clusters.map(golden),
-        summary,
-      });
-    }
+    const pipeline = (): PipelineContext => ({ repos, harness, projectId, ownerId: owner.id });
+    const findCandidates = (pair: [string, string]) => fixtures.findCandidates(pipeline(), pair);
 
     /** Sources, pairs, scores and three clusters (one pair, two singles); nothing approved. */
     async function prepare(): Promise<void> {
-      const { ids } = await addSource('crm_customers');
-      const [a = '', b = '', c = '', d = ''] = ids;
-      const pair: [string, string] = [a, b];
-      scores = await score(await findCandidates(pair), pair);
-      clusters = [cluster(1, [a, b]), cluster(2, [c]), cluster(3, [d])];
-      await buildClusters();
+      ({ clusters } = await fixtures.prepareClusters(pipeline()));
     }
 
     async function approveFirst(): Promise<void> {

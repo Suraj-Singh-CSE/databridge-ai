@@ -2,7 +2,9 @@ name: Live eval
 
 # Manual only: calls the real model (Gemini) on synthetic data only. Task "mapping": the committed
 # samples and the unseen-header holdout (ADR 0013). Task "pair_review": hard pairs of the seed 42,
-# 2027 and 2028 sets, as evidence without values (ADR 0017). Never runs on push or pull request;
+# 2027 and 2028 sets, as evidence without values (ADR 0017). Task "sql_agent": the SQL agent drafts
+# the customers query on the samples' golden records, schema and statistics only (ADR 0021). Never
+# runs on push or pull request;
 # regular CI uses the Mock provider. Needs the repository secret GEMINI_API_KEY.
 on:
   workflow_dispatch:
@@ -10,7 +12,7 @@ on:
       task:
         description: What to evaluate
         type: choice
-        options: [mapping, pair_review]
+        options: [mapping, pair_review, sql_agent]
         default: mapping
       model:
         description: Gemini model name
@@ -18,7 +20,7 @@ on:
         default: gemini-3.5-flash-lite
         required: true
       max_calls:
-        description: Most provider calls this run may make, retries included (empty = 30 for mapping, 15 for pair_review)
+        description: Most provider calls this run may make, retries included (empty = 30 for mapping, 15 for pair_review, 12 for sql_agent)
         type: string
         default: ''
         required: false
@@ -97,7 +99,7 @@ jobs:
             --timeout-seconds "$TIMEOUT_SECONDS" --columns-per-call "$COLUMNS_PER_CALL" \
             --pairs-per-call "$PAIRS_PER_CALL" --requests-per-minute "$REQUESTS_PER_MINUTE" \
             --out "$RUNNER_TEMP/live-eval-report" || status=$?
-          for report in live_mapping_report.md live_pair_review_report.md; do
+          for report in live_mapping_report.md live_pair_review_report.md live_sql_agent_report.md; do
             if [ -f "$RUNNER_TEMP/live-eval-report/$report" ]; then
               cat "$RUNNER_TEMP/live-eval-report/$report" >> "$GITHUB_STEP_SUMMARY"
             fi

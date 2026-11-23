@@ -9,6 +9,8 @@ export const JOB_TYPES = [
   'pair_review',
   'clustering',
   'export',
+  'sql_draft',
+  'sql_run',
 ] as const;
 export type JobType = (typeof JOB_TYPES)[number];
 

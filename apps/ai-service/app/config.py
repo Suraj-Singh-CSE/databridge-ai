@@ -133,6 +133,20 @@ class Settings(BaseSettings):
     # Most rows in one export file (Excel holds at most 1,048,575 per sheet).
     export_max_rows: int = Field(default=200_000, ge=1, le=1_000_000)
 
+    # ---- SQL agent (ADR 0021)
+    # false = no LLM call: every draft uses the hand-written reference query.
+    sql_agent_llm_enabled: bool = True
+    # Repairs after a draft that fails validation or a test (each one is an LLM call).
+    sql_agent_max_repairs: int = Field(default=2, ge=0, le=5)
+    sql_agent_temperature: float = Field(default=0.0, ge=0.0, le=1.0)
+    sql_agent_max_output_tokens: int = Field(default=4096, ge=256, le=65_536)
+    # Sandbox limits: per statement (the connection is interrupted), memory and threads.
+    sql_statement_timeout_seconds: float = Field(default=20.0, gt=0, le=300)
+    sql_memory_limit_mb: int = Field(default=512, ge=64, le=16_384)
+    sql_threads: int = Field(default=2, ge=1, le=16)
+    # Most staged records loaded into the sandbox.
+    sql_max_records: int = Field(default=200_000, ge=1, le=2_000_000)
+
     @property
     def source_trust(self) -> tuple[str, ...]:
         """``survivorship_source_trust`` as a tuple of lower-case names."""

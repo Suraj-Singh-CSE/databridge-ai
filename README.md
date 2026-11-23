@@ -462,6 +462,52 @@ curl -OJ http://localhost:8080/api/v1/projects/$PROJECT/exports/$EXPORT/download
 Every download is audited (`export.download`, metadata only), like the start (`job.create`) and
 the delete (`export.delete`). Exports are deleted with the project.
 
+**SQL agent** (the query that builds the final `customers` table). A `sql_draft` job asks the LLM
+(through the gateway) for one DuckDB `SELECT`, validates it, runs it in a locked-down in-memory
+sandbox and tests the result against the golden records; a person approves a version whose tests
+all passed, and `sql_run` re-runs and re-tests the approved version on the current data. The
+model sees the table contract, column statistics (type, empty share, distinct count) and field
+descriptions only, never values. Design notes: [ADR 0021](docs/adr/0021-sql-agent.md).
+
+```bash
+curl -s -X POST http://localhost:8080/api/v1/projects/$PROJECT/jobs \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"type":"sql_draft","payload":{"scope":"approved","instructions":"Keep it simple."}}'
+# when the job succeeded: result.versionId, result.testsPassed
+curl -s -X POST http://localhost:8080/api/v1/projects/$PROJECT/sql/versions/$VERSION/approve \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d '{}'
+curl -s -X POST http://localhost:8080/api/v1/projects/$PROJECT/jobs \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d "{\"type\":\"sql_run\",\"payload\":{\"versionId\":\"$VERSION\"}}"
+```
+
+- **Sandbox tables**: `staged_records` (`record_id`, `source_name`, `source_record_id`, one column
+  per target field), `cluster_members` (`customer_id`, `record_id`), `golden_records`
+  (`customer_id` + target fields), `approvals` (`customer_id`, `approved`). No file, network,
+  extension or setting access; memory, thread and time limits (`SQL_*` settings).
+- **Validator** (before anything runs): one `SELECT` / `WITH ... SELECT` over those tables only;
+  refused with `SQL_NOT_READ_ONLY`, `SQL_FORBIDDEN_FUNCTION`, `SQL_UNKNOWN_TABLE`, `SQL_TOO_LONG`
+  or `SQL_PARSE_ERROR`.
+- **Tests**: `columns` (exactly `customer_id` + target fields in schema order), `row_count` (one
+  row per in-scope customer), `customer_id_unique`, `customer_id_known`, `golden_equality` (per
+  field % equal, first mismatching customer ids) and `runtime`. Up to `SQL_AGENT_MAX_REPAIRS` (2)
+  repairs, fed only error codes and failing check names. Without the LLM (or when it fails) the
+  hand-written reference query is used (`method: "reference"`).
+- **Start** (`sql_draft`, `sql_run`): owner, admin, data_engineer. `409` (`details.reason`):
+  `CLUSTERS_NOT_RUN`, `CLUSTERS_OUTDATED`, `CLUSTERING_RUNNING`, `NOTHING_APPROVED`,
+  `SQL_DRAFT_RUNNING`, `SQL_VERSION_NOT_APPROVED`. Instructions that look like personal data fail
+  the job with `INSTRUCTIONS_CONTAIN_PII` (they would be sent to the model).
+
+| Method | Path (under `/projects/:projectId/sql`) | Who                         | Result                                                   |
+| ------ | --------------------------------------- | --------------------------- | -------------------------------------------------------- |
+| GET    | `/versions?limit=`                      | any member                  | 200 `{ items }` newest first, without the query text     |
+| GET    | `/versions/:versionId`                  | any member                  | 200 `{ version }` with SQL, explanation, tests, attempts |
+| POST   | `/versions/:versionId/approve`          | owner, admin, data_engineer | 200; `409` `SQL_TESTS_FAILED` / `SQL_VERSION_NOT_DRAFT`  |
+| POST   | `/versions/:versionId/reject`           | owner, admin, data_engineer | 200 (`{ reason? }`); `409` `SQL_VERSION_DECIDED`         |
+
+One version is approved at a time: approving another marks the previous one `superseded`. Approve,
+reject and run are audited (`sql_version.approve`, `.reject`, `.run`).
+
 **Background jobs.** Long work (profiling, mapping, standardising, matching; pipelines later) runs
 in a Celery worker, not in the request. The api owns the job record in MongoDB; the worker moves it
 forward and publishes every change to Redis; the browser watches it live over Server-Sent Events.
@@ -776,6 +822,25 @@ Most golden-record misses are values no source held correctly (a PIN or address 
 abbreviated in the only record); when some member held the true value, the rules picked it
 99.6-99.7% of the time. CI holds floors on all three sets (`eval/tests/test_evaluate_golden.py`).
 
+### SQL agent
+
+`python -m dbeval.evaluate_sql_agent` builds the seed 42 samples' golden records with the pure
+pipeline, loads them into the SQL sandbox and runs the agent (Mock provider) and the reference
+query for both scopes, then checks a security set of 26 malicious queries against the validator:
+
+| Run          | Scope    | Method    | Validation | Tests passed | Rows (expected) |
+| ------------ | -------- | --------- | ---------- | -----------: | --------------: |
+| agent (mock) | approved | llm       | ok         |          6/6 |         67 (67) |
+| reference    | approved | reference | ok         |          6/6 |         67 (67) |
+| agent (mock) | all      | llm       | ok         |          6/6 |       301 (301) |
+| reference    | all      | reference | ok         |          6/6 |       301 (301) |
+
+Security set: 26/26 refused (`COPY`, `ATTACH`, `INSTALL`, `PRAGMA`, `SET`, writes, stacked
+statements, `read_csv`/`read_parquet`/`glob`, `getenv`, `current_setting`, file paths as tables,
+`information_schema`, `duckdb_settings()`, a `WITH` name shadowing a table, `query()`). The live
+workflow's `task=sql_agent` measures a real model (first-try pass rate, pass after repairs,
+tokens, latency) on the same synthetic samples.
+
 ## CI
 
 GitHub Actions (`.github/workflows/ci.yml`) runs on every pull request and on pushes to `main`:
@@ -786,7 +851,8 @@ GitHub Actions (`.github/workflows/ci.yml`) runs on every pull request and on pu
   including a real in-process Celery worker against Redis and MongoDB service containers.
 - **eval**: the same checks for the ground-truth data generator in `eval/` ([eval/README](eval/README.md)).
 
-The **Live eval** workflow (`.github/workflows/live-eval.yml`, task `mapping` or `pair_review`) is
+The **Live eval** workflow (`.github/workflows/live-eval.yml`, task `mapping`, `pair_review` or
+`sql_agent`) is
 separate: manual only, never on push or pull request (see "Evaluating mapping accuracy").
 
 - **docker**: builds every image, starts the full stack with throwaway secrets, and smoke-tests the
@@ -796,7 +862,8 @@ separate: manual only, never on push or pull request (see "Evaluating mapping ac
   the proxy (a demo job streamed with `curl -N` until it succeeds with increasing progress, a
   `failAtStep` job that fails with the handler's code, a long job cancelled mid-run), profiling,
   mapping, standardising, finding and scoring candidate pairs for the CRM sample, the AI review of
-  maybe pairs (or its `NO_MAYBE_PAIRS` refusal when there are none), that the AI service is not
+  maybe pairs (or its `NO_MAYBE_PAIRS` refusal when there are none), clusters, review decisions,
+  exports, the SQL agent (draft with all tests passing, approve, run), that the AI service is not
   reachable from the host, and that containers run as non-root. Then it runs the Playwright e2e
   tests against the stack and uploads screenshots (`web-screenshots`) and, on failure, the
   Playwright report (`playwright-report`).

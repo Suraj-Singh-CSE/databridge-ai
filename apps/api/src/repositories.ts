@@ -9,6 +9,8 @@ import type { CandidateRepository } from './modules/candidates/candidate.types.j
 import type { AuditRepository } from './modules/audit/audit.types.js';
 import { createMongoRefreshTokenRepository } from './modules/auth/refresh-token.repository.js';
 import type { RefreshTokenRepository } from './modules/auth/refresh-token.types.js';
+import { createMongoSqlVersionRepository } from './modules/sql/sql.repository.js';
+import type { SqlVersionRepository } from './modules/sql/sql.types.js';
 import { createMongoScoreRepository } from './modules/scores/score.repository.js';
 import type { ScoreRepository } from './modules/scores/score.types.js';
 import { createMongoMappingRepository } from './modules/mappings/mapping.repository.js';
@@ -46,6 +48,8 @@ export interface Repositories {
   review: ReviewRepository;
   /** Golden-record export files' metadata (ADR 0020). */
   exports: ExportRepository;
+  /** SQL agent versions and their runs (ADR 0021). */
+  sqlVersions: SqlVersionRepository;
   audit: AuditRepository;
 }
 
@@ -65,6 +69,7 @@ export function createMongoRepositories(): Repositories {
     clusters: createMongoClusterRepository(),
     review: createMongoReviewRepository(),
     exports: createMongoExportRepository(),
+    sqlVersions: createMongoSqlVersionRepository(),
     audit: createMongoAuditRepository(),
   };
 }

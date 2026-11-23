@@ -16,7 +16,9 @@ the run exits non-zero if any prompt failed it.
     python -m dbeval.live_mapping_eval --provider mock    # dry run, no key, no network
 
 ``--task pair_review`` runs the AI review of hard pairs instead (``live_pair_review_eval``,
-ADR 0017; default budget 15 calls, ``--pairs-per-call`` pairs per call).
+ADR 0017; default budget 15 calls, ``--pairs-per-call`` pairs per call). ``--task sql_agent``
+asks the SQL agent for the customers query on the samples (``live_sql_agent_eval``, ADR 0021;
+default budget 12 calls; schema and statistics only in the prompt).
 
 The key is read from the environment only and is never printed or written.
 """
@@ -63,8 +65,8 @@ from dbeval.evaluate_mapping import (
 from dbeval.loaders import read_csv, read_xlsx
 
 ProviderName = Literal["gemini", "mock"]
-TASKS = ("mapping", "pair_review")
-DEFAULT_MAX_CALLS = {"mapping": 30, "pair_review": 15}
+TASKS = ("mapping", "pair_review", "sql_agent")
+DEFAULT_MAX_CALLS = {"mapping": 30, "pair_review": 15, "sql_agent": 12}
 ThinkingLevel = Literal["", "minimal", "low", "medium", "high"]
 THINKING_LEVELS: tuple[ThinkingLevel, ...] = ("", "minimal", "low", "medium", "high")
 # A provider call cut off by the gateway's timeout ends in cancellation, not an LLMError.
@@ -421,7 +423,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--max-calls",
         type=int,
         default=None,
-        help="provider calls at most (retries count); default 30 for mapping, 15 for pair_review",
+        help=(
+            "provider calls at most (retries count); default 30 for mapping, 15 for "
+            "pair_review, 12 for sql_agent"
+        ),
     )
     parser.add_argument(
         "--requests-per-minute",
@@ -487,6 +492,11 @@ def main(argv: Sequence[str] | None = None) -> int:
 
         report = asyncio.run(live.run(provider, settings, args.max_calls))
         summary, names = live.markdown(report), (live.REPORT_JSON, live.REPORT_MD)
+    elif args.task == "sql_agent":
+        from dbeval import live_sql_agent_eval as sql_live
+
+        report = asyncio.run(sql_live.run(provider, settings, args.max_calls))
+        summary, names = sql_live.markdown(report), (sql_live.REPORT_JSON, sql_live.REPORT_MD)
     else:
         report = asyncio.run(run(provider, settings, args.max_calls))
         summary, names = markdown(report), (REPORT_JSON, REPORT_MD)

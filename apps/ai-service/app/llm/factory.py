@@ -14,6 +14,7 @@ from app.llm.pacing import SlidingWindowLimiter
 from app.mapping.prompt import MAPPING_TASK, mock_mapping_answer
 from app.matching.review import REVIEW_TASK, mock_pair_review_answer
 from app.privacy.masking import PIIMasker
+from app.sql.agent import SQL_TASK, mock_sql_answer
 
 
 def build_provider(settings: Settings) -> LLMProvider:
@@ -21,7 +22,11 @@ def build_provider(settings: Settings) -> LLMProvider:
     if settings.llm_provider == "mock":
         # Feature prompts get deterministic, schema-valid answers (tests, CI, local runs).
         return MockProvider(
-            {MAPPING_TASK: mock_mapping_answer, REVIEW_TASK: mock_pair_review_answer}
+            {
+                MAPPING_TASK: mock_mapping_answer,
+                REVIEW_TASK: mock_pair_review_answer,
+                SQL_TASK: mock_sql_answer,
+            }
         )
     api_key = settings.gemini_api_key.get_secret_value() if settings.gemini_api_key else ""
     if not api_key.strip():

@@ -13,6 +13,7 @@ import {
   GoldenRecordModel,
 } from '../src/modules/clusters/cluster.model.js';
 import { ExportModel } from '../src/modules/exports/export.model.js';
+import { SqlVersionModel } from '../src/modules/sql/sql.model.js';
 import { JobModel } from '../src/modules/jobs/job.model.js';
 import { PairScoreModel, ScoreSummaryModel } from '../src/modules/scores/score.model.js';
 import type { PairScore } from '../src/modules/scores/score.types.js';
@@ -32,6 +33,7 @@ import { defineApiSuite } from './support/api-suite.js';
 import { defineCandidatesSuite } from './support/candidates-suite.js';
 import { defineClustersSuite } from './support/clusters-suite.js';
 import { defineExportsSuite } from './support/exports-suite.js';
+import { defineSqlSuite } from './support/sql-suite.js';
 import { defineScoresSuite } from './support/scores-suite.js';
 import { defineJobsSuite } from './support/jobs-suite.js';
 import { defineMappingsSuite, suggested } from './support/mappings-suite.js';
@@ -250,6 +252,24 @@ describe.skipIf(!available)('MongoDB', () => {
         projectId: oid(record.projectId),
         jobId: oid(record.jobId),
         createdBy: record.createdBy ? oid(record.createdBy) : null,
+      });
+    },
+  });
+
+  defineSqlSuite('MongoDB repositories', {
+    ...mongoClusters,
+    async workerSqlVersion(_repos, { id, ...version }) {
+      // What apps/ai-service/app/sql/store.py writes: _id = the sql_draft job id.
+      const oid = (value: string) => new mongoose.Types.ObjectId(value);
+      const optional = (value: string | null) => (value ? oid(value) : null);
+      await SqlVersionModel.collection.insertOne({
+        ...version,
+        _id: oid(id),
+        projectId: oid(version.projectId),
+        jobId: oid(version.jobId),
+        createdBy: optional(version.createdBy),
+        approvedBy: optional(version.approvedBy),
+        rejectedBy: optional(version.rejectedBy),
       });
     },
   });
