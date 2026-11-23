@@ -41,6 +41,7 @@ export interface JobServiceDeps {
     | 'clusters'
     | 'review'
     | 'stagedRecords'
+    | 'sqlVersions'
   >;
   /** Mapping jobs need the project's target schema stored (the default is seeded here). */
   targetSchemas: TargetSchemaService;
@@ -123,6 +124,16 @@ const EXPORT = {
   clustering: 'Clusters are being built. Wait for that job to finish, then export.',
   nothingApproved:
     'No customer is approved yet. Approve customers in Match Review, or export all customers with their review status.',
+};
+
+const SQL = {
+  outdated: EXPORT.outdated,
+  clustering: 'Clusters are being built. Wait for that job to finish, then work on the SQL.',
+  nothingApproved:
+    'No customer is approved yet. Approve customers in Match Review, or draft the SQL for all customers.',
+  busy: 'An SQL draft is already being made. Wait for that job to finish, or cancel it first.',
+  notFound: 'SQL version not found.',
+  notApproved: 'Only an approved SQL version can be run. Approve it first.',
 };
 
 function pendingMessage(count: number): string {
@@ -367,6 +378,49 @@ export function createJobService({
   }
 
   /**
+   * `sql_draft` reads the current clusters like an export (409 CLUSTERS_NOT_RUN,
+   * CLUSTERS_OUTDATED, CLUSTERING_RUNNING, NOTHING_APPROVED for the `approved` scope), and one
+   * draft runs at a time (SQL_DRAFT_RUNNING). The worker checks again.
+   */
+  async function checkSqlDraftJob(project: Project, payload: Record<string, unknown>) {
+    const { summary, outdated } = await currentClusters(repos, project);
+    if (outdated) throw AppError.conflict(SQL.outdated, { reason: 'CLUSTERS_OUTDATED' });
+    if (await isActive(project, 'clustering')) {
+      throw AppError.conflict(SQL.clustering, { reason: 'CLUSTERING_RUNNING' });
+    }
+    if (await isActive(project, 'sql_draft')) {
+      throw AppError.conflict(SQL.busy, { reason: 'SQL_DRAFT_RUNNING' });
+    }
+    if (payload.scope === 'all') return;
+    const approvals = await repos.review.listApprovals(project.id);
+    const approved = await repos.clusters.countWithIds(
+      project.id,
+      summary.runId,
+      approvals.map((a) => a.customerId),
+    );
+    if (approved === 0) {
+      throw AppError.conflict(SQL.nothingApproved, { reason: 'NOTHING_APPROVED' });
+    }
+  }
+
+  /**
+   * `sql_run` runs an approved version (404 unknown, 409 SQL_VERSION_NOT_APPROVED) against the
+   * current clusters (CLUSTERS_NOT_RUN, CLUSTERS_OUTDATED, CLUSTERING_RUNNING).
+   */
+  async function checkSqlRunJob(project: Project, payload: Record<string, unknown>) {
+    const version = await repos.sqlVersions.findById(project.id, String(payload.versionId));
+    if (!version) throw AppError.notFound(SQL.notFound);
+    if (version.status !== 'approved') {
+      throw AppError.conflict(SQL.notApproved, { reason: 'SQL_VERSION_NOT_APPROVED' });
+    }
+    const { outdated } = await currentClusters(repos, project);
+    if (outdated) throw AppError.conflict(SQL.outdated, { reason: 'CLUSTERS_OUTDATED' });
+    if (await isActive(project, 'clustering')) {
+      throw AppError.conflict(SQL.clustering, { reason: 'CLUSTERING_RUNNING' });
+    }
+  }
+
+  /**
    * Source jobs need a source of this project (404 otherwise) that no other job of the same
    * type is working on (409). Mapping and standardise also need the source profiled (409);
    * mapping needs the project's target schema stored, standardise a fully reviewed mapping.
@@ -400,6 +454,8 @@ export function createJobService({
       if (type === 'pair_review') await checkPairReviewJob(project);
       if (type === 'clustering') await checkClusteringJob(project);
       if (type === 'export') await checkExportJob(project, payload);
+      if (type === 'sql_draft') await checkSqlDraftJob(project, payload);
+      if (type === 'sql_run') await checkSqlRunJob(project, payload);
       const job = await repos.jobs.create({
         projectId: project.id,
         type,
@@ -407,6 +463,17 @@ export function createJobService({
         createdBy: actor.user.userId,
       });
       await record(actor, job, 'job.create', { type, payload });
+      if (type === 'sql_run') {
+        await audit.record({
+          projectId: project.id,
+          actorId: actor.user.userId,
+          action: 'sql_version.run',
+          entityType: 'sql_version',
+          entityId: String(payload.versionId),
+          after: { jobId: job.id },
+          requestId: actor.requestId,
+        });
+      }
       try {
         await aiService.enqueueJob(
           { jobId: job.id, projectId: project.id, type, payload },

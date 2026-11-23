@@ -2,6 +2,7 @@ import { defineApiSuite } from './support/api-suite.js';
 import { defineCandidatesSuite } from './support/candidates-suite.js';
 import { defineClustersSuite } from './support/clusters-suite.js';
 import { defineExportsSuite } from './support/exports-suite.js';
+import { defineSqlSuite } from './support/sql-suite.js';
 import { defineScoresSuite } from './support/scores-suite.js';
 import { defineJobsSuite } from './support/jobs-suite.js';
 import type { Repositories } from '../src/repositories.js';
@@ -92,5 +93,12 @@ defineExportsSuite('in-memory repositories', {
   async workerExport(repos, record) {
     await Promise.resolve();
     (repos as MemoryRepositories).exports.workerSave(record);
+  },
+});
+defineSqlSuite('in-memory repositories', {
+  ...memoryClusters,
+  async workerSqlVersion(repos, version) {
+    await Promise.resolve();
+    (repos as MemoryRepositories).sqlVersions.workerSave(version);
   },
 });

@@ -29,6 +29,7 @@ import type {
   PairDecision,
 } from '../../src/modules/clusters/cluster.types.js';
 import type { ExportRecord, ExportRepository } from '../../src/modules/exports/export.types.js';
+import type { SqlVersion, SqlVersionRepository } from '../../src/modules/sql/sql.types.js';
 import type {
   ColumnProfile,
   ColumnProfileRepository,
@@ -111,6 +112,7 @@ export interface MemoryRepositories extends Repositories {
   scores: ScoreRepository & { workerSave(write: ScoreWrite): void };
   clusters: ClusterRepository & { workerSave(write: ClusterWrite): void };
   exports: ExportRepository & { workerSave(record: ExportRecord): void };
+  sqlVersions: SqlVersionRepository & { workerSave(version: SqlVersion): void };
 }
 
 /**
@@ -155,6 +157,12 @@ export function createMemoryRepositories(): MemoryRepositories {
   };
   // key: export id (= the export job's id).
   const exportRecords = new Map<string, ExportRecord>();
+  // key: version id (= the sql_draft job's id).
+  const sqlVersions = new Map<string, SqlVersion>();
+  const versionIn = (projectId: string, versionId: string) => {
+    const found = sqlVersions.get(versionId.toLowerCase());
+    return found?.projectId === projectId ? found : undefined;
+  };
   const audit: AuditEntry[] = [];
   let firstAdminClaimed = false;
 
@@ -832,6 +840,56 @@ export function createMemoryRepositories(): MemoryRepositories {
       },
       workerSave(record) {
         exportRecords.set(record.id, structuredClone(record));
+      },
+    },
+
+    sqlVersions: {
+      async listByProject(projectId, limit) {
+        await Promise.resolve();
+        return structuredClone(
+          [...sqlVersions.values()]
+            .filter((v) => v.projectId === projectId)
+            .sort((a, b) => b.version - a.version)
+            .slice(0, limit),
+        );
+      },
+      async findById(projectId, versionId) {
+        await Promise.resolve();
+        const found = versionIn(projectId, versionId);
+        return found ? structuredClone(found) : null;
+      },
+      async approve(projectId, versionId, by, at) {
+        await Promise.resolve();
+        const found = versionIn(projectId, versionId);
+        if (found?.status !== 'draft' || !found.testsPassed) return null;
+        Object.assign(found, { status: 'approved', approvedBy: by, approvedAt: at });
+        const superseded: number[] = [];
+        for (const other of sqlVersions.values()) {
+          if (other.projectId === projectId && other.status === 'approved' && other !== found) {
+            Object.assign(other, { status: 'superseded', supersededAt: at });
+            superseded.push(other.version);
+          }
+        }
+        return { version: structuredClone(found), superseded };
+      },
+      async reject(projectId, versionId, by, at, reason) {
+        await Promise.resolve();
+        const found = versionIn(projectId, versionId);
+        if (!found || (found.status !== 'draft' && found.status !== 'approved')) return null;
+        Object.assign(found, {
+          status: 'rejected',
+          rejectedBy: by,
+          rejectedAt: at,
+          rejectReason: reason,
+        });
+        return structuredClone(found);
+      },
+      async deleteByProject(projectId) {
+        await Promise.resolve();
+        for (const [id, v] of sqlVersions) if (v.projectId === projectId) sqlVersions.delete(id);
+      },
+      workerSave(version) {
+        sqlVersions.set(version.id, structuredClone(version));
       },
     },
 

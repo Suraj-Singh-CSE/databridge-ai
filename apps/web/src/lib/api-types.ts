@@ -130,7 +130,9 @@ export type JobType =
   | 'scoring'
   | 'pair_review'
   | 'clustering'
-  | 'export';
+  | 'export'
+  | 'sql_draft'
+  | 'sql_run';
 export type JobStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled';
 
 export interface JobError {
