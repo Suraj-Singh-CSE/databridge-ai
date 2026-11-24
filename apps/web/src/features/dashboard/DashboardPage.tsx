@@ -39,7 +39,7 @@ function RangeSelector({
       {DASHBOARD_RANGES.map((range) => (
         <label
           key={range}
-          className="cursor-pointer rounded-md px-3 py-1 text-sm text-muted-foreground has-checked:bg-background has-checked:text-foreground has-checked:shadow-sm has-focus-visible:ring-2 has-focus-visible:ring-ring"
+          className="cursor-pointer rounded-md px-3 py-1 text-sm text-foreground has-checked:bg-background has-checked:font-medium has-checked:shadow-sm has-focus-visible:ring-2 has-focus-visible:ring-ring"
         >
           <input
             type="radio"
