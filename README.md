@@ -869,6 +869,13 @@ Every route except sign-in, create-account and the 404 page needs a session; oth
 - Bars are plain CSS in theme colours, marked `role="img"` with a one-sentence summary, and each
   has a visually hidden table with the numbers. No chart library.
 - A finished job refreshes the dashboard (`refreshAfterJob`), like the other step pages.
+- The e2e test `apps/web/e2e/dashboard-assistant.spec.ts` (full stack, Mock LLM; setup up to
+  approved customers, approved SQL that ran and one quality report) checks that **Customers**
+  equals Matching's "People found", **Approved customers** equals Matching's "Approved" and the
+  latest quality status equals the Data quality report; that the time period moves by arrow keys
+  (30 → 7 → 90 days) with every section still shown; the "measured on synthetic test data"
+  benchmarks label; and that the next-step link opens the step it names. It runs an axe WCAG 2
+  A/AA scan and saves `11-dashboard.png`.
 
 **Assistant (M6.3b)**
 
@@ -886,6 +893,12 @@ Every route except sign-in, create-account and the 404 page needs a session; oth
   citation) get a calm message of their own; new answers are announced (`aria-live="polite"`).
 - History lists the user's own conversations (open, delete with confirmation, new
   conversation). 409 not built, 429 rate limit, 503 and network errors each have plain words.
+- The same e2e test builds the knowledge when needed, then asks "Why did PIN completeness fail?"
+  (Shift+Enter adds a line without sending, Enter sends; the answer has at least one source, and a
+  Data quality source opens that page), an unanswerable question (the friendly refusal) and a
+  question holding an email from the uploaded sample (the personal-data refusal; the email is not
+  in History, on the page or in any announcement). History lists the conversation; an axe scan
+  runs with answers shown and `12-assistant.png` is saved.
 
 **Run it in development** (Vite proxies `/api` to `http://localhost:4000`):
 

@@ -174,3 +174,37 @@ export async function approveAllHigh(page: Page): Promise<void> {
     ).toBeVisible();
   }
 }
+
+/** Drafts SQL from the approved customers, approves the new version and runs it. */
+export async function approveAndRunSql(page: Page, projectPath: string): Promise<void> {
+  await page.goto(`${projectPath}/pipeline`);
+  await page.getByRole('button', { name: 'Draft SQL', exact: true }).click();
+  const draft = page.getByRole('dialog', { name: 'Draft SQL' });
+  await draft.getByRole('radio', { name: /^Approved customers/ }).check();
+  await draft.getByRole('button', { name: 'Start draft' }).click();
+  await expect(draft).toBeHidden();
+  const drafted = page.getByText(/^Version \d+ is drafted\./);
+  await expect(drafted).toBeVisible({ timeout: JOB_TIMEOUT });
+  const version = /\d+/.exec(await drafted.innerText())?.[0] ?? '';
+
+  const details = page.getByRole('region', { name: `Version ${version} details` });
+  await details.getByRole('button', { name: `Approve version ${version}` }).click();
+  const confirm = page.getByRole('dialog', { name: `Approve version ${version}?` });
+  await confirm.getByRole('button', { name: 'Approve', exact: true }).click();
+  await expect(confirm).toBeHidden();
+  const current = page.getByRole('region', { name: `Current SQL · version ${version}` });
+  await expect(current).toBeVisible({ timeout: 15_000 });
+  await current.getByRole('button', { name: `Run SQL version ${version}` }).click();
+  await expect(current.getByText(/rows · passed$/)).toBeVisible({ timeout: JOB_TIMEOUT });
+}
+
+/** Runs the quality checks once; returns the latest report's overall status, e.g. "Warning". */
+export async function runQualityChecks(page: Page, projectPath: string): Promise<string> {
+  await page.goto(`${projectPath}/quality`);
+  await page.getByRole('button', { name: 'Run quality checks', exact: true }).click();
+  const overall = page
+    .getByRole('region', { name: 'Latest report' })
+    .getByText(/^Overall: (Pass|Warning|Fail|Skipped)$/);
+  await expect(overall).toBeVisible({ timeout: JOB_TIMEOUT });
+  return (await overall.innerText()).replace('Overall: ', '');
+}
