@@ -128,10 +128,10 @@ export function HistoryPanel({
               onClick={() => {
                 onOpen(item.id);
               }}
-              className="min-w-0 flex-1 rounded-md px-2 py-1.5 text-left text-sm hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none aria-[current=true]:bg-muted"
+              className="group min-w-0 flex-1 rounded-md px-2 py-1.5 text-left text-sm hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none aria-[current=true]:bg-muted"
             >
               <span className="block truncate">{item.title}</span>
-              <span className="block text-xs text-muted-foreground">
+              <span className="block text-xs text-muted-foreground group-hover:text-foreground group-aria-[current=true]:text-foreground">
                 <TimeAgo iso={item.updatedAt} />
               </span>
             </button>
