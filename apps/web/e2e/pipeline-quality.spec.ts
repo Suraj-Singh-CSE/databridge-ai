@@ -116,12 +116,13 @@ test('draft, approve and run the SQL, export the customers, then check quality',
   const confirm = page.getByRole('dialog', { name: `Approve version ${version}?` });
   await confirm.getByRole('button', { name: 'Approve', exact: true }).click();
   await expect(confirm).toBeHidden();
+  // Durable signal first (the re-read version list), then the announced result.
+  await expect(versionRow).toContainText('Approved', { timeout: 15_000 });
   await expect(
     page.getByText(`Version ${version} approved. It is now the current SQL.`),
   ).toBeVisible();
   // The status pill and the "Approved" fact (when and by whom).
   await expect(details.getByText('Approved', { exact: true })).toHaveCount(2);
-  await expect(versionRow).toContainText('Approved');
   const current = page.getByRole('region', { name: `Current SQL · version ${version}` });
   await expect(current.getByText('Approved', { exact: true })).toHaveCount(2);
 

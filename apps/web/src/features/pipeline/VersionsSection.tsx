@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useRef } from 'react';
 
 import { LoadFailed } from '@/components/LoadFailed';
 import { StatusPill } from '@/components/StatusPill';
@@ -20,6 +20,9 @@ interface VersionsSectionProps {
   selectedId: string | null;
   onSelect: (versionId: string | null) => void;
   canDecide: boolean;
+  /** The last decision's result, kept by the page so a refetch or remount cannot lose it. */
+  message: string | null;
+  onMessage: (text: string | null) => void;
 }
 
 interface SelectedVersionProps {
@@ -75,10 +78,11 @@ export function VersionsSection({
   selectedId,
   onSelect,
   canDecide,
+  message,
+  onMessage,
 }: VersionsSectionProps) {
   const selected = versions.find((v) => v.id === selectedId) ?? null;
   const approved = versions.find((v) => v.status === 'approved') ?? null;
-  const [message, setMessage] = useState<string | null>(null);
   const detailsHeading = useRef<HTMLHeadingElement>(null);
 
   return (
@@ -122,7 +126,7 @@ export function VersionsSection({
                       aria-label={`${open ? 'Hide' : 'View'} version ${version.version}`}
                       aria-controls="sql-version-details"
                       onClick={() => {
-                        setMessage(null);
+                        onMessage(null);
                         onSelect(open ? null : version.id);
                       }}
                     >
@@ -151,7 +155,7 @@ export function VersionsSection({
               approved={approved}
               canDecide={canDecide}
               onResult={(text, ok) => {
-                setMessage(text);
+                onMessage(text);
                 // The decision buttons go away once decided: keep focus on these details.
                 if (ok) detailsHeading.current?.focus();
               }}

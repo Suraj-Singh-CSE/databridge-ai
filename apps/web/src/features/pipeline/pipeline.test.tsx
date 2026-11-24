@@ -626,6 +626,43 @@ describe('pipeline: SQL actions', () => {
     ).toBeInTheDocument();
   });
 
+  it('keeps the approval message when the decision buttons unmount before the refetch ends', async () => {
+    // Like the real api: once approved, the version reads back as approved (so the decision
+    // buttons go away) while the slower version list is still being re-read.
+    let decided = false;
+    const nowApproved = { ...PASSING_DRAFT, status: 'approved' as const };
+    setup({ versions: [PASSING_DRAFT, APPROVED] });
+    server.use(
+      http.post(`${API}/projects/:id/sql/versions/:versionId/approve`, () => {
+        decided = true;
+        return ok({ version: nowApproved });
+      }),
+      http.get(`${API}/projects/:id/sql/versions/:versionId`, ({ params }) => {
+        if (params.versionId === APPROVED.id) return ok({ version: APPROVED });
+        return ok({ version: decided ? nowApproved : PASSING_DRAFT });
+      }),
+      http.get(`${API}/projects/:id/sql/versions`, async () => {
+        if (decided) await delay(300);
+        const items = decided
+          ? [nowApproved, { ...APPROVED, status: 'superseded' as const }]
+          : [PASSING_DRAFT, APPROVED];
+        return ok({ items: items.map(summary) });
+      }),
+    );
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'View version 5' }));
+    await user.click(await screen.findByRole('button', { name: 'Approve version 5' }));
+    await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Approve' }));
+    await waitFor(() => {
+      expect(screen.queryByRole('button', { name: 'Approve version 5' })).not.toBeInTheDocument();
+    });
+    expect(
+      await screen.findByText('Version 5 approved. It is now the current SQL.', undefined, {
+        timeout: 2000,
+      }),
+    ).toBeInTheDocument();
+  });
+
   it('rejects a draft with a reason', async () => {
     let body: unknown = null;
     setup();

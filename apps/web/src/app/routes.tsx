@@ -2,6 +2,7 @@ import { Suspense, type ComponentType } from 'react';
 import { Navigate, type RouteObject } from 'react-router';
 
 import {
+  AssistantPage,
   CreateAccountPage,
   DashboardPage,
   MappingPage,
@@ -30,6 +31,7 @@ const STEP_PAGES: Partial<Record<ProjectPage['slug'], ComponentType>> = {
   pipeline: PipelinePage,
   quality: QualityPage,
   dashboard: DashboardPage,
+  assistant: AssistantPage,
 };
 
 function stepElement(page: ProjectPage) {

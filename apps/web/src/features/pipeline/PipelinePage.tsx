@@ -81,6 +81,8 @@ interface SqlSectionsProps {
   onSelect: (versionId: string | null) => void;
   canManage: boolean;
   runJob: Job | null;
+  decisionMessage: string | null;
+  onDecisionMessage: (text: string | null) => void;
 }
 
 function SqlSections({
@@ -90,6 +92,8 @@ function SqlSections({
   onSelect,
   canManage,
   runJob,
+  decisionMessage,
+  onDecisionMessage,
 }: SqlSectionsProps) {
   const versions = useSqlVersions(projectId);
   if (versions.isPending) {
@@ -140,6 +144,8 @@ function SqlSections({
         selectedId={selectedId}
         onSelect={onSelect}
         canDecide={canManage}
+        message={decisionMessage}
+        onMessage={onDecisionMessage}
       />
     </>
   );
@@ -154,6 +160,7 @@ function PipelineContent({ project }: { project: Project }) {
   const jobs = useProjectJobs(project.id);
   const running = (jobs.data ?? []).filter((job) => PIPELINE_JOBS.has(job.type) && isRunning(job));
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [decisionMessage, setDecisionMessage] = useState<string | null>(null);
 
   return (
     <div className="space-y-6">
@@ -181,6 +188,8 @@ function PipelineContent({ project }: { project: Project }) {
         onSelect={setSelectedId}
         canManage={canManage}
         runJob={latestJobOf(jobs.data, 'sql_run')}
+        decisionMessage={decisionMessage}
+        onDecisionMessage={setDecisionMessage}
       />
       <ExportsSection
         projectId={project.id}

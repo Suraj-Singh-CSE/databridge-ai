@@ -68,6 +68,8 @@ export type ApiErrorCode =
   | 'LIMIT_REACHED'
   | 'RATE_LIMITED'
   | 'QUEUE_UNAVAILABLE'
+  | 'KNOWLEDGE_NOT_BUILT'
+  | 'AI_SERVICE_UNAVAILABLE'
   | 'INTERNAL_ERROR'
   | 'NETWORK_ERROR';
 
@@ -133,7 +135,8 @@ export type JobType =
   | 'export'
   | 'sql_draft'
   | 'sql_run'
-  | 'quality';
+  | 'quality'
+  | 'knowledge_index';
 export type JobStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled';
 
 export interface JobError {
@@ -884,4 +887,72 @@ export interface Dashboard {
   review: DashboardReview;
   jobs: DashboardJobs;
   benchmarks: { version: number; items: Benchmark[] };
+}
+
+/* ---------- Assistant (ADR 0024, 0025) ---------- */
+
+export const CHUNK_KINDS = ['customer', 'decision', 'mapping', 'quality', 'sql', 'docs'] as const;
+export type ChunkKind = (typeof CHUNK_KINDS)[number];
+
+/** `GET /projects/:id/knowledge/summary`: counts and codes only, never chunk text. */
+export interface KnowledgeSummary {
+  projectId: string;
+  jobId: string;
+  chunkCount: number;
+  chunksByKind: Record<ChunkKind, number>;
+  droppedByPrivacyGuard: number;
+  maskedDocs: number;
+  mode: 'hybrid' | 'keyword';
+  embeddingModel: string | null;
+  embedded: number;
+  reused: number;
+  embeddingError: string | null;
+  finishedAt: string;
+}
+
+export interface AssistantCitation {
+  n: number;
+  chunkId: string;
+  kind: ChunkKind;
+  title: string;
+  /** The page the source lives on (e.g. `matching`, `docs`) and its parameters. */
+  link: { page: string; params: Record<string, string> };
+}
+
+export type AssistantRefusalReason =
+  'personal_data' | 'weak_retrieval' | 'not_answerable' | 'no_citation';
+export type AssistantConfidence = 'high' | 'medium' | 'low';
+
+/** One question and its answer; `question` is null when it was refused for personal data. */
+export interface AssistantTurn {
+  question: string | null;
+  answer: string;
+  citations: AssistantCitation[];
+  confidence: AssistantConfidence;
+  answerable: boolean;
+  refusalReason: AssistantRefusalReason | null;
+  mode: 'hybrid' | 'keyword' | null;
+  model: string | null;
+  latencyMs: number;
+  createdAt: string;
+}
+
+export interface AssistantConversationSummary {
+  id: string;
+  projectId: string;
+  userId: string;
+  title: string;
+  turnCount: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AssistantConversation extends Omit<AssistantConversationSummary, 'turnCount'> {
+  turns: AssistantTurn[];
+}
+
+/** `POST /projects/:id/assistant/ask`. */
+export interface AssistantReply {
+  conversationId: string;
+  turn: AssistantTurn;
 }
