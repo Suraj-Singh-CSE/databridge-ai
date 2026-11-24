@@ -280,6 +280,7 @@ export function DecisionActions({
   version: SqlVersion;
   /** The current approved version, which approving supersedes. */
   approved: SqlVersionSummary | null;
+  /** Reported even when these buttons have unmounted (the decided version is no longer a draft). */
   onResult: (text: string, ok: boolean) => void;
 }) {
   const approve = useApproveSql(projectId);
@@ -308,14 +309,16 @@ export function DecisionActions({
           disabled={!version.testsPassed || pending}
           describedBy={version.testsPassed ? undefined : blockedId}
           onConfirm={() => {
-            approve.mutate(version.id, {
-              onSuccess: () => {
+            // mutateAsync, not mutate callbacks: approving re-reads this version as approved,
+            // which unmounts these buttons, and mutate callbacks of an unmounted caller never run.
+            void approve.mutateAsync(version.id).then(
+              () => {
                 onResult(`Version ${version.version} approved. It is now the current SQL.`, true);
               },
-              onError: (error) => {
+              (error: unknown) => {
                 onResult(actionErrorText(error), false);
               },
-            });
+            );
           }}
         />
         <ConfirmAction
@@ -329,15 +332,12 @@ export function DecisionActions({
           pending={reject.isPending}
           disabled={pending}
           onConfirm={(reason) => {
-            reject.mutate(
-              { versionId: version.id, reason },
-              {
-                onSuccess: () => {
-                  onResult(`Version ${version.version} rejected.`, true);
-                },
-                onError: (error) => {
-                  onResult(actionErrorText(error), false);
-                },
+            void reject.mutateAsync({ versionId: version.id, reason }).then(
+              () => {
+                onResult(`Version ${version.version} rejected.`, true);
+              },
+              (error: unknown) => {
+                onResult(actionErrorText(error), false);
               },
             );
           }}

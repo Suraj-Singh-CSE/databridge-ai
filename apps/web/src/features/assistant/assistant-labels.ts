@@ -10,8 +10,7 @@ import type {
 
 export const MAX_QUESTION_CHARS = 500;
 
-export const PRIVACY_NOTE =
-  "Don't type customer details — use a customer ID like C3F9A1B2C4D5E instead.";
+export const PRIVACY_NOTE = "Don't type customer details — use a customer ID instead.";
 
 export const KIND_LABELS: Record<ChunkKind, string> = {
   customer: 'Customer',

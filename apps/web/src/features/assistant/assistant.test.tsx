@@ -186,9 +186,14 @@ describe('assistant: asking', () => {
     const box = await questionBox();
     await user.type(box, 'Why did PIN completeness fail?');
     expect(screen.getByText('30 / 500')).toBeInTheDocument();
+    expect(box).toHaveAttribute('maxLength', '500');
+    expect(box).toHaveAccessibleDescription(
+      /Don't type customer details — use a customer ID instead\./,
+    );
     await user.keyboard('{Enter}');
 
     const answer = await screen.findByRole('article', { name: 'Question and answer' });
+    expect(answer.closest('[aria-live="polite"]')).not.toBeNull();
     expect(bodies).toEqual([{ question: 'Why did PIN completeness fail?' }]);
     expect(box).toHaveFocus();
     expect(box).toHaveValue('');
