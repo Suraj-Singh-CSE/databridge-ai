@@ -131,7 +131,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     env:
-      # The free-hosting layout (ADR 0026): MinIO as S3 (Cloudflare R2 in production), no shared
+      # The free-hosting layout (ADR 0026): an S3 test server (Cloudflare R2 in production), no shared
       # uploads volume, and the Celery worker inside the ai-service container.
       COMPOSE: docker compose --env-file .env.ci -f infra/docker-compose.yml -f infra/docker-compose.s3.yml
       # The container whose logs hold the worker's lines.
@@ -146,7 +146,7 @@ jobs:
             echo "JWT_ACCESS_SECRET=$(secret)"
             echo "JWT_REFRESH_SECRET=$(secret)"
             echo "AI_SERVICE_TOKEN=$(secret)"
-            # MinIO root credentials, also used by api and ai-service.
+            # S3 keys for api and ai-service (the test server accepts any).
             echo "S3_ACCESS_KEY_ID=ci$(openssl rand -hex 8)"
             echo "S3_SECRET_ACCESS_KEY=$(secret)"
             echo "LLM_PROVIDER=mock"
@@ -249,7 +249,7 @@ jobs:
           test "$code" = 400
           jq -e '.error.code == "UNSUPPORTED_FILE"' /tmp/reject > /dev/null
 
-          # Stored in the bucket (MinIO here, R2 in production), not on any shared disk: the
+          # Stored in the bucket (the S3 test server here, R2 in production), not on any shared disk: the
           # ai-service sees the object through its own S3 client, and the api wrote no local file.
           key="projects/$project/sources/$csv_id/original.csv"
           $COMPOSE exec -T ai-service python -c '

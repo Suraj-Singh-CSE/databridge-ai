@@ -936,9 +936,9 @@ and data volumes with `docker compose --env-file .env -f infra/docker-compose.ym
 `--env-file .env` is needed because the compose file lives in `infra/`, so Compose would not find the
 repo-root `.env` on its own. Missing secrets make Compose stop with a message naming the variable.
 
-To run the free-hosting layout locally (MinIO in place of Cloudflare R2, no shared volume, the
+To run the free-hosting layout locally (an S3 test server in place of Cloudflare R2, no shared volume, the
 worker inside the AI service container; this is what CI runs), set `S3_ACCESS_KEY_ID` and
-`S3_SECRET_ACCESS_KEY` in `.env` (they become MinIO's credentials) and add the override file:
+`S3_SECRET_ACCESS_KEY` in `.env` (any values; the test server accepts them) and add the override file:
 
 ```bash
 docker compose --env-file .env -f infra/docker-compose.yml -f infra/docker-compose.s3.yml up --build
@@ -1200,7 +1200,7 @@ The **Live eval** workflow (`.github/workflows/live-eval.yml`, task `mapping`, `
 separate: manual only, never on push or pull request (see "Evaluating mapping accuracy").
 
 - **docker**: builds every image, starts the full stack in the free-hosting layout
-  (`infra/docker-compose.s3.yml`: MinIO as S3, no shared uploads volume, the worker inside the AI
+  (`infra/docker-compose.s3.yml`: an S3 test server, no shared uploads volume, the worker inside the AI
   service container) with throwaway secrets, and smoke-tests the
   web root, the api health and readiness routes (direct and through the nginx proxy), the AI
   service's readiness (storage included) and its in-container worker, register and `/auth/me`

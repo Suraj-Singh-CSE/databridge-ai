@@ -2,8 +2,8 @@
 
 - `docker-compose.yml`: full local/CI stack (mongo, redis, ai-service, ai-worker, api, web). See the
   "Run with Docker" section of the root README.
-- `docker-compose.s3.yml`: override for the free-hosting layout (ADR 0026), used by CI: MinIO as
-  S3 (bucket made by the one-shot `storage-init` container), `STORAGE_DRIVER=s3` for api and
+- `docker-compose.s3.yml`: override for the free-hosting layout (ADR 0026), used by CI: moto's S3
+  server in place of R2 (bucket made by the one-shot `storage-init` container), `STORAGE_DRIVER=s3` for api and
   ai-service, no shared uploads volume, and the Celery worker inside the ai-service container
   (`RUN_WORKER=true`; the `ai-worker` service is not started).
 - `nginx.conf`: config for the web image; serves the built SPA and proxies `/api/` to the api

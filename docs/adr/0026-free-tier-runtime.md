@@ -96,8 +96,10 @@ Redis, and the ai-service's `/internal/v1/ready` pings MongoDB, Redis and the st
 report only `ok`/`unavailable` per dependency, never error details. Render's health checks
 should use the `/ready` routes.
 
-**CI runs the free-hosting layout.** The Docker job uses `infra/docker-compose.s3.yml`: MinIO
-for R2 (bucket created by a one-shot `storage-init` container), `STORAGE_DRIVER=s3` for both
+**CI runs the free-hosting layout.** The Docker job uses `infra/docker-compose.s3.yml`: moto's
+S3 server for R2 (MinIO was the first choice, but its image is no longer available on Docker
+Hub; moto is already the Python tests' S3 fake), with the bucket created by a one-shot
+`storage-init` container, `STORAGE_DRIVER=s3` for both
 services, no shared uploads volume, and the worker inside the ai-service container. The whole
 smoke test and the Playwright suite (profile, map, standardise, match, review, export download,
 SQL, quality, assistant) run against it. Python tests cover both drivers with moto's in-memory
