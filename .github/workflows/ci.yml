@@ -372,7 +372,7 @@ jobs:
           jq -e '.data.source.rowCount == 151 and .data.source.columnCount == 9
             and (.data.columns[] | select(.column == "PAN") | .patterns[0].code) == "pan"' \
             "/tmp/profile-body-$xlsx" > /dev/null
-          echo "ok: CSV and XLSX profiled by the worker from the shared volume"
+          echo "ok: CSV and XLSX profiled by the worker from the object storage"
 
       - name: Mapping smoke test through the nginx proxy (profile, then map the CRM sample)
         run: |
