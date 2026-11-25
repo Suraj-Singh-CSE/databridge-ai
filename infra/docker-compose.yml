@@ -2,6 +2,9 @@
 #   cp .env.example .env        # then edit the secrets
 #   docker compose --env-file .env -f infra/docker-compose.yml up --build
 #
+# Free-hosting layout instead (MinIO for Cloudflare R2, no shared volume, the worker inside the
+# ai-service container; docs/adr/0026-free-tier-runtime.md): add -f infra/docker-compose.s3.yml.
+#
 # Values come from the env file passed with --env-file (compose does not read the repo-root .env
 # on its own because this file lives in infra/). Each service receives only the variables it needs.
 # Secrets use ${VAR:?...} so compose refuses to start when one is missing.
@@ -25,6 +28,15 @@ x-ai-environment: &ai-environment
   LLM_RETRY_AFTER_MAX_SECONDS: ${LLM_RETRY_AFTER_MAX_SECONDS:-60}
   LOG_LEVEL: ${LOG_LEVEL:-INFO}
   UPLOAD_DIR: /data/uploads
+  # Object storage (docs/adr/0026-free-tier-runtime.md): the same variables as the api.
+  STORAGE_DRIVER: ${STORAGE_DRIVER:-local}
+  S3_BUCKET: ${S3_BUCKET:-}
+  S3_REGION: ${S3_REGION:-}
+  S3_ENDPOINT: ${S3_ENDPOINT:-}
+  S3_FORCE_PATH_STYLE: ${S3_FORCE_PATH_STYLE:-false}
+  S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-}
+  S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-}
+  MAX_UPLOAD_BYTES: ${MAX_UPLOAD_BYTES:-52428800}
   # Column profiler limits (docs/adr/0011-column-profiling.md), shared with the api.
   MAX_UPLOAD_ROWS: ${MAX_UPLOAD_ROWS:-200000}
   XLSX_MAX_UNCOMPRESSED_BYTES: ${XLSX_MAX_UNCOMPRESSED_BYTES:-209715200}
@@ -42,6 +54,8 @@ x-ai-environment: &ai-environment
   MAPPING_MAX_COLUMNS_PER_CALL: ${MAPPING_MAX_COLUMNS_PER_CALL:-40}
   # Candidate pairs (docs/adr/0015-blocking.md).
   BLOCKING_MAX_BLOCK_SIZE: ${BLOCKING_MAX_BLOCK_SIZE:-200}
+  MATCHING_MAX_RECORDS: ${MATCHING_MAX_RECORDS:-1000000}
+  MATCHING_MAX_PAIRS: ${MATCHING_MAX_PAIRS:-5000000}
   # Pair scoring (docs/adr/0016-pair-scoring.md).
   SCORING_MATCH_THRESHOLD: ${SCORING_MATCH_THRESHOLD:-0.90}
   SCORING_MAYBE_THRESHOLD: ${SCORING_MAYBE_THRESHOLD:-0.50}
@@ -185,12 +199,14 @@ services:
       AI_SERVICE_URL: http://ai-service:8000
       AI_SERVICE_TOKEN: ${AI_SERVICE_TOKEN:?set AI_SERVICE_TOKEN in your env file}
       AI_SERVICE_TIMEOUT_MS: ${AI_SERVICE_TIMEOUT_MS:-5000}
+      AI_SERVICE_WAKE_TIMEOUT_MS: ${AI_SERVICE_WAKE_TIMEOUT_MS:-90000}
       ASSISTANT_TIMEOUT_MS: ${ASSISTANT_TIMEOUT_MS:-30000}
       ASSISTANT_RATE_LIMIT_MAX: ${ASSISTANT_RATE_LIMIT_MAX:-20}
       ASSISTANT_RATE_LIMIT_WINDOW_MS: ${ASSISTANT_RATE_LIMIT_WINDOW_MS:-60000}
       ASSISTANT_MAX_TURNS: ${ASSISTANT_MAX_TURNS:-50}
       # Background jobs (docs/adr/0010-background-jobs.md).
       JOB_STALE_AFTER_SECONDS: ${JOB_STALE_AFTER_SECONDS:-300}
+      JOB_QUEUED_STALE_AFTER_SECONDS: ${JOB_QUEUED_STALE_AFTER_SECONDS:-600}
       JOB_EVENTS_KEEPALIVE_MS: ${JOB_EVENTS_KEEPALIVE_MS:-15000}
       # The browser origin is the nginx web container, not the Vite dev server.
       CORS_ORIGIN: ${WEB_ORIGIN:-http://localhost:8080}

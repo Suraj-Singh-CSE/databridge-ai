@@ -34,6 +34,7 @@ uploads/
 .env
 .env.*
 !.env.example
+!.env.free-tier.example
 
 # Logs and OS/editor noise
 *.log

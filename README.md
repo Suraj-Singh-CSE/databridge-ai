@@ -936,6 +936,41 @@ and data volumes with `docker compose --env-file .env -f infra/docker-compose.ym
 `--env-file .env` is needed because the compose file lives in `infra/`, so Compose would not find the
 repo-root `.env` on its own. Missing secrets make Compose stop with a message naming the variable.
 
+To run the free-hosting layout locally (MinIO in place of Cloudflare R2, no shared volume, the
+worker inside the AI service container; this is what CI runs), set `S3_ACCESS_KEY_ID` and
+`S3_SECRET_ACCESS_KEY` in `.env` (they become MinIO's credentials) and add the override file:
+
+```bash
+docker compose --env-file .env -f infra/docker-compose.yml -f infra/docker-compose.s3.yml up --build
+```
+
+## Deploy (free tier)
+
+Placeholder: the step-by-step deployment guide (Render blueprint, Cloudflare R2, MongoDB Atlas)
+comes with the deploy step. The runtime it relies on is in place and described in
+[ADR 0026](docs/adr/0026-free-tier-runtime.md):
+
+- **Services (all free):** Render web services for web, api and ai-service; Render Key Value
+  (Redis); MongoDB Atlas M0; a private Cloudflare R2 bucket `databridge-uploads`; Gemini free tier.
+- **ai-service** runs `python -m app.supervisor`: uvicorn on `$PORT` plus the Celery worker
+  (`RUN_WORKER=true`, one job at a time). While a job runs it pings its own public URL every
+  5 minutes so the free service does not sleep mid-job.
+- **Cold starts:** the api wakes the ai-service before starting a job or answering a question
+  (up to 90 s); if it is still starting, the UI says "Starting the AI service — this can take up
+  to a minute on the free plan".
+- **Health checks:** `GET /api/v1/ready` (api: MongoDB, Redis) and `GET /internal/v1/ready`
+  (ai-service: MongoDB, Redis, storage). `/health` routes are liveness only.
+
+Environment variables (values for the free demo in
+[`.env.free-tier.example`](.env.free-tier.example); every variable is explained in
+[`.env.example`](.env.example)):
+
+| Service    | Variables                                                                                                                                                                                                                                                                                  |
+| ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| both       | `MONGODB_URI`, `REDIS_URL`, `AI_SERVICE_TOKEN`, `STORAGE_DRIVER=s3`, `S3_BUCKET`, `S3_REGION=auto`, `S3_ENDPOINT`, `S3_FORCE_PATH_STYLE`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`, `MAX_UPLOAD_BYTES`, `MAX_UPLOAD_ROWS`, `MAX_SOURCES_PER_PROJECT`                                     |
+| api        | `NODE_ENV=production`, `JWT_ACCESS_SECRET`, `JWT_REFRESH_SECRET`, `AI_SERVICE_URL`, `AI_SERVICE_TIMEOUT_MS`, `AI_SERVICE_WAKE_TIMEOUT_MS`, `ASSISTANT_TIMEOUT_MS`, `CORS_ORIGIN`, `TRUST_PROXY=1`, `JOB_STALE_AFTER_SECONDS`, `JOB_QUEUED_STALE_AFTER_SECONDS`                             |
+| ai-service | `RUN_WORKER=true`, `WORKER_POOL`, `WORKER_CONCURRENCY=1`, `WORKER_MAX_MEMORY_PER_CHILD_MB`, `SELF_PING_URL` (or Render's `RENDER_EXTERNAL_URL`), `SELF_PING_INTERVAL_SECONDS`, `LLM_PROVIDER=gemini`, `GEMINI_API_KEY`, and the memory caps (`MATCHING_MAX_*`, `SQL_*`, `EXPORT_MAX_ROWS`) |
+
 ## Evaluating mapping accuracy
 
 The mapping engine is scored against known answers on synthetic data
@@ -1164,10 +1199,14 @@ The **Live eval** workflow (`.github/workflows/live-eval.yml`, task `mapping`, `
 `sql_agent`, `embedding_retrieval` or `assistant`) is
 separate: manual only, never on push or pull request (see "Evaluating mapping accuracy").
 
-- **docker**: builds every image, starts the full stack with throwaway secrets, and smoke-tests the
-  web root, the api health route (direct and through the nginx proxy), register and `/auth/me`
+- **docker**: builds every image, starts the full stack in the free-hosting layout
+  (`infra/docker-compose.s3.yml`: MinIO as S3, no shared uploads volume, the worker inside the AI
+  service container) with throwaway secrets, and smoke-tests the
+  web root, the api health and readiness routes (direct and through the nginx proxy), the AI
+  service's readiness (storage included) and its in-container worker, register and `/auth/me`
   through the proxy, source uploads through the proxy (CSV and XLSX samples, list with row count,
-  preview, an `.exe` rejected, the file visible read-only to the AI service), background jobs through
+  preview, an `.exe` rejected, the file read from the bucket by the AI service and absent from
+  the api's disk), background jobs through
   the proxy (a demo job streamed with `curl -N` until it succeeds with increasing progress, a
   `failAtStep` job that fails with the handler's code, a long job cancelled mid-run), profiling,
   mapping, standardising, finding and scoring candidate pairs for the CRM sample, the AI review of

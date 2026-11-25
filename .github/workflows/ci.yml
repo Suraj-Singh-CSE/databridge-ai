@@ -131,7 +131,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     env:
-      COMPOSE: docker compose --env-file .env.ci -f infra/docker-compose.yml
+      # The free-hosting layout (ADR 0026): MinIO as S3 (Cloudflare R2 in production), no shared
+      # uploads volume, and the Celery worker inside the ai-service container.
+      COMPOSE: docker compose --env-file .env.ci -f infra/docker-compose.yml -f infra/docker-compose.s3.yml
+      # The container whose logs hold the worker's lines.
+      WORKER_SERVICE: ai-service
     steps:
       - uses: actions/checkout@v7
 
@@ -142,6 +146,9 @@ jobs:
             echo "JWT_ACCESS_SECRET=$(secret)"
             echo "JWT_REFRESH_SECRET=$(secret)"
             echo "AI_SERVICE_TOKEN=$(secret)"
+            # MinIO root credentials, also used by api and ai-service.
+            echo "S3_ACCESS_KEY_ID=ci$(openssl rand -hex 8)"
+            echo "S3_SECRET_ACCESS_KEY=$(secret)"
             echo "LLM_PROVIDER=mock"
             echo "LOG_LEVEL=INFO"
             # The e2e suite signs in and out several times from one IP (the nginx proxy).
@@ -176,6 +183,18 @@ jobs:
           check http://localhost:4000/api/v1/health
           check http://localhost:8080/api/v1/health       # through the nginx proxy
           grep -q '"service":"api"' /tmp/body
+          # Readiness: the api pings MongoDB and Redis; the ai-service also its object storage.
+          check http://localhost:4000/api/v1/ready
+          jq -e '.data.checks == {"mongodb": "ok", "redis": "ok"}' /tmp/body > /dev/null
+          $COMPOSE exec -T api node -e '
+            fetch("http://ai-service:8000/internal/v1/ready")
+              .then(async (r) => { console.log(r.status, JSON.stringify(await r.json())); process.exit(r.ok ? 0 : 1); })
+              .catch((e) => { console.error(e.message); process.exit(1); });' > /tmp/ai-ready
+          cat /tmp/ai-ready
+          grep -q '"storage":"ok"' /tmp/ai-ready
+          # The Celery worker runs inside the ai-service container (no separate worker service).
+          $COMPOSE exec -T ai-service celery -A app.worker.celery_app:celery_app inspect ping --timeout 10
+          echo "ok: api and ai-service ready, worker running beside uvicorn"
 
       - name: Auth smoke test through the nginx proxy (register, then /me)
         run: |
@@ -230,14 +249,22 @@ jobs:
           test "$code" = 400
           jq -e '.error.code == "UNSUPPORTED_FILE"' /tmp/reject > /dev/null
 
-          # Stored on the shared "uploads" volume: written by api, readable (read-only) by ai-service.
-          $COMPOSE exec -T api ls -ln "/data/uploads/projects/$project/sources/$csv_id/"
-          echo "ai-service reads header: $($COMPOSE exec -T ai-service head -n 1 "/data/uploads/projects/$project/sources/$csv_id/original.csv")"
-          if $COMPOSE exec -T ai-service touch /data/uploads/should-fail 2> /dev/null; then
-            echo "ai-service must mount uploads read-only" >&2
+          # Stored in the bucket (MinIO here, R2 in production), not on any shared disk: the
+          # ai-service sees the object through its own S3 client, and the api wrote no local file.
+          key="projects/$project/sources/$csv_id/original.csv"
+          $COMPOSE exec -T ai-service python -c '
+          import sys
+          from app.config import get_settings
+          from app.storage import create_storage
+          storage = create_storage(get_settings())
+          with storage.download(sys.argv[1], max_bytes=1 << 20) as path:
+              print("ai-service reads header:", path.read_text().splitlines()[0])
+          ' "$key"
+          if $COMPOSE exec -T api test -e "/data/uploads/projects/$project"; then
+            echo "the api must not write uploads to local disk with STORAGE_DRIVER=s3" >&2
             exit 1
           fi
-          echo "ok: uploads volume is read-only in ai-service"
+          echo "ok: upload stored in the bucket only"
 
       - name: Jobs smoke test through the nginx proxy (demo job, live progress, fail, cancel)
         run: |
@@ -297,7 +324,7 @@ jobs:
           echo "$after" | jq -e --argjson p "$(echo "$cancel" | jq '.data.job.progress')" \
             '.status == "cancelled" and .progress == $p' > /dev/null
           # The worker stops either at its cancel check or when its next progress write is refused.
-          $COMPOSE logs --no-color ai-worker > /tmp/worker.log
+          $COMPOSE logs --no-color "$WORKER_SERVICE" > /tmp/worker.log
           grep -E '"event": "job_(started|succeeded|failed|cancelled|no_longer_active)"' /tmp/worker.log | tail -n 8
           grep -F "\"jobId\": \"$job\"" /tmp/worker.log | grep -qE 'job_(cancelled|no_longer_active)'
           echo "ok: cancelled job stopped in the worker"
@@ -824,7 +851,7 @@ jobs:
 
       - name: Containers run as non-root
         run: |
-          for svc in api ai-service ai-worker web; do
+          for svc in api ai-service web; do
             uid=$($COMPOSE exec -T "$svc" id -u)
             echo "$svc uid=$uid"
             test "$uid" != 0
