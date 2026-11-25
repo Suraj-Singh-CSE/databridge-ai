@@ -37,6 +37,10 @@ export interface RequestOptions {
 
 const GENERIC_MESSAGE = 'Something went wrong. Please try again.';
 
+/** The api could not wake the AI service in time (free hosting starts it on demand; ADR 0026). */
+export const AI_SERVICE_WAKING_TEXT =
+  'Starting the AI service — this can take up to a minute on the free plan. Please try again in a moment.';
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
 }

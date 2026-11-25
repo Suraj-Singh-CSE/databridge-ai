@@ -32,6 +32,13 @@ export async function connectDb(uri: string, options: ConnectOptions = {}): Prom
   await Promise.all(MODELS.map((model) => model.init()));
 }
 
+/** Readiness check: throws unless MongoDB answers a ping. */
+export async function pingDb(): Promise<void> {
+  const db = mongoose.connection.db;
+  if (!db) throw new Error('not connected to mongodb');
+  await db.admin().ping();
+}
+
 export async function disconnectDb(): Promise<void> {
   await mongoose.disconnect();
 }

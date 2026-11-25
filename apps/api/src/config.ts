@@ -56,6 +56,9 @@ const envSchema = z
     AI_SERVICE_TOKEN: required().min(16, 'must be at least 16 characters'),
     // Timeout for one api -> ai-service call (enqueue or cancel a job).
     AI_SERVICE_TIMEOUT_MS: z.coerce.number().int().min(100).default(5000),
+    // Before an enqueue or a question, wake a sleeping ai-service (free hosting) by polling its
+    // /health with backoff for up to this long; 0 = never wait (ADR 0026).
+    AI_SERVICE_WAKE_TIMEOUT_MS: z.coerce.number().int().min(0).max(600_000).default(90_000),
     // Project assistant (ADR 0025): one answer may wait for the model, so a longer timeout.
     ASSISTANT_TIMEOUT_MS: z.coerce.number().int().min(100).default(30_000),
     // Questions per user per window (in memory, per api process; Redis at Gate 3).
@@ -107,6 +110,9 @@ const envSchema = z
     // Background jobs (ADR 0010).
     // A running job whose worker sent no heartbeat for this long is reported as WORKER_LOST.
     JOB_STALE_AFTER_SECONDS: positiveInt(300),
+    // A queued job no worker claimed for this long (while no other job runs) is reported as
+    // QUEUE_LOST: its queue message was lost, e.g. when a free Redis restarted (ADR 0026).
+    JOB_QUEUED_STALE_AFTER_SECONDS: positiveInt(600),
     // Keep-alive comment interval on /jobs/:jobId/events; the job is also re-read each time.
     JOB_EVENTS_KEEPALIVE_MS: z.coerce.number().int().min(10).default(15_000),
   })

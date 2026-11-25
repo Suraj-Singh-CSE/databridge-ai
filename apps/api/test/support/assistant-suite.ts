@@ -252,6 +252,12 @@ export function defineAssistantSuite(label: string, harness: AssistantHarness): 
       expect(res.status).toBe(503);
       expect(res.body.error.code).toBe('AI_SERVICE_UNAVAILABLE');
       aiService.down = false;
+      aiService.waking = true;
+      const waking = await ask(owner, { question: QUESTION });
+      expect(waking.status).toBe(503);
+      expect(waking.body.error.code).toBe('AI_SERVICE_WAKING');
+      expect(waking.body.error.message).toMatch(/Starting the AI service/);
+      aiService.waking = false;
       aiService.askError = { status: 503, code: 'LLM_UNAVAILABLE' };
       expect((await ask(owner, { question: QUESTION })).status).toBe(503);
       const list = await request(app).get(`${base()}/conversations`).set(bearer(owner));

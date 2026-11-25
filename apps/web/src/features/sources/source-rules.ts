@@ -1,5 +1,5 @@
 import type { StatusTone } from '@/components/StatusPill';
-import { ApiError } from '@/lib/api';
+import { AI_SERVICE_WAKING_TEXT, ApiError } from '@/lib/api';
 import type { SourceStatus } from '@/lib/api-types';
 
 /** Same defaults as apps/api (MAX_UPLOAD_BYTES, MAX_UPLOAD_ROWS, MAX_SOURCES_PER_PROJECT). */
@@ -102,6 +102,10 @@ export function profileErrorMessage(error: { code: string; message: string } | n
       return 'The stored file is missing. Remove this source and upload the file again.';
     case 'QUEUE_UNAVAILABLE':
       return 'Background work is unavailable right now. Try again in a minute.';
+    case 'AI_SERVICE_WAKING':
+      return AI_SERVICE_WAKING_TEXT;
+    case 'QUEUE_LOST':
+      return 'The job was lost while waiting to start — please run it again.';
     case 'WORKER_LOST':
     case 'TIME_LIMIT_EXCEEDED':
     case 'RETRIES_EXHAUSTED':

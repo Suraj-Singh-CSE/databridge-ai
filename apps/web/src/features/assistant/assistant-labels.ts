@@ -1,5 +1,5 @@
 import type { StatusTone } from '@/components/StatusPill';
-import { ApiError } from '@/lib/api';
+import { AI_SERVICE_WAKING_TEXT, ApiError } from '@/lib/api';
 import type {
   AssistantCitation,
   AssistantConfidence,
@@ -133,6 +133,7 @@ export function askErrorText(error: unknown): string {
   if (error.code === 'KNOWLEDGE_NOT_BUILT')
     return 'The project knowledge has not been built yet, so there is nothing to search.';
   if (error.status === 429) return 'Too many questions — wait a minute, then ask again.';
+  if (error.code === 'AI_SERVICE_WAKING') return AI_SERVICE_WAKING_TEXT;
   if (error.status === 503)
     return 'The assistant is not available right now. Please try again in a few minutes.';
   if (error.status === 404) return 'This conversation no longer exists. Start a new one.';
