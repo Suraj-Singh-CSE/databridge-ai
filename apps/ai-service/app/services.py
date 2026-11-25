@@ -16,6 +16,7 @@ from app.llm.cache import RedisCache
 from app.llm.cost import MongoCostLogger
 from app.llm.factory import build_gateway
 from app.llm.gateway import LLMGateway
+from app.storage import create_storage
 from app.worker.celery_config import create_celery
 from app.worker.handlers import build_registry
 from app.worker.queue import CeleryJobQueue, JobQueue
@@ -65,7 +66,8 @@ class Services:
 
 
 def build_services(settings: Settings) -> Services:
-    """Production wiring: Redis cache, MongoDB ``llm_calls`` log, Celery job queue.
+    """Production wiring: Redis cache, MongoDB ``llm_calls`` log, Celery job queue; readiness
+    pings Redis, MongoDB and the object storage the worker reads and writes.
 
     Clients connect lazily, so building the services needs no running server.
     """
@@ -82,6 +84,12 @@ def build_services(settings: Settings) -> Services:
     async def ping_mongo() -> object:
         return await mongo.admin.command("ping")
 
+    storage = create_storage(settings)
+
+    async def ping_storage() -> object:
+        # boto3 is synchronous; a thread keeps the event loop free (bounded by the timeout).
+        return await asyncio.to_thread(storage.ping)
+
     # Celery's producer API is synchronous; the job routes run in FastAPI's thread pool.
     sync_redis = SyncRedis.from_url(
         settings.redis_url,
@@ -96,7 +104,7 @@ def build_services(settings: Settings) -> Services:
 
     return Services(
         gateway=gateway,
-        readiness_checks={"redis": ping_redis, "mongodb": ping_mongo},
+        readiness_checks={"redis": ping_redis, "mongodb": ping_mongo, "storage": ping_storage},
         jobs=CeleryJobQueue(celery, JobSignals(sync_redis)),
         knowledge=MongoKnowledgeReader(database["knowledge_chunks"]),
         knowledge_embeddings=settings.knowledge_embeddings_enabled,

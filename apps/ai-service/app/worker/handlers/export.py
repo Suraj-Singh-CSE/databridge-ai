@@ -13,12 +13,15 @@ approval for their exact customer id, ADR 0019); ``all`` adds the proposed ones 
 Refused with a plain message: no clustering run (``CLUSTERS_NOT_RUN``), clustering running
 (``CLUSTERING_RUNNING``), nothing approved (``NOTHING_APPROVED``), more rows than
 ``EXPORT_MAX_ROWS`` (``EXPORT_TOO_LARGE``), and clusters rebuilt while writing
-(``CLUSTERS_CHANGED``). The file is written under a temporary name and renamed into place,
-then the ``exports`` document is saved (``_id`` = job id): a retry rewrites the same key and
-document, and any failure removes what this attempt wrote. Logs hold counts, never values.
+(``CLUSTERS_CHANGED``). The file is written to a local temporary file, then stored under its
+key (local folder: renamed into place; S3/R2: uploaded, multipart when large), then the
+``exports`` document is saved (``_id`` = job id): a retry rewrites the same key and document,
+and any failure removes what this attempt wrote. Logs hold counts, never values.
 """
 
 import hashlib
+import os
+import tempfile
 import time
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -36,10 +39,10 @@ from app.export.model import (
     Layout,
     ProvenanceRow,
 )
-from app.export.storage import LocalExportStorage, export_key
 from app.export.store import ExportStore
 from app.export.writers import WriteResult, write_csv, write_xlsx
 from app.profiling.store import Document
+from app.storage import ObjectStorage, export_key
 from app.worker.context import JobContext
 from app.worker.errors import TRANSIENT_ERRORS, JobCancelledError, JobFailedError
 from app.worker.registry import JobResult
@@ -61,17 +64,25 @@ class ExportPayload(BaseModel):
     include_sources: bool = Field(default=False, alias="includeSources")
 
 
+CONTENT_TYPES = {
+    "csv": "text/csv; charset=utf-8",
+    "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+}
+
+
 @dataclass(frozen=True)
 class ExportSettings:
-    root: Path
+    storage: ObjectStorage
     max_rows: int = 200_000
+    # Folder for the file while it is written; "" = the system temporary folder.
+    temp_dir: str = ""
 
 
 class ExportHandler:
     def __init__(self, store: ExportStore, settings: ExportSettings) -> None:
         self._store = store
         self._settings = settings
-        self._storage = LocalExportStorage(settings.root)
+        self._storage = settings.storage
 
     def __call__(self, ctx: JobContext, payload: ExportPayload) -> JobResult:
         started = time.monotonic()
@@ -120,7 +131,7 @@ class ExportHandler:
         self._check_cancel(ctx)
 
         key = export_key(project, ctx.job_id, options.format)
-        temp = self._storage.temp_path(key)
+        temp = _temp_file(options.format, self._settings.temp_dir)
         committed = False
         total = len(selected)
 
@@ -153,8 +164,9 @@ class ExportHandler:
                 )
             size, sha256 = _digest(temp)
             self._check_cancel(ctx)
-            self._storage.commit(temp, key)
-            committed = True
+            committed = True  # from here a failure removes the stored object too
+            self._storage.upload(temp, key, content_type=CONTENT_TYPES[options.format])
+            temp.unlink(missing_ok=True)
             self._store.save_export(
                 ctx.job_id,
                 self._document(
@@ -325,6 +337,14 @@ def _provenance(record: Document, staged: dict[str, Document]) -> tuple[Provenan
             )
         )
     return tuple(rows)
+
+
+def _temp_file(extension: str, folder: str) -> Path:
+    fd, name = tempfile.mkstemp(
+        prefix="databridge-export-", suffix=f".{extension}", dir=folder or None
+    )
+    os.close(fd)
+    return Path(name)
 
 
 def _digest(path: Path) -> tuple[int, str]:

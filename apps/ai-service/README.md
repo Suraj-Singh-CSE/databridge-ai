@@ -7,6 +7,7 @@ Only `apps/api` calls it, under `/internal/v1`, with the `X-Service-Token` heade
 python -m venv .venv && . .venv/bin/activate && pip install -e ".[dev]"
 uvicorn app.asgi:app --reload --port 8000
 celery -A app.worker.celery_app:celery_app worker --loglevel=INFO --concurrency=2   # job worker
+RUN_WORKER=true python -m app.supervisor   # both in one process tree, on $PORT (the image's CMD)
 ruff check . && ruff format --check . && mypy app && pytest   # pytest prints coverage (min 85%)
 ```
 
@@ -17,7 +18,7 @@ Configuration comes from environment variables (see the ai-service section of `/
 | Route | Auth | Purpose |
 |---|---|---|
 | `GET /internal/v1/health` | none | Liveness: the process is up. Touches nothing else. |
-| `GET /internal/v1/ready` | none | Readiness: Redis and MongoDB answer a ping within 2 s. 200, or 503 `NOT_READY` with per-check status. |
+| `GET /internal/v1/ready` | none | Readiness: Redis, MongoDB and the object storage answer within 2 s. 200, or 503 `NOT_READY` with per-check status. |
 | `POST /internal/v1/jobs` | `X-Service-Token` | Enqueue a job: `{ jobId, projectId, type, payload }`. The payload is validated for its type (unknown type or bad payload: 400). 202 `{ jobId, status: "queued" }`; 503 `QUEUE_UNAVAILABLE` when Redis is down. |
 | `POST /internal/v1/jobs/:jobId/cancel` | `X-Service-Token` | Set the cancel flag and revoke the task. 202 `{ jobId, cancelRequested: true }`. |
 | `POST /internal/v1/llm/echo` | `X-Service-Token` | Demo of the LLM gateway: `{ "text": "...", "project_id": "..." }` (text max 4,000 chars) returns `{ text, model, cache_hit, masked_input }`. Will be replaced by real feature routes. |
@@ -83,8 +84,9 @@ flushed; skipped locally when unreachable, required in CI) and MongoDB at `TEST_
 ## Column profiler (`app/profiling/`, job type `profile`)
 
 `app/worker/handlers/profile.py` runs one `profile` job: find the source (`sources`, same project
-as the job), resolve its file on the read-only uploads volume (`UPLOAD_DIR`; the key must be the one
-the api builds from the ids, and the resolved path must stay inside the folder), read it, profile
+as the job), fetch its file from the object storage (`app/storage/`: the local folder `UPLOAD_DIR`
+read in place, or an S3/R2 bucket downloaded to a bounded temporary file; the key must be the one
+the api builds from the ids, and a local path must stay inside the folder; ADR 0026), read it, profile
 every column and save the result. Design notes: [ADR 0011](../../docs/adr/0011-column-profiling.md).
 
 | Module          | What it does                                                                     |
@@ -96,7 +98,7 @@ every column and save the result. Design notes: [ADR 0011](../../docs/adr/0011-c
 | `display.py`    | Masks top values and samples (`mask_text`, plus shapes in personal columns)       |
 | `store.py`      | `column_profiles` upserts per run (`runId`) and source status updates             |
 
-Settings: `UPLOAD_DIR`, `MAX_UPLOAD_ROWS` (200,000), `XLSX_MAX_UNCOMPRESSED_BYTES` (200 MiB),
+Settings: `STORAGE_DRIVER`, `UPLOAD_DIR`, `S3_*`, `MAX_UPLOAD_BYTES` (50 MiB), `MAX_UPLOAD_ROWS` (200,000), `XLSX_MAX_UNCOMPRESSED_BYTES` (200 MiB),
 `XLSX_MAX_COMPRESSION_RATIO` (100). Tests: `tests/test_profiling_*.py` (rules, reader, zip guard)
 and `tests/test_profile_handler.py` (the job end to end on mongomock, including the `eval/samples`
 CSV and XLSX).

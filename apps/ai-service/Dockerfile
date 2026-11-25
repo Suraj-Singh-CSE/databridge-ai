@@ -28,7 +28,10 @@ COPY docs/adr /app/knowledge-docs/docs/adr
 ENV KNOWLEDGE_DOCS_DIR=/app/knowledge-docs
 WORKDIR /app
 USER app
+# uvicorn binds $PORT (default 8000; hosting platforms inject PORT).
 EXPOSE 8000
-HEALTHCHECK --interval=10s --timeout=3s --start-period=10s --retries=5 \
-  CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/internal/v1/health', timeout=2)"]
-CMD ["uvicorn", "app.asgi:app", "--host", "0.0.0.0", "--port", "8000"]
+HEALTHCHECK --interval=10s --timeout=3s --start-period=15s --retries=5 \
+  CMD ["python", "-c", "import os, urllib.request; urllib.request.urlopen('http://127.0.0.1:%s/internal/v1/health' % os.environ.get('PORT', '8000'), timeout=2)"]
+# uvicorn, plus the Celery worker when RUN_WORKER=true (one container on free hosting; ADR 0026).
+# SIGTERM is forwarded to both for a graceful shutdown.
+CMD ["python", "-m", "app.supervisor"]

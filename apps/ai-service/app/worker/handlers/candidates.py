@@ -14,6 +14,7 @@ and key types, never values. Safe to run again: a retry or re-run replaces the e
 """
 
 import time
+from dataclasses import dataclass
 
 import structlog
 from pydantic import BaseModel, ConfigDict
@@ -46,15 +47,37 @@ class CandidatesPayload(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
 
+@dataclass(frozen=True)
+class MatchingLimits:
+    """Memory caps (ADR 0026): staged records read, and candidate pairs kept (scoring and
+    clustering load every pair)."""
+
+    max_records: int = 1_000_000
+    max_pairs: int = 5_000_000
+
+
 class CandidatesHandler:
-    def __init__(self, store: CandidateStore, config: BlockingConfig) -> None:
+    def __init__(
+        self,
+        store: CandidateStore,
+        config: BlockingConfig,
+        limits: MatchingLimits | None = None,
+    ) -> None:
         self._store = store
         self._config = config
+        self._limits = limits or MatchingLimits()
 
     def __call__(self, ctx: JobContext, _payload: CandidatesPayload) -> JobResult:
         started = time.monotonic()
         ctx.report(2, "Checking the sources")
         sources = self._sources(ctx.project_id)
+        total = sum(source.row_count for source in sources)
+        if total > self._limits.max_records:
+            raise JobFailedError(
+                "MATCHING_TOO_LARGE",
+                f"These sources hold {total:,} staged records; this installation compares at "
+                f"most {self._limits.max_records:,}. Remove a source or upload smaller files.",
+            )
         records: list[BlockingRecord] = []
         for done, source in enumerate(sources, start=1):
             self._check_cancel(ctx)
@@ -77,6 +100,13 @@ class CandidatesHandler:
                 jobId=ctx.job_id,
                 keyType=block.key_type,
                 size=block.size,
+            )
+        if len(result.pairs) > self._limits.max_pairs:
+            raise JobFailedError(
+                "TOO_MANY_PAIRS",
+                f"Blocking found {len(result.pairs):,} candidate pairs; this installation keeps "
+                f"at most {self._limits.max_pairs:,}. Ask an administrator to lower "
+                "BLOCKING_MAX_BLOCK_SIZE, or remove a source.",
             )
         self._check_cancel(ctx)
         ctx.report(_BLOCKED, f"Saving {len(result.pairs):,} candidate pairs")

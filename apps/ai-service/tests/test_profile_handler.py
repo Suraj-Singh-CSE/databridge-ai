@@ -17,13 +17,14 @@ from pymongo.errors import AutoReconnect
 from app.profiling.models import PROFILE_VERSION
 from app.profiling.store import ProfileStore
 from app.profiling.zip_guard import ZipLimits
+from app.storage import LocalDiskStorage
 from app.worker.context import JobContext
 from app.worker.handlers import build_registry
 from app.worker.handlers.profile import (
     ProfileHandler,
     ProfilePayload,
     ProfilerSettings,
-    source_path,
+    source_file_key,
 )
 from app.worker.keys import cancel_key
 from app.worker.models import JobRequest
@@ -48,7 +49,7 @@ class World:
         self.project_id = str(ObjectId())
         self.store = ProfileStore(self.db)
         self.settings = ProfilerSettings(
-            upload_dir=self.uploads,
+            storage=LocalDiskStorage(self.uploads),
             max_rows=max_rows,
             zip_limits=ZipLimits(max_uncompressed_bytes=200 * MIB, max_ratio=100),
         )
@@ -369,12 +370,42 @@ def test_refuses_a_symlink_that_leaves_the_uploads_folder(world: World, tmp_path
     assert world.job(job_id)["error"]["code"] == "INVALID_SOURCE"
 
 
-def test_source_path_refuses_bad_formats_and_project_ids(tmp_path: Path) -> None:
-    source_id = str(ObjectId())
-    with pytest.raises(Exception, match="cannot be found"):
-        source_path(tmp_path, str(ObjectId()), source_id, {"format": "exe", "fileKey": "x"})
-    with pytest.raises(Exception, match="cannot be found"):
-        source_path(tmp_path, "../x", source_id, {"format": "csv", "fileKey": "x"})
+def test_source_key_refuses_bad_formats_ids_and_stored_keys() -> None:
+    project, source_id = str(ObjectId()), str(ObjectId())
+    good = f"projects/{project}/sources/{source_id}/original.csv"
+    assert source_file_key(project, source_id, {"format": "csv", "fileKey": good}) == good
+    for args in [
+        (project, source_id, {"format": "exe", "fileKey": "x"}),
+        ("../x", source_id, {"format": "csv", "fileKey": "x"}),
+        (project, "../../etc", {"format": "csv", "fileKey": good}),
+        (project, source_id, {"format": "csv", "fileKey": f"{good}/../../x"}),
+    ]:
+        with pytest.raises(Exception, match="cannot be found"):
+            source_file_key(*args)
+
+
+def test_a_file_above_the_upload_limit_fails_plainly(tmp_path: Path) -> None:
+    world = World(tmp_path)
+    small = ProfilerSettings(
+        storage=world.settings.storage,
+        max_rows=200_000,
+        zip_limits=world.settings.zip_limits,
+        max_bytes=10,
+    )
+    world.runner = JobRunner(
+        world.job_store,
+        JobSignals(world.redis),
+        build_registry(ProfileHandler(world.store, small)),
+        POLICY,
+    )
+    source_id = world.add_source(SAMPLES / "support_contacts.csv")
+
+    job_id = world.run(source_id)
+
+    error = world.job(job_id)["error"]
+    assert error["code"] == "FILE_TOO_LARGE"
+    assert "1 MB limit" in error["message"]
+    assert world.source(source_id)["status"] == "failed"
 
 
 def test_payload_needs_a_valid_source_id() -> None:

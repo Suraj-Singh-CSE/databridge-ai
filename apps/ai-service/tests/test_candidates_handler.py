@@ -13,7 +13,7 @@ from app.matching.store import CandidateStore, StandardisedSource
 from app.worker.context import JobContext
 from app.worker.handlers import build_registry
 from app.worker.handlers import candidates as module
-from app.worker.handlers.candidates import CandidatesHandler, CandidatesPayload
+from app.worker.handlers.candidates import CandidatesHandler, CandidatesPayload, MatchingLimits
 from app.worker.models import JobRequest
 from app.worker.runner import JobRunner, RetryLaterError
 from app.worker.signals import JobSignals
@@ -25,13 +25,19 @@ from tests.test_standardise_handler import POLICY, World
 class Matching:
     """The standardise World plus a runner for the candidates job on the same database."""
 
-    def __init__(self, world: World, config: BlockingConfig | None = None) -> None:
+    def __init__(
+        self,
+        world: World,
+        config: BlockingConfig | None = None,
+        limits: MatchingLimits | None = None,
+    ) -> None:
         self.world = world
         self.store = CandidateStore(world.db)
+        handler = CandidatesHandler(self.store, config or BlockingConfig(), limits)
         self.runner = JobRunner(
             JobStore(world.db.jobs),
             JobSignals(world.redis),
-            build_registry(candidates=CandidatesHandler(self.store, config or BlockingConfig())),
+            build_registry(candidates=handler),
             POLICY,
         )
 
@@ -305,3 +311,24 @@ def test_the_http_service_registry_cannot_run_candidates() -> None:
     assert job_type is not None
     with pytest.raises(RuntimeError, match="worker"):
         job_type.handler(None, CandidatesPayload())  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    ("limits", "code", "phrase"),
+    [
+        (MatchingLimits(max_records=100), "MATCHING_TOO_LARGE", "compares at most 100"),
+        (MatchingLimits(max_pairs=1), "TOO_MANY_PAIRS", "keeps at most 1"),
+    ],
+)
+def test_memory_caps_fail_with_a_plain_message(
+    tmp_path: Path, limits: MatchingLimits, code: str, phrase: str
+) -> None:
+    matching = Matching(World(tmp_path), limits=limits)
+    matching.standardise("crm", "billing")
+
+    job = matching.job(matching.run())
+
+    assert job["status"] == "failed"
+    assert job["error"]["code"] == code
+    assert phrase in job["error"]["message"]
+    assert matching.summary() is None
