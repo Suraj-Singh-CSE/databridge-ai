@@ -166,6 +166,23 @@ describe('loadConfig', () => {
     );
   });
 
+  it('defaults and validates the quality threshold settings', () => {
+    const config = loadConfig({ NODE_ENV: 'test' });
+    expect(config.QUALITY_FRESHNESS_WARN_HOURS).toBe(24);
+    expect(config.QUALITY_FRESHNESS_FAIL_HOURS).toBe(168);
+    expect(config.QUALITY_ROW_CHANGE_WARN_PERCENT).toBe(20);
+    expect(() =>
+      loadConfig({
+        NODE_ENV: 'test',
+        QUALITY_FRESHNESS_WARN_HOURS: '48',
+        QUALITY_FRESHNESS_FAIL_HOURS: '24',
+      }),
+    ).toThrow(/QUALITY_FRESHNESS_FAIL_HOURS/);
+    expect(() => loadConfig({ NODE_ENV: 'test', QUALITY_FRESHNESS_WARN_HOURS: '0' })).toThrow(
+      /QUALITY_FRESHNESS_WARN_HOURS/,
+    );
+  });
+
   it('defaults the upload and storage settings', () => {
     const config = loadConfig({ NODE_ENV: 'test' });
 

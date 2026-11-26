@@ -175,6 +175,11 @@ const envSchema = z
     AUDIT_MAX_ENTRIES_PER_PROJECT: positiveInt(20_000),
     // How often the sweep runs in each api process; 0 turns it off.
     RETENTION_SWEEP_INTERVAL_MINUTES: z.coerce.number().int().min(0).default(60),
+    // Default quality thresholds that come from the environment. The worker reads the same
+    // variables; the api only shows them as "Default: …" in the thresholds dialog (ADR 0022).
+    QUALITY_FRESHNESS_WARN_HOURS: z.coerce.number().gt(0).max(8760).default(24),
+    QUALITY_FRESHNESS_FAIL_HOURS: z.coerce.number().gt(0).max(8760).default(168),
+    QUALITY_ROW_CHANGE_WARN_PERCENT: z.coerce.number().min(0).max(1000).default(20),
   })
   .superRefine((env, ctx) => {
     if (env.REGISTRATION_MODE === 'invite') {
@@ -192,6 +197,13 @@ const envSchema = z
           message: 'every invite code must be at least 8 characters',
         });
       }
+    }
+    if (env.QUALITY_FRESHNESS_FAIL_HOURS < env.QUALITY_FRESHNESS_WARN_HOURS) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['QUALITY_FRESHNESS_FAIL_HOURS'],
+        message: 'must not be lower than QUALITY_FRESHNESS_WARN_HOURS',
+      });
     }
     if (env.STORAGE_DRIVER === 's3') {
       for (const key of ['S3_BUCKET', 'S3_REGION'] as const) {

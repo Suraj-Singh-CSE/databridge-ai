@@ -18,7 +18,7 @@ import {
   READ_ONLY_QUALITY_NOTE,
   STEWARD_QUALITY_NOTE,
 } from '@/features/projects/access';
-import { personLabel } from '@/features/projects/people';
+import { usePersonOf } from '@/features/projects/people';
 import { ProjectPageFrame } from '@/features/projects/ProjectPageFrame';
 import { projectPage } from '@/features/projects/steps';
 import { LiveJobs } from '@/features/sources/LiveJobs';
@@ -113,7 +113,7 @@ function RunQualityControl({
 function QualityContent({ project }: { project: Project }) {
   const { user } = useAuth();
   const access = user ? projectAccessOf(project, user) : null;
-  const personOf = (userId: string | null) => personLabel(userId, project, user?.id);
+  const personOf = usePersonOf(project.id);
   const latest = useLatestQuality(project.id);
   const canRun = canRunQuality(access);
   const canEdit = canManageQuality(access);

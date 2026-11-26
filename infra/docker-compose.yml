@@ -224,6 +224,10 @@ services:
       QUALITY_RUN_RETENTION_DAYS: ${QUALITY_RUN_RETENTION_DAYS:-90}
       AUDIT_MAX_ENTRIES_PER_PROJECT: ${AUDIT_MAX_ENTRIES_PER_PROJECT:-20000}
       RETENTION_SWEEP_INTERVAL_MINUTES: ${RETENTION_SWEEP_INTERVAL_MINUTES:-60}
+      # Default quality thresholds, shown in the thresholds dialog (the worker applies them).
+      QUALITY_FRESHNESS_WARN_HOURS: ${QUALITY_FRESHNESS_WARN_HOURS:-24}
+      QUALITY_FRESHNESS_FAIL_HOURS: ${QUALITY_FRESHNESS_FAIL_HOURS:-168}
+      QUALITY_ROW_CHANGE_WARN_PERCENT: ${QUALITY_ROW_CHANGE_WARN_PERCENT:-20}
       # The browser origin is the nginx web container, not the Vite dev server.
       CORS_ORIGIN: ${WEB_ORIGIN:-http://localhost:8080}
       # Number of proxy hops to trust for the client IP (rate limiting). See .env.example.

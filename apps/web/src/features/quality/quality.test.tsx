@@ -143,10 +143,15 @@ const RULES: QualityRulesView = {
   updatedBy: USER_ID,
   updatedAt: new Date(Date.now() - 3_600_000).toISOString(),
   catalogue: [
-    { rule: 'validity', direction: 'min', max: 100 },
-    { rule: 'phone_shared', direction: 'max', max: 100 },
-    { rule: 'email_shared', direction: 'max', max: 100 },
-    { rule: 'clustering_freshness', direction: 'max', max: 8760 },
+    { rule: 'validity', direction: 'min', max: 100, defaults: { warn: 99, fail: 95 } },
+    { rule: 'phone_shared', direction: 'max', max: 100, defaults: { warn: 2, fail: null } },
+    { rule: 'email_shared', direction: 'max', max: 100, defaults: { warn: 2, fail: null } },
+    {
+      rule: 'clustering_freshness',
+      direction: 'max',
+      max: 8760,
+      defaults: { warn: 24, fail: 168 },
+    },
   ],
 };
 
@@ -166,6 +171,7 @@ function setup({ latest = RUN, history = HISTORY, member, jobs = [] }: Setup = {
   server.use(
     ...signedInHandlers(makeSession(member ?? 'data_engineer')),
     http.get(`${API}/projects/:id`, () => ok({ project })),
+    http.get(`${API}/projects/:id/people`, () => ok({ people: [] })),
     http.get(`${API}/projects/:id/quality/latest`, () => ok({ run: latest })),
     http.get(`${API}/projects/:id/quality/runs`, () =>
       ok({ items: history, page: 1, limit: 20, total: history.length }),
@@ -273,9 +279,7 @@ describe('quality: latest report', () => {
       await screen.findByRole('heading', { name: 'No quality report yet' }),
     ).toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: 'History' })).not.toBeInTheDocument();
-    expect(
-      await screen.findByText(/Exact values show here after the first report/),
-    ).toBeInTheDocument();
+    expect(await screen.findByText(/Values below apply from the first report/)).toBeInTheDocument();
   });
 
   it('shows a loading state, then an error with a retry', async () => {
@@ -337,7 +341,7 @@ describe('quality: history and thresholds', () => {
       'Values in the expected formatHigher99%95%Changed for this project',
       'Customers sharing a phone numberLower2%Never failsDefault',
       'Customers sharing an email addressLower2%Never failsTurned off',
-      'Hours since clusters were builtLowerDefaultDefaultDefault',
+      'Hours since clusters were builtLower24 h168 hDefault',
     ]);
     expect(
       screen.getByText(
@@ -489,9 +493,18 @@ describe('quality: actions', () => {
     const freshness = within(dialog).getByRole('group', {
       name: 'Hours since clusters were built',
     });
-    expect(within(freshness).getByRole('spinbutton', { name: 'Warn above (hours)' })).toHaveValue(
-      null,
+    const freshWarn = within(freshness).getByRole('spinbutton', { name: 'Warn above (hours)' });
+    expect(freshWarn).toHaveValue(null);
+    expect(freshWarn).toHaveAttribute('placeholder', '24');
+    expect(freshWarn).toHaveAccessibleDescription(
+      'Default: warn above 24 hours, fail above 168 hours.',
     );
+    expect(within(validity).getByText('Default: warn below 99%, fail below 95%.')).toBeVisible();
+    expect(within(email).getByRole('spinbutton', { name: 'Fail above (%)' })).toHaveAttribute(
+      'placeholder',
+      'Never',
+    );
+    expect(within(email).getByText('Default: warn above 2%, never fail.')).toBeInTheDocument();
 
     // Fail above warn on a rule that should stay high, and a value out of range.
     await user.clear(fail);
@@ -550,8 +563,18 @@ describe('quality: actions', () => {
   });
 
   it('validates threshold rows like the api', () => {
-    const min = { rule: 'validity', direction: 'min' as const, max: 100 };
-    const max = { rule: 'clustering_freshness', direction: 'max' as const, max: 8760 };
+    const min = {
+      rule: 'validity',
+      direction: 'min' as const,
+      max: 100,
+      defaults: { warn: 99, fail: 95 },
+    };
+    const max = {
+      rule: 'clustering_freshness',
+      direction: 'max' as const,
+      max: 8760,
+      defaults: { warn: 24, fail: 168 },
+    };
     expect(validateRow({ ...DEFAULT_ROW, warn: '99', fail: '95' }, min)).toEqual({});
     expect(validateRow({ ...DEFAULT_ROW, warn: '24', fail: '12' }, max)).toEqual({
       fail: 'Fail must be at or above warn: this value should stay low.',

@@ -419,7 +419,27 @@ export function defineQualitySuite(label: string, harness: QualityHarness): void
           rule: 'clustering_freshness',
           direction: 'max',
           max: 8760,
+          defaults: { warn: 24, fail: 168 },
         });
+        expect(rules.catalogue).toContainEqual({
+          rule: 'phone_shared',
+          direction: 'max',
+          max: 100,
+          defaults: { warn: 2, fail: null },
+        });
+      });
+
+      it('shows the environment-set defaults', async () => {
+        const custom = buildTestApp({
+          repos,
+          env: { QUALITY_FRESHNESS_WARN_HOURS: '6', QUALITY_ROW_CHANGE_WARN_PERCENT: '5' },
+        });
+        const viewer = await memberWith('viewer');
+        const res = await request(custom).get(url('/rules')).set(bearer(viewer)).expect(200);
+        const catalogue = res.body.data.rules.catalogue as { rule: string; defaults: unknown }[];
+        const defaultsOf = (rule: string) => catalogue.find((c) => c.rule === rule)?.defaults;
+        expect(defaultsOf('sql_run_freshness')).toEqual({ warn: 6, fail: 168 });
+        expect(defaultsOf('row_count_change')).toEqual({ warn: 5, fail: null });
       });
 
       it('saves overrides for an engineer, replaces them on the next PUT; audited', async () => {

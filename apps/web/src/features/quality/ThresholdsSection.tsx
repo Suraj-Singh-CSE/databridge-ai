@@ -81,7 +81,7 @@ export function ThresholdsSection({
           )}{' '}
           {latest
             ? 'Values below are the ones the latest report used.'
-            : 'Exact values show here after the first report.'}
+            : 'Values below apply from the first report.'}
         </p>
         <div className="overflow-x-auto rounded-lg border">
           <table className="w-full text-left text-sm">
@@ -96,27 +96,25 @@ export function ThresholdsSection({
               </tr>
             </thead>
             <tbody>
-              {view.catalogue.map(({ rule, direction }) => {
+              {view.catalogue.map(({ rule, direction, defaults }) => {
                 const unit = unitOfRule(rule);
                 const setting = settingFromRun(latest, rule);
                 const override = view.rules[rule];
-                const warn = setting?.warn ?? override?.warn ?? null;
-                const fail = setting ? setting.fail : override?.fail;
+                const warn = setting?.warn ?? override?.warn ?? defaults.warn;
+                const fail = setting
+                  ? setting.fail
+                  : override?.fail === undefined
+                    ? defaults.fail
+                    : override.fail;
                 return (
                   <tr key={rule} className="border-t">
                     <th scope="row" className="px-3 py-2.5 font-medium">
                       {RULE_NAMES[rule] ?? rule}
                     </th>
                     <td className="px-3 py-2.5">{direction === 'min' ? 'Higher' : 'Lower'}</td>
+                    <td className="px-3 py-2.5 tabular-nums">{formatMetric(warn, unit)}</td>
                     <td className="px-3 py-2.5 tabular-nums">
-                      {warn === null ? 'Default' : formatMetric(warn, unit)}
-                    </td>
-                    <td className="px-3 py-2.5 tabular-nums">
-                      {fail === undefined
-                        ? 'Default'
-                        : fail === null
-                          ? 'Never fails'
-                          : formatMetric(fail, unit)}
+                      {fail === null ? 'Never fails' : formatMetric(fail, unit)}
                     </td>
                     <td className="px-3 py-2.5">
                       {setting && !setting.enabled
