@@ -6,6 +6,8 @@
   server in place of R2 (bucket made by the one-shot `storage-init` container), `STORAGE_DRIVER=s3` for api and
   ai-service, no shared uploads volume, and the Celery worker inside the ai-service container
   (`RUN_WORKER=true`; the `ai-worker` service is not started).
+- `render/check_blueprint.py`: CI check of the root `render.yaml` (Render Blueprint, ADR 0031)
+  against both services' config schemas; `--emit-env <service>` prints a service's env as JSON.
 - `nginx.conf`: config for the web image; serves the built SPA and proxies `/api/` to the api
   (job event streams, `/api/v1/jobs/:jobId/events`, are proxied unbuffered with a 1 h read timeout).
 - `ai-worker` (compose service) runs the Celery worker from the ai-service image with
