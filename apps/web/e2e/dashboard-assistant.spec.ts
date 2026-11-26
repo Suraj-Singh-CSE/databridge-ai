@@ -153,8 +153,11 @@ test('the dashboard sums up the project and the assistant answers with sources',
     /couldn't find enough in the project knowledge|doesn't hold the answer/,
   );
 
-  // With an answer shown: nothing personal announced, and no accessibility violations.
-  expectNoRawEmail(await announcedText(page));
+  // With an answer shown: nothing personal announced, and no accessibility violations. Only
+  // the status and the answer are announced, never the typed question (G3-25).
+  const announced = await announcedText(page);
+  expectNoRawEmail(announced);
+  expect(announced).not.toContain('What is the weather forecast on Mars tomorrow?');
   await snapshot(page, '12-assistant');
   expect(await axeViolations(page)).toEqual([]);
 

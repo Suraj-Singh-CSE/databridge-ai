@@ -1,11 +1,15 @@
 import { pino } from 'pino';
 
 import type { Config } from './config.js';
+import { serializeError } from './log-serializers.js';
 
-export function createLogger(config: Pick<Config, 'NODE_ENV'>) {
-  return pino({
+/** The pino options of the api logger; tests reuse them with their own destination. */
+export function loggerOptions(config: Pick<Config, 'NODE_ENV'>) {
+  return {
     name: 'api',
     level: config.NODE_ENV === 'test' ? 'silent' : 'info',
+    // Errors keep only their name, codes and a scrubbed message (no Mongo keyValue/errmsg).
+    serializers: { err: serializeError },
     redact: {
       paths: [
         'req.headers.authorization',
@@ -18,7 +22,11 @@ export function createLogger(config: Pick<Config, 'NODE_ENV'>) {
       ],
       censor: '[REDACTED]',
     },
-  });
+  } satisfies pino.LoggerOptions;
+}
+
+export function createLogger(config: Pick<Config, 'NODE_ENV'>) {
+  return pino(loggerOptions(config));
 }
 
 export type Logger = ReturnType<typeof createLogger>;

@@ -175,6 +175,29 @@ export function defineAssistantSuite(label: string, harness: AssistantHarness): 
       expect(JSON.stringify(stored.body)).not.toContain('asha');
     });
 
+    it('passes the daily-budget refusal through as a plain answer', async () => {
+      aiService.answer = () => ({
+        answer: 'The AI is resting for today on the free plan — try again tomorrow.',
+        citations: [],
+        confidence: 'low',
+        answerable: false,
+        refusalReason: 'daily_budget',
+        mode: 'keyword',
+        model: null,
+        latencyMs: 3,
+        redactions: 0,
+        invalidCitations: 0,
+      });
+      const res = await ask(owner, { question: QUESTION });
+      expect(res.status).toBe(200);
+      expect(res.body.data.turn).toMatchObject({
+        question: QUESTION,
+        answerable: false,
+        refusalReason: 'daily_budget',
+        answer: 'The AI is resting for today on the free plan — try again tomorrow.',
+      });
+    });
+
     it('validates the question and the ids', async () => {
       for (const body of [
         {},
@@ -307,7 +330,13 @@ export function defineAssistantSuite(label: string, harness: AssistantHarness): 
         users: 1,
         questions: 2,
         answered: 1,
-        refusals: { personal_data: 0, weak_retrieval: 1, not_answerable: 0, no_citation: 0 },
+        refusals: {
+          personal_data: 0,
+          weak_retrieval: 1,
+          not_answerable: 0,
+          no_citation: 0,
+          daily_budget: 0,
+        },
         avgLatencyMs: 8,
         model: {
           calls: 1,

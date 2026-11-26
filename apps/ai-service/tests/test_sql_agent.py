@@ -29,6 +29,7 @@ from app.sql.agent import (
     system_prompt,
 )
 from app.sql.sandbox import Sandbox, SandboxLimits
+from tests.quota_helpers import exhausted_gateway
 from tests.sql_helpers import CONTRACT, SECRET_VALUES, sample_data
 
 LIMITS = SandboxLimits(timeout_seconds=5, memory_limit_mb=128, threads=1)
@@ -261,3 +262,24 @@ def test_mock_answer_reads_columns_and_scope_from_the_prompt() -> None:
     sql = json.loads(mock_sql_answer(request))["sql"]
     assert '"x"' in sql
     assert "WHERE" not in sql
+
+
+async def test_an_exhausted_daily_budget_falls_back_to_the_reference_query(
+    box: Sandbox, settings: Settings
+) -> None:
+    provider = build_provider(settings)
+    assert isinstance(provider, MockProvider)
+
+    outcome = await draft(
+        box,
+        "approved",
+        None,
+        await exhausted_gateway(provider, settings),
+        project_id=None,
+        settings=AgentSettings(),
+    )
+
+    assert (outcome.method, outcome.fallback_reason) == ("reference", "LLMBudgetExhaustedError")
+    assert outcome.evaluation.passed
+    assert provider.calls == []
+    box.close()

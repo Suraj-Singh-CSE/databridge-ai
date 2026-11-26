@@ -90,7 +90,7 @@ def build_runner(settings: Settings) -> JobRunner:
     def gateway() -> LLMGateway:
         # Synchronous Redis and MongoDB adapters: each job runs its calls in a new event loop.
         return build_gateway(
-            settings, SyncRedisCache(redis), SyncMongoCostLogger(database["llm_calls"])
+            settings, SyncRedisCache(redis), SyncMongoCostLogger(database["llm_calls"]), redis
         )
 
     def embedder() -> tuple[Embedder, str | None, int | None]:

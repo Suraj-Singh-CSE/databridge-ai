@@ -132,6 +132,7 @@ function makeDashboard(overrides: Partial<Dashboard> = {}): Dashboard {
         { date: '2026-11-21', calls: 10, tokens: 4000, costInr: 0 },
         { date: '2026-11-22', calls: 32, tokens: 11400, costInr: 0 },
       ],
+      budget: null,
     },
     review: {
       total: 33,
@@ -374,6 +375,36 @@ describe('dashboard', () => {
     expect(
       within(benchmarks).getByText(/ADR 0016 · measured 2026-11-22 · seed 2028/),
     ).toBeInTheDocument();
+  });
+
+  it('shows the AI requests left today on the free plan', async () => {
+    const base = makeDashboard();
+    setup({
+      dashboard: {
+        ...base,
+        ai: {
+          ...base.ai,
+          budget: {
+            dailyLimit: 400,
+            usedToday: 212,
+            projectDailyLimit: 200,
+            projectUsedToday: 12,
+            remainingToday: 188,
+            resetsAt: '2026-11-27T08:00:00+00:00',
+          },
+        },
+      },
+    });
+    const ai = await section('AI usage');
+    expect(within(ai).getByTestId('ai-budget')).toHaveTextContent(
+      /^AI requests left today: 188 \(free plan; the count starts again at .+\)$/,
+    );
+  });
+
+  it('hides the budget line when the AI has no daily cap', async () => {
+    setup();
+    const ai = await section('AI usage');
+    expect(within(ai).queryByText(/AI requests left today/)).not.toBeInTheDocument();
   });
 
   it('shows zeros and an upload link for an empty project', async () => {

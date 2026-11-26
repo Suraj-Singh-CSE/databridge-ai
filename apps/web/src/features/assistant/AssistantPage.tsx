@@ -18,6 +18,7 @@ import {
   askErrorText,
   citedCustomerId,
   exampleQuestions,
+  refusalText,
 } from './assistant-labels';
 import { HistoryPanel } from './HistoryPanel';
 import { KnowledgeStatus } from './KnowledgeStatus';
@@ -44,6 +45,9 @@ function AssistantContent({ project }: { project: Project }) {
   const [question, setQuestion] = useState('');
   const [pending, setPending] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // What screen readers hear: the status while searching, then only the answer or refusal
+  // (never the typed question, which may still be refused; G3-25).
+  const [announcement, setAnnouncement] = useState('');
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const notBuilt = summary.isSuccess && summary.data === null;
   const busy = ask.isPending || open.isPending;
@@ -52,6 +56,7 @@ function AssistantContent({ project }: { project: Project }) {
     const trimmed = text.trim();
     if (!trimmed || busy || notBuilt) return;
     setError(null);
+    setAnnouncement('');
     setPending(trimmed);
     setQuestion('');
     inputRef.current?.focus();
@@ -59,6 +64,7 @@ function AssistantContent({ project }: { project: Project }) {
       thread.id ? { question: trimmed, conversationId: thread.id } : { question: trimmed },
       {
         onSuccess: (reply) => {
+          setAnnouncement(refusalText(reply.turn) ?? `Answer: ${reply.turn.answer}`);
           setThread((current) => ({
             id: reply.conversationId,
             turns: [...current.turns, reply.turn],
@@ -89,6 +95,7 @@ function AssistantContent({ project }: { project: Project }) {
   const reset = () => {
     setThread(EMPTY_THREAD);
     setError(null);
+    setAnnouncement('');
     open.reset();
     inputRef.current?.focus();
   };
@@ -101,7 +108,10 @@ function AssistantContent({ project }: { project: Project }) {
           <h2 id="assistant-conversation" className="sr-only">
             Conversation
           </h2>
-          <div aria-live="polite" className="space-y-6">
+          <div aria-live="polite" className="sr-only" data-testid="assistant-announcer">
+            {announcement}
+          </div>
+          <div className="space-y-6">
             {open.isPending && (
               <p role="status" className="text-sm text-muted-foreground">
                 Opening the conversation…
@@ -123,7 +133,11 @@ function AssistantContent({ project }: { project: Project }) {
             ))}
             {pending && (
               <div className="space-y-3">
-                <div className="ml-auto w-fit max-w-[85%] rounded-xl bg-muted px-4 py-2 text-sm">
+                {/* Not announced: only the status below and the answer are (G3-25). */}
+                <div
+                  data-testid="pending-question"
+                  className="ml-auto w-fit max-w-[85%] rounded-xl bg-muted px-4 py-2 text-sm"
+                >
                   <span className="sr-only">You asked: </span>
                   {pending}
                 </div>

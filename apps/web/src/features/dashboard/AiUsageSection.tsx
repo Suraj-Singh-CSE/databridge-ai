@@ -43,6 +43,11 @@ function DailyCalls({ days }: { days: Day[] }) {
   );
 }
 
+/** The reset moment in the reader's own time, e.g. "1:30 pm". */
+function resetTime(iso: string): string {
+  return new Date(iso).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+}
+
 /** What the AI did in the range and what it cost (from the gateway's call log). */
 export function AiUsageSection({ ai }: { ai: DashboardAi }) {
   const t = ai.total;
@@ -80,6 +85,15 @@ export function AiUsageSection({ ai }: { ai: DashboardAi }) {
           detail={`Mapping: ${ai.fallbacks.mappingSourcesOnRules} files, SQL: ${ai.fallbacks.sqlReferenceVersions} versions, pair review: ${ai.fallbacks.pairReviewUnavailable} pairs`}
         />
       </dl>
+      {typeof ai.budget?.remainingToday === 'number' && (
+        <p className="text-sm" data-testid="ai-budget">
+          AI requests left today: {formatCount(ai.budget.remainingToday)}
+          <span className="text-muted-foreground">
+            {' '}
+            (free plan; the count starts again at {resetTime(ai.budget.resetsAt)})
+          </span>
+        </p>
+      )}
       {ai.tasks.length === 0 ? (
         <p className="text-sm text-muted-foreground">No AI calls in this period.</p>
       ) : (

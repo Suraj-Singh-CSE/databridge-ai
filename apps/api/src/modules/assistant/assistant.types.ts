@@ -60,4 +60,5 @@ export const REFUSAL_REASONS: readonly AssistantRefusalReason[] = [
   'weak_retrieval',
   'not_answerable',
   'no_citation',
+  'daily_budget',
 ];

@@ -3,6 +3,7 @@ import { ConfigError, loadConfig } from './config.js';
 import { connectDb, disconnectDb } from './db.js';
 import { createLogger } from './logger.js';
 import { createRedisJobEventBus } from './modules/jobs/job.events.js';
+import { createMemoryCounters, createSharedCounters } from './rate-limit-store.js';
 import { createMongoRepositories } from './repositories.js';
 import { createStorage, prepareStorage } from './storage/index.js';
 
@@ -29,7 +30,20 @@ async function main(): Promise<void> {
   // One shared Redis subscriber per process fans live job updates out to every open stream.
   const jobEvents = createRedisJobEventBus(config.REDIS_URL, logger);
 
-  const app = createApp({ config, logger, repos: createMongoRepositories(), storage, jobEvents });
+  // Rate-limit counters shared by every api process (ADR 0028).
+  const counters =
+    config.RATE_LIMIT_STORE === 'redis'
+      ? createSharedCounters(config.REDIS_URL, logger)
+      : createMemoryCounters();
+
+  const app = createApp({
+    config,
+    logger,
+    repos: createMongoRepositories(),
+    storage,
+    jobEvents,
+    counters,
+  });
   const server = app.listen(config.PORT, () => {
     logger.info({ port: config.PORT, env: config.NODE_ENV }, 'api listening');
   });
@@ -39,7 +53,7 @@ async function main(): Promise<void> {
     // Open event streams would keep server.close() waiting; end them.
     server.closeAllConnections();
     server.close(() => {
-      Promise.all([jobEvents.close(), disconnectDb()]).then(
+      Promise.all([jobEvents.close(), counters.close(), disconnectDb()]).then(
         () => process.exit(0),
         (error: unknown) => {
           logger.error({ err: error }, 'error while disconnecting');

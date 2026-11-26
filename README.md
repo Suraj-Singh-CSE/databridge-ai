@@ -59,7 +59,8 @@ All routes live under `/api/v1` and answer in one envelope: `{ "data": ..., "err
 - `REGISTRATION_MODE`: `open` (default), `invite` (register needs `inviteCode`, one of
   `REGISTRATION_INVITE_CODES`; otherwise `403 INVITE_CODE_INVALID`) or `closed`
   (`403 REGISTRATION_CLOSED`). `GET /auth/config` tells the web app which one is on.
-- Rate limits (in memory, per api process): register and login 10 per 15 minutes per client IP +
+- Rate limits (counters in Redis, shared by every api process; this process's memory while Redis
+  is down; `RATE_LIMIT_STORE`, [ADR 0028](docs/adr/0028-privacy-and-quota-hardening.md)): register and login 10 per 15 minutes per client IP +
   email (`AUTH_RATE_LIMIT_*`); refresh, me, logout and config 120 per 15 minutes per IP
   (`SESSION_RATE_LIMIT_*`); then `429 RATE_LIMITED`. Behind a proxy set `TRUST_PROXY` to its hop
   count (`1` on Render) so the real client IP is used.
@@ -164,9 +165,15 @@ curl -s http://localhost:8080/api/v1/projects/$PROJECT/sources/$SOURCE/profile \
   DD-MM-YYYY / DD-Mon-YYYY / YYYY/MM/DD dates), `flags` (`{ code, label, detail }`, e.g.
   `HIGH_EMPTY_RATE` "High empty rate", `MIXED_FORMATS`, `TYPE_MISMATCH`, `POSSIBLE_ID`,
   `CONSTANT`, `EXTRA_SPACES`, `EMPTY_COLUMN`, `PERSONAL_DATA`) and `personal`.
-- **No raw personal data**: top values and samples are masked (`[EMAIL]`, `98200xxxxx`, `[PAN]`);
-  in personal columns (names, addresses, birth dates, emails, phones, PAN, Aadhaar) they are shown
-  as shapes (`Xxxxx Xxxxxx`, `99/99/9999`) and `min`/`max` are left out.
+- **No raw personal data, mask by default**
+  ([ADR 0028](docs/adr/0028-privacy-and-quota-hardening.md)): top values and samples are masked
+  (`[EMAIL]`, `98200xxxxx`, `[PAN]`) and then shown as **shapes** (`Xxxxx Xxxxxx`, `+9 999 999
+9999`, `99/99/9999`), with `min`/`max` left out. Values are shown as they are only in columns
+  proven non-personal: yes/no, dates (unless the header names a birth date), numbers with no run
+  of 7+ digits, and text columns with at most 20 distinct values that are all in a short safe
+  vocabulary (statuses, tiers, channels, genders, currencies, months, Indian states, countries,
+  large cities). In a shaped column the top values are the most common shapes with the counts
+  of every value of that shape.
 - **Job errors** (`error.code`): `SOURCE_NOT_FOUND`, `FILE_MISSING`, `INVALID_SOURCE`,
   `UNSUPPORTED_FILE`, `FILE_TOO_COMPLEX` (XLSX zip-bomb guard), `TOO_MANY_ROWS` (over
   `MAX_UPLOAD_ROWS`, mainly for XLSX), `TOO_MANY_COLUMNS` (over 500).
@@ -224,7 +231,8 @@ curl -s http://localhost:8080/api/v1/projects/$PROJECT/sources/$SOURCE/mappings 
   non-generated field of the current schema (`400`); two columns of one source cannot be mapped
   onto the same field unless it has `allowConcat` (`409 CONFLICT`). Viewers get `403`.
 - **Privacy**: the LLM sees only column names, inferred types, pattern shares, flags and the
-  masked or shape samples of the profile, never file values, and only through the gateway.
+  samples of the profile (shapes unless the column is proven non-personal, ADR 0028), never file
+  values, and only through the gateway.
 - **Accuracy** on the committed samples: `cd eval && python -m dbeval.evaluate_mapping`.
 
 **Standardise (clean every row).** Once every column of a source has a decision, the
@@ -719,9 +727,11 @@ curl -s -X POST http://localhost:8080/api/v1/projects/$PROJECT/assistant/ask \
 - **Ask**: `{ question (1-500 chars), conversationId? }`. A turn holds the question (null when
   refused for personal data), `answer`, `citations` (`n`, `chunkId`, `kind`, `title`,
   `link { page, params }`), `confidence` (`high` / `medium` / `low`), `answerable`,
-  `refusalReason` (`personal_data`, `weak_retrieval`, `not_answerable`, `no_citation` or null),
-  `mode`, `model`, `latencyMs`. Questions are rate-limited per user (`ASSISTANT_RATE_LIMIT_MAX`
-  per `ASSISTANT_RATE_LIMIT_WINDOW_MS`, in memory) and not audited; conversations keep their
+  `refusalReason` (`personal_data`, `weak_retrieval`, `not_answerable`, `no_citation`,
+  `daily_budget` or null), `mode`, `model`, `latencyMs`. `daily_budget` means the day's AI request
+  budget is used up: the answer is "The AI is resting for today on the free plan — try again
+  tomorrow." Questions are rate-limited per user (`ASSISTANT_RATE_LIMIT_MAX`, default 5, per
+  `ASSISTANT_RATE_LIMIT_WINDOW_MS`; counters shared through Redis) and not audited; conversations keep their
   newest `ASSISTANT_MAX_TURNS` turns.
 - **Settings** (ai-service): `ASSISTANT_TOP_K` (8), `ASSISTANT_MIN_TERM_OVERLAP` (0.6),
   `ASSISTANT_HISTORY_TURNS` (4), `ASSISTANT_TEMPERATURE` (0), `ASSISTANT_MAX_OUTPUT_TOKENS`
@@ -873,7 +883,9 @@ Every route except sign-in, create-account and the 404 page needs a session; oth
 - Sections: the next step (with a link to its page), pipeline cards with an **Out of date** pill
   where a step must rerun, data quality (latest rule statuses and an upright pass / warn / fail bar
   per check), AI usage (calls, tokens, cost shown as "₹0 (free tier)" when nothing was billed,
-  typical and slowest-5% response time, cache hits, fallbacks to rules, a per-task table and calls
+  typical and slowest-5% response time, cache hits, fallbacks to rules, "AI requests left today:
+  N" when the provider has a daily budget (`ai.budget`, read from the ai-service's
+  `GET /internal/v1/llm/budget`, null when uncapped or unreachable), a per-task table and calls
   per day), human review by decision type and role with median time to decide, job health, and
   the benchmarks, labelled as measured on synthetic test data with their ADR and date.
 - Bars are plain CSS in theme colours, marked `role="img"` with a one-sentence summary, and each
@@ -973,6 +985,12 @@ comes with the deploy step. The runtime it relies on is in place and described i
   `*.onrender.com` services would be different sites, so the `SameSite=Strict` refresh cookie
   would never be sent. Every response carries a strict CSP, HSTS, `Permissions-Policy`,
   `Cross-Origin-Opener-Policy`, `X-Content-Type-Options` and `Referrer-Policy`.
+- **AI quota** ([ADR 0028](docs/adr/0028-privacy-and-quota-hardening.md)): the web process and
+  the worker share one Redis window of `LLM_MAX_REQUESTS_PER_MINUTE=12` and one daily budget of
+  `LLM_DAILY_REQUEST_BUDGET=400` requests (the key allows 15 per minute and 500 per day; the day
+  restarts at midnight Pacific time), at most `LLM_PROJECT_DAILY_REQUEST_BUDGET=200` per project.
+  When the day's budget is used up every AI step falls back (rules, reference SQL, keyword
+  search) and the assistant says the AI is resting until tomorrow.
 - **Access:** set `BOOTSTRAP_ADMIN_EMAIL` to your email and register it yourself before sharing
   the URL; use `REGISTRATION_MODE=invite` with private `REGISTRATION_INVITE_CODES` (or `closed`)
   so strangers cannot create accounts and spend the free quotas. `TRUST_PROXY=1` (one Render

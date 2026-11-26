@@ -135,7 +135,9 @@ job end to end on mongomock for all three samples). Accuracy: `python -m dbeval.
 
 All model calls go through `LLMGateway.complete()`; never call a provider or SDK directly. In order
 it masks PII, checks the Redis cache, calls the provider with a timeout and retries (every
-attempt paced to `LLM_MAX_REQUESTS_PER_MINUTE` per process; see ADR 0013), validates
+attempt paced to `LLM_MAX_REQUESTS_PER_MINUTE` and counted against the daily
+`LLM_DAILY_REQUEST_BUDGET`, both in Redis and shared by every process, `app/llm/quota.py`; see
+ADR 0028), validates
 structured output against a Pydantic schema (one repair retry), and records an `LLMCallRecord`
 (tokens, INR cost, latency, cache hit) in MongoDB `llm_calls`. Details and reasons:
 [ADR 0006](../../docs/adr/0006-llm-gateway-and-pii-masking.md).

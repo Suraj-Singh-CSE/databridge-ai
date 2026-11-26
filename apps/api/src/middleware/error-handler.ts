@@ -28,6 +28,7 @@ export const errorHandler: ErrorRequestHandler = (err: unknown, req, res, _next)
     });
     return;
   }
+  // The logger's err serializer drops Mongo keyValue/errmsg and scrubs the message (G3-19).
   req.log.error({ err }, 'unhandled error');
   res.status(500).json({
     data: null,

@@ -35,6 +35,7 @@ from app.profiling.profiler import profile_table
 from app.profiling.reader import read_table
 from app.profiling.zip_guard import ZipLimits
 from tests.mapping_helpers import SAMPLES, column, customer_360
+from tests.quota_helpers import exhausted_gateway
 
 PROJECT = "a" * 24
 LIMITS = ZipLimits(max_uncompressed_bytes=200 * 1024 * 1024, max_ratio=100)
@@ -268,3 +269,16 @@ def test_mock_answer_and_prompt_template() -> None:
     assert "customer_id" not in [f["name"] for f in payload["target_fields"]]
     assert "Never invent a field" in system_prompt()
     assert request.response_schema is LLMMappingAnswer
+
+
+async def test_an_exhausted_daily_budget_falls_back_to_rules(settings: Settings) -> None:
+    provider = build_provider(settings)
+    assert isinstance(provider, MockProvider)
+    profiles = profiles_of(SAMPLES / "crm_customers.csv")
+
+    outcome = await suggest(
+        profiles, customer_360(), await exhausted_gateway(provider, settings), project_id=PROJECT
+    )
+
+    assert (outcome.method, outcome.model) == ("rules", None)
+    assert provider.calls == []

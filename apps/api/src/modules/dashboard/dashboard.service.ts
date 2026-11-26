@@ -1,3 +1,4 @@
+import type { AiBudget } from '../../ai-service.client.js';
 import type { Repositories } from '../../repositories.js';
 import { candidatesOutdated } from '../candidates/candidate.service.js';
 import type { ClusterApproval, ClusterSummary } from '../clusters/cluster.types.js';
@@ -122,7 +123,22 @@ export interface AiView {
     pairReviewUnavailable: number;
   };
   daily: { date: string; calls: number; tokens: number; costInr: number }[];
+  /**
+   * Today's shared LLM request budget (ADR 0028): `remainingToday` is what this project may
+   * still send today. Null when the ai-service keeps no daily cap or could not be asked.
+   */
+  budget: {
+    dailyLimit: number | null;
+    usedToday: number;
+    projectDailyLimit: number | null;
+    projectUsedToday: number;
+    remainingToday: number | null;
+    resetsAt: string;
+  } | null;
 }
+
+/** Reads today's LLM budget for a project (the ai-service's `/llm/budget`). */
+export type BudgetReader = (projectId: string, requestId: string) => Promise<AiBudget | null>;
 
 export const REVIEW_TYPES = [
   'mapping_accept',
@@ -181,7 +197,8 @@ export interface Dashboard {
 }
 
 export interface DashboardService {
-  get(project: Project, range: DashboardRange): Promise<Dashboard>;
+  /** `requestId` is passed on to the ai-service when the budget is read. */
+  get(project: Project, range: DashboardRange, requestId?: string): Promise<Dashboard>;
 }
 
 /* ---------- Building blocks ---------- */
@@ -422,7 +439,20 @@ export function createDashboardService(
     | 'dashboard'
   >,
   now: () => Date = () => new Date(),
+  readBudget: BudgetReader = () => Promise.resolve(null),
 ): DashboardService {
+  /** Best effort: a sleeping or failing ai-service leaves the budget unknown (null). */
+  async function budgetOf(project: Project, requestId: string): Promise<AiView['budget']> {
+    try {
+      const budget = await readBudget(project.id, requestId);
+      if (!budget) return null;
+      const { provider: _provider, model: _model, ...counts } = budget;
+      return counts;
+    } catch {
+      return null;
+    }
+  }
+
   async function rolesOf(project: Project, actorIds: string[]): Promise<Map<string, ReviewerRole>> {
     const roles = new Map<string, ReviewerRole>();
     const others: string[] = [];
@@ -491,8 +521,12 @@ export function createDashboardService(
     since: Date,
     until: Date,
     fallbacks: AiView['fallbacks'],
+    requestId: string,
   ): Promise<AiView> {
-    const stats = await repos.dashboard.llmStats(project.id, since);
+    const [stats, budget] = await Promise.all([
+      repos.dashboard.llmStats(project.id, since),
+      budgetOf(project, requestId),
+    ]);
     const tasks = stats.tasks
       .map((t): AiTaskView => {
         const failedBy = stats.errors
@@ -560,7 +594,7 @@ export function createDashboardService(
         costInr: round2(d?.costInr ?? 0),
       };
     });
-    return { tasks, total, fallbacks, daily };
+    return { tasks, total, fallbacks, daily, budget };
   }
 
   async function jobsOf(project: Project, since: Date): Promise<JobsView> {
@@ -596,7 +630,7 @@ export function createDashboardService(
   }
 
   return {
-    async get(project, range) {
+    async get(project, range, requestId = 'dashboard') {
       const until = now();
       const days = DASHBOARD_RANGES[range];
       const since = new Date(until.getTime() - days * 86_400_000);
@@ -653,11 +687,17 @@ export function createDashboardService(
         qualityLatest,
       });
       const [ai, review] = await Promise.all([
-        aiOf(project, since, until, {
-          mappingSourcesOnRules: pipeline.mapping.sourcesOnRules,
-          sqlReferenceVersions: sqlVersions.filter((v) => v.method === 'reference').length,
-          pairReviewUnavailable: pipeline.aiReview.unavailable,
-        }),
+        aiOf(
+          project,
+          since,
+          until,
+          {
+            mappingSourcesOnRules: pipeline.mapping.sourcesOnRules,
+            sqlReferenceVersions: sqlVersions.filter((v) => v.method === 'reference').length,
+            pairReviewUnavailable: pipeline.aiReview.unavailable,
+          },
+          requestId,
+        ),
         reviewOf(project, since, clusters, approvals, sqlVersions),
       ]);
       return {

@@ -71,6 +71,9 @@ const envSchema = z
       'must be a mongodb:// or mongodb+srv:// URI',
     ),
     REDIS_URL: required().regex(/^rediss?:\/\//, 'must be a redis:// or rediss:// URL'),
+    // Where the sign-in, session and assistant rate-limit counters live: "redis" (shared by
+    // every api process; memory while Redis is down) or "memory" (this process only).
+    RATE_LIMIT_STORE: z.enum(['redis', 'memory']).default('redis'),
     JWT_ACCESS_SECRET: secret,
     JWT_REFRESH_SECRET: secret,
     AI_SERVICE_URL: z.url({ error: 'is required and must be a valid URL' }),
@@ -82,8 +85,9 @@ const envSchema = z
     AI_SERVICE_WAKE_TIMEOUT_MS: z.coerce.number().int().min(0).max(600_000).default(90_000),
     // Project assistant (ADR 0025): one answer may wait for the model, so a longer timeout.
     ASSISTANT_TIMEOUT_MS: z.coerce.number().int().min(100).default(30_000),
-    // Questions per user per window (in memory, per api process; Redis at Gate 3).
-    ASSISTANT_RATE_LIMIT_MAX: positiveInt(20),
+    // Questions per user per window, shared by api processes through Redis (ADR 0028). Low on
+    // purpose: every question is one model request against the free tier's daily budget.
+    ASSISTANT_RATE_LIMIT_MAX: positiveInt(5),
     ASSISTANT_RATE_LIMIT_WINDOW_MS: z.coerce.number().int().min(1000).default(60_000),
     // Turns kept per conversation (the oldest are dropped).
     ASSISTANT_MAX_TURNS: positiveInt(50),
