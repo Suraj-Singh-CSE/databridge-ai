@@ -15,8 +15,9 @@ WINDOW_SECONDS = 60.0
 
 
 class RequestLimiter(Protocol):
-    async def acquire(self) -> float:
-        """Wait for a free slot, take it, and return the seconds waited."""
+    async def acquire(self, *, project_id: str | None = None) -> float:
+        """Wait for a free slot, take it, and return the seconds waited. ``project_id`` is for
+        limiters that also keep a per-project budget (``app.llm.quota.LLMQuota``)."""
         ...
 
 
@@ -24,7 +25,8 @@ class SlidingWindowLimiter:
     """At most ``max_requests`` starts in any ``window_seconds``; ``max_requests`` 0 = off.
 
     A caller over the limit sleeps until the oldest start leaves the window (no busy loop),
-    then checks again. Process-local: each API or worker process keeps its own window. The
+    then checks again. Process-local: each API or worker process keeps its own window (the
+    shared Redis window is ``app.llm.quota.LLMQuota``, which falls back to this one). The
     slot bookkeeping is guarded by a thread lock (never held across an ``await``), so one
     limiter can serve several event loops, as the worker runs each job in a new one.
     """
@@ -46,7 +48,8 @@ class SlidingWindowLimiter:
         self._starts: deque[float] = deque()
         self._lock = threading.Lock()
 
-    async def acquire(self) -> float:
+    async def acquire(self, *, project_id: str | None = None) -> float:
+        del project_id  # one window for everyone
         if self.max_requests == 0:
             return 0.0
         waited = 0.0

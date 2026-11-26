@@ -538,9 +538,11 @@ class CountingLimiter:
     def __init__(self, waits: list[float] | None = None) -> None:
         self.calls = 0
         self.waits = waits or []
+        self.projects: list[str | None] = []
 
-    async def acquire(self) -> float:
+    async def acquire(self, *, project_id: str | None = None) -> float:
         self.calls += 1
+        self.projects.append(project_id)
         return self.waits.pop(0) if self.waits else 0.0
 
 

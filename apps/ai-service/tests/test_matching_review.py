@@ -39,6 +39,7 @@ from app.matching.review import (
 )
 from app.matching.scoring import FIELDS, compare
 from app.privacy.masking import PIIMasker
+from tests.quota_helpers import exhausted_gateway
 
 VALUES = frozenset({"city", "pin_code"})
 
@@ -344,3 +345,21 @@ def test_words_that_only_look_alike_or_differ() -> None:
     b = {"full_name": "Sunil Mehra"}
     name = build_evidence("p1", a, b, facts(a, b), VALUES)["fields"]["full_name"]
     assert [w["agreement"] for w in name["word_pairs"]] == ["different", "spelling_close"]
+
+
+async def test_an_exhausted_daily_budget_leaves_the_pairs_without_suggestions(
+    settings: Settings,
+) -> None:
+    provider = build_provider(settings)
+    assert isinstance(provider, MockProvider)
+
+    outcome = await review(
+        _pairs(3),
+        await exhausted_gateway(provider, settings),
+        project_id="0" * 24,
+        settings=ReviewSettings(pairs_per_call=2),
+    )
+
+    assert outcome.suggestions == {}
+    assert (outcome.calls, outcome.failed_calls) == (1, 1)
+    assert provider.calls == []

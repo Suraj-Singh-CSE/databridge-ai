@@ -2,6 +2,7 @@
 
 from functools import lru_cache
 from typing import Literal, Self
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import BaseModel, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -70,9 +71,21 @@ class Settings(BaseSettings):
     llm_backoff_max_seconds: float = Field(default=30.0, gt=0)
     # A 429's RetryInfo delay is waited out when longer than the backoff, up to this cap.
     llm_retry_after_max_seconds: float = Field(default=60.0, gt=0, le=600)
-    # Provider attempts (retries included) per minute, per process; 0 = no pacing. Below the
-    # Gemini free tier's 15 RPM for Flash Lite, so bursts are paced instead of refused (429).
+    # Provider attempts (retries included) per minute, shared by every process through Redis
+    # (in-process when Redis is down); 0 = no pacing. Below the Gemini free tier's 15 RPM for
+    # Flash Lite, so bursts are paced instead of refused (429). ADR 0028.
     llm_max_requests_per_minute: int = Field(default=12, ge=0, le=10_000)
+    # Provider attempts per day per provider+model, counted in Redis; 0 = no daily cap. Below
+    # the free tier's 500 requests per day. When it is used up, every LLM step falls back.
+    llm_daily_request_budget: int = Field(default=400, ge=0, le=10_000_000)
+    # The same per project, so one project cannot use the whole day; 0 = off.
+    llm_project_daily_request_budget: int = Field(default=0, ge=0, le=10_000_000)
+    # When the provider's daily quota resets: Gemini's requests-per-day reset at midnight
+    # Pacific time. The counters expire then.
+    llm_daily_budget_reset_timezone: str = "America/Los_Angeles"
+    # Where the per-minute and daily counters live: "redis" (shared, falls back to memory
+    # with a warning while Redis is down) or "memory" (this process only).
+    llm_quota_store: Literal["redis", "memory"] = "redis"
     # Hard limit for one provider attempt (the live evaluation uses 90).
     llm_timeout_seconds: float = Field(default=30.0, gt=0, le=600)
     # JSON, e.g. {"gemini-3.5-flash-lite": {"input": 10, "output": 40}} (illustrative numbers).
@@ -250,6 +263,25 @@ class Settings(BaseSettings):
     def paced_requests_per_minute(self) -> int:
         """The pacing limit in force: 0 for the mock provider, which has no quota to respect."""
         return 0 if self.llm_provider == "mock" else self.llm_max_requests_per_minute
+
+    @property
+    def daily_request_budget(self) -> int:
+        """The daily cap in force: 0 (off) for the mock provider."""
+        return 0 if self.llm_provider == "mock" else self.llm_daily_request_budget
+
+    @property
+    def project_daily_request_budget(self) -> int:
+        """The per-project daily cap in force: 0 (off) for the mock provider."""
+        return 0 if self.llm_provider == "mock" else self.llm_project_daily_request_budget
+
+    @field_validator("llm_daily_budget_reset_timezone")
+    @classmethod
+    def _known_timezone(cls, value: str) -> str:
+        try:
+            ZoneInfo(value)
+        except (ZoneInfoNotFoundError, ValueError):
+            raise ValueError(f"unknown time zone {value!r} (use an IANA name)") from None
+        return value
 
     @field_validator(
         "s3_bucket",

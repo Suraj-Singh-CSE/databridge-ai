@@ -87,3 +87,12 @@ class LLMBadRequestError(LLMResponseError):
 
 class LLMConfigError(LLMError):
     """The gateway or provider is misconfigured (missing key, unknown model, rejected key)."""
+
+
+class LLMBudgetExhaustedError(LLMError):
+    """The daily request budget (per provider+model, or per project) is used up. Raised before
+    any provider call; every LLM step falls back as when the model is off (ADR 0028)."""
+
+    def __init__(self, message: str, *, scope: str) -> None:
+        super().__init__(message, status="DAILY_BUDGET_EXHAUSTED")
+        self.scope = scope

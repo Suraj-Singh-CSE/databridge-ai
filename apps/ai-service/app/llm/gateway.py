@@ -38,6 +38,7 @@ from app.llm.errors import (
     LLMTimeoutError,
 )
 from app.llm.pacing import RequestLimiter, SlidingWindowLimiter
+from app.llm.quota import BudgetStatus, LLMQuota
 
 logger = structlog.get_logger("app.llm.gateway")
 
@@ -60,6 +61,7 @@ class _CallStats:
     input_tokens: int = 0
     output_tokens: int = 0
     schema_fallback: bool = False
+    project_id: str | None = None  # counted against the project's daily budget
 
 
 class _CachedAnswer(BaseModel):
@@ -71,9 +73,10 @@ class LLMGateway:
     """Every LLM call in the service goes through ``complete``.
 
     ``sleep``, ``rand`` and ``clock`` are injectable so tests run instantly and deterministically.
-    ``limiter`` paces every provider attempt (retries included); by default a new one built from
-    ``LLM_MAX_REQUESTS_PER_MINUTE``, off for the mock provider (the factory passes one shared by
-    the whole process).
+    ``limiter`` paces every provider attempt (retries included) and, when it is an ``LLMQuota``,
+    counts it against the shared daily budget (ADR 0028); by default a new process-local window
+    built from ``LLM_MAX_REQUESTS_PER_MINUTE``, off for the mock provider (the factory passes the
+    Redis-backed quota shared by every process).
     """
 
     def __init__(
@@ -136,7 +139,7 @@ class LLMGateway:
         started = self._clock()
         masked = self.mask(request)
         key = self.cache_key(masked)
-        stats = _CallStats()
+        stats = _CallStats(project_id=project_id)
         try:
             response = await self._from_cache(key, masked)
             if response is None:
@@ -186,7 +189,7 @@ class LLMGateway:
         text, in order. One ``embedding`` call record for the whole request. Raises an
         ``LLMError`` subclass on failure (after it is logged)."""
         started = self._clock()
-        stats = _CallStats()
+        stats = _CallStats(project_id=project_id)
         model = self.provider.embedding_model or self.provider.model
         masked = [self._masker.mask_text(text) for text in texts]
         size = self._settings.embedding_batch_size
@@ -201,6 +204,7 @@ class LLMGateway:
                     EMBEDDING_TASK,
                     partial(self.provider.embed, batch, kind=kind),
                     stats,
+                    project_id,
                 )
                 if len(response.vectors) != len(batch):
                     raise LLMResponseError(
@@ -241,6 +245,12 @@ class LLMGateway:
             cost_inr=cost,
             latency_ms=self._elapsed_ms(started),
         )
+
+    async def budget_status(self, project_id: str | None = None) -> BudgetStatus | None:
+        """Today's use of the daily request budget; None without a shared quota (tests)."""
+        if isinstance(self._limiter, LLMQuota):
+            return await self._limiter.status(project_id)
+        return None
 
     # ---- cache
 
@@ -341,19 +351,23 @@ class LLMGateway:
 
     async def _call_with_retry(self, request: LLMRequest, stats: _CallStats) -> LLMResponse:
         response = await self._retrying(
-            request.task, lambda: self.provider.complete(request), stats
+            request.task, lambda: self.provider.complete(request), stats, stats.project_id
         )
         stats.input_tokens += response.input_tokens
         stats.output_tokens += response.output_tokens
         return response
 
     async def _retrying[T](
-        self, task: str, call: Callable[[], Awaitable[T]], stats: _CallStats
+        self,
+        task: str,
+        call: Callable[[], Awaitable[T]],
+        stats: _CallStats,
+        project_id: str | None,
     ) -> T:
         """Paced attempts of ``call`` with a timeout each; retryable errors back off."""
         max_attempts = self._settings.llm_max_attempts
         for attempt in range(1, max_attempts + 1):
-            await self._pace(task)
+            await self._pace(task, project_id)
             stats.attempts += 1
             try:
                 async with asyncio.timeout(self._settings.llm_timeout_seconds):
@@ -381,8 +395,8 @@ class LLMGateway:
             await self._sleep(delay)
         raise AssertionError("unreachable")  # pragma: no cover - the loop returns or raises
 
-    async def _pace(self, task: str) -> None:
-        waited = await self._limiter.acquire()
+    async def _pace(self, task: str, project_id: str | None) -> None:
+        waited = await self._limiter.acquire(project_id=project_id)
         if waited > 0:
             logger.info("llm_paced", task=task, wait_ms=round(waited * 1000))
 

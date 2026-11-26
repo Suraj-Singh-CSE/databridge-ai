@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 
 from app.assistant import answer as answer_module
 from app.assistant.answer import (
+    DAILY_BUDGET_REFUSAL,
     AssistantSettings,
     KnowledgeNotBuiltError,
     ask,
@@ -48,6 +49,7 @@ from app.llm.mock import MockProvider
 from app.main import create_app
 from app.services import Services
 from tests.conftest import AUTH
+from tests.quota_helpers import exhausted_gateway
 from tests.test_knowledge_api import DOCS, PROJECT
 
 URL = "/internal/v1/assistant/ask"
@@ -440,3 +442,28 @@ def test_without_the_index_or_staged_values_the_assistant_is_unavailable(
     response = _post(client, question="Q?")
     assert response.status_code == 503
     assert response.json()["error"]["code"] == "KNOWLEDGE_UNAVAILABLE"
+
+
+async def test_an_exhausted_daily_budget_is_a_plain_refusal(
+    provider: MockProvider, settings: Settings
+) -> None:
+    provider.register(ASSISTANT_TASK, mock_assistant_answer)
+    gateway = await exhausted_gateway(provider, settings)
+    with_vectors = [{**d, "vector": [1.0, 0.0], "embeddingModel": "mock-embedding"} for d in DOCS]
+
+    reply = await ask(
+        project_id=PROJECT,
+        question="Why did PIN completeness fail?",
+        history=[],
+        reader=FakeReader(with_vectors),
+        staged=FixedValues(),
+        gateway=gateway,
+        embedder=gateway,
+        embedding_model="mock-embedding",
+        settings=AssistantSettings(),
+        ordinary=ORDINARY,
+    )
+
+    assert (reply.answer, reply.refusal_reason) == (DAILY_BUDGET_REFUSAL, "daily_budget")
+    assert reply.mode == "keyword"  # the query embedding fell back too
+    assert (provider.calls, provider.embedded) == ([], [])

@@ -76,7 +76,9 @@ def build_services(settings: Settings) -> Services:
         settings.mongodb_uri, serverSelectionTimeoutMS=int(READINESS_TIMEOUT_SECONDS * 1000)
     )
     database = mongo.get_default_database(default="databridge")
-    gateway = build_gateway(settings, RedisCache(redis), MongoCostLogger(database["llm_calls"]))
+    gateway = build_gateway(
+        settings, RedisCache(redis), MongoCostLogger(database["llm_calls"]), redis
+    )
 
     async def ping_redis() -> object:
         return await redis.ping()

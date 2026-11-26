@@ -1,7 +1,5 @@
 """Build the LLM provider and gateway from settings."""
 
-from functools import lru_cache
-
 from app.assistant.prompt import ASSISTANT_TASK, mock_assistant_answer
 from app.config import Settings
 from app.llm.base import LLMProvider
@@ -11,7 +9,7 @@ from app.llm.errors import LLMConfigError
 from app.llm.gateway import LLMGateway
 from app.llm.gemini import GeminiProvider
 from app.llm.mock import MockProvider
-from app.llm.pacing import SlidingWindowLimiter
+from app.llm.quota import LLMQuota, QuotaLimits, QuotaRedis, process_fallbacks
 from app.mapping.prompt import MAPPING_TASK, mock_mapping_answer
 from app.matching.review import REVIEW_TASK, mock_pair_review_answer
 from app.privacy.masking import PIIMasker
@@ -45,19 +43,34 @@ def build_provider(settings: Settings) -> LLMProvider:
     )
 
 
-@lru_cache(maxsize=4)
-def process_limiter(max_requests_per_minute: int) -> SlidingWindowLimiter:
-    """One limiter per process (and limit): the worker builds a gateway per job, and every job
-    must draw from the same window. Not shared between processes (ADR 0013)."""
-    return SlidingWindowLimiter(max_requests_per_minute)
+def build_quota(settings: Settings, provider: LLMProvider, redis: QuotaRedis | None) -> LLMQuota:
+    """The per-minute window and daily budget for ``provider``'s model, in Redis shared by every
+    process (``LLM_QUOTA_STORE=redis`` and a client given), else in this process (ADR 0028)."""
+    limits = QuotaLimits(
+        provider=provider.name,
+        model=provider.model,
+        requests_per_minute=settings.paced_requests_per_minute,
+        daily_budget=settings.daily_request_budget,
+        project_daily_budget=settings.project_daily_request_budget,
+        reset_timezone=settings.llm_daily_budget_reset_timezone,
+    )
+    limiter, day = process_fallbacks(settings.paced_requests_per_minute)
+    shared = redis if settings.llm_quota_store == "redis" else None
+    return LLMQuota(limits, shared, fallback_limiter=limiter, fallback_day=day)
 
 
-def build_gateway(settings: Settings, cache: LLMCache, cost_logger: CostLogger) -> LLMGateway:
+def build_gateway(
+    settings: Settings,
+    cache: LLMCache,
+    cost_logger: CostLogger,
+    redis: QuotaRedis | None = None,
+) -> LLMGateway:
+    provider = build_provider(settings)
     return LLMGateway(
-        build_provider(settings),
+        provider,
         cache,
         cost_logger,
         PIIMasker(),
         settings,
-        limiter=process_limiter(settings.paced_requests_per_minute),
+        limiter=build_quota(settings, provider, redis),
     )

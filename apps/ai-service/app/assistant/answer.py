@@ -35,11 +35,16 @@ from app.knowledge.chunks import Chunk, ChunkKind, Link
 from app.knowledge.index import Embedder
 from app.knowledge.retrieval import Hit, SearchMode, chunk_tokens, tokenize
 from app.knowledge.search import KnowledgeReader, search_project
+from app.llm.errors import LLMBudgetExhaustedError
 from app.llm.gateway import LLMGateway
 
 logger = structlog.get_logger("app.assistant")
 
-RefusalReason = Literal["personal_data", "weak_retrieval", "not_answerable", "no_citation"]
+RefusalReason = Literal[
+    "personal_data", "weak_retrieval", "not_answerable", "no_citation", "daily_budget"
+]
+# The daily LLM request budget is used up (ADR 0028); plain words, no error.
+DAILY_BUDGET_REFUSAL = "The AI is resting for today on the free plan — try again tomorrow."
 _MARKER = re.compile(r"\[(\d+(?:\s*,\s*\d+)*)\]")
 _SPACE_BEFORE_PUNCTUATION = re.compile(r"\s+([.,;:!?])")
 
@@ -194,7 +199,11 @@ async def ask(
         temperature=settings.temperature,
         max_output_tokens=settings.max_output_tokens,
     )
-    response = await gateway.complete(request, project_id=project_id)
+    try:
+        response = await gateway.complete(request, project_id=project_id)
+    except LLMBudgetExhaustedError:
+        logger.info("assistant_refused", reason="daily_budget")
+        return _refusal(DAILY_BUDGET_REFUSAL, "daily_budget", started, clock, mode=mode)
     parsed = response.parsed
     if not isinstance(parsed, AssistantAnswer):  # pragma: no cover - the gateway validates
         raise TypeError("the gateway returned no AssistantAnswer")

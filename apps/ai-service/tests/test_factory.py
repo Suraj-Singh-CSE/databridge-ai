@@ -4,9 +4,10 @@ from pydantic import SecretStr, ValidationError
 
 from app.config import Settings
 from app.llm.errors import LLMConfigError
-from app.llm.factory import build_provider, process_limiter
+from app.llm.factory import build_provider
 from app.llm.gemini import GeminiProvider
 from app.llm.mock import MockProvider
+from app.llm.quota import process_fallbacks
 from app.main import create_app
 from app.services import build_services
 
@@ -110,7 +111,8 @@ async def test_default_readiness_reports_unavailable_without_servers(settings: S
     assert checks == {"redis": "unavailable", "mongodb": "unavailable", "storage": "unavailable"}
 
 
-def test_process_limiter_is_shared_per_limit() -> None:
-    assert process_limiter(12) is process_limiter(12)
-    assert process_limiter(12) is not process_limiter(5)
-    assert process_limiter(12).max_requests == 12
+def test_process_fallbacks_are_shared_per_limit() -> None:
+    assert process_fallbacks(12)[0] is process_fallbacks(12)[0]
+    assert process_fallbacks(12)[0] is not process_fallbacks(5)[0]
+    assert process_fallbacks(12)[0].max_requests == 12
+    assert process_fallbacks(12)[1] is process_fallbacks(5)[1]
