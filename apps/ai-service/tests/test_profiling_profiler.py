@@ -145,16 +145,30 @@ def test_flags_ids_constants_and_empty_columns() -> None:
 
 
 def test_top_values_are_counted_sorted_and_capped() -> None:
-    p = profile(["b", "a", "b", "c", "a", "b", "d", "e", "f", None])
+    # Safe category words, so the values are shown raw (ADR 0028).
+    p = profile(
+        ["Gold", "Silver", "Gold", "Bronze", "Silver", "Gold", "Platinum", "Basic", "Premium", None]
+    )
 
     assert [(t.value, t.count, t.percent) for t in p.top_values] == [
-        ("b", 3, 30.0),
-        ("a", 2, 20.0),
-        ("c", 1, 10.0),
-        ("d", 1, 10.0),
-        ("e", 1, 10.0),
+        ("Gold", 3, 30.0),
+        ("Silver", 2, 20.0),
+        ("Basic", 1, 10.0),
+        ("Bronze", 1, 10.0),
+        ("Platinum", 1, 10.0),
     ]
-    assert p.samples == ["b", "a", "c", "d", "e"]  # first five distinct, in file order
+    # First five distinct, in file order.
+    assert p.samples == ["Gold", "Silver", "Bronze", "Platinum", "Basic"]
+
+
+def test_shaped_top_values_count_every_value_of_a_shape() -> None:
+    p = profile(["Asha Rao", "Ravi Das", "Asha Rao", "Mohan Kumar", "ok"], "Customer")
+
+    assert [(t.value, t.count, t.percent) for t in p.top_values] == [
+        ("Xxxx Xxx", 3, 60.0),
+        ("Xxxxx Xxxxx", 1, 20.0),
+        ("xx", 1, 20.0),
+    ]
 
 
 def test_samples_are_distinct_after_masking() -> None:
@@ -175,7 +189,7 @@ def test_personal_columns_show_only_masked_shapes() -> None:
     assert dob.samples == ["99/99/9999"]
 
     emails = profile(["a.b@example.com", "c@example.org"], "contact")
-    assert [t.value for t in emails.top_values] == ["[EMAIL]", "[EMAIL]"]
+    assert [(t.value, t.count) for t in emails.top_values] == [("[EMAIL]", 2)]
 
     phones = profile(["+91-98200-12345", "9820012345"], "mobile")
     assert phones.samples == ["+99-99999xxxxx", "99999xxxxx"]
@@ -206,11 +220,11 @@ def test_no_raw_personal_value_survives_in_a_profile() -> None:
         assert fragment not in dumped
 
 
-def test_non_personal_columns_are_still_masked() -> None:
+def test_free_text_is_shaped_even_when_not_flagged_personal() -> None:
     notes = profile(["call 9820012345", "write to a@b.com"], "notes")
 
     assert notes.personal is False
-    assert notes.samples == ["call 98200xxxxx", "write to [EMAIL]"]
+    assert notes.samples == ["xxxx 99999xxxxx", "xxxxx xx [EMAIL]"]
 
 
 def test_profile_table_reports_progress_per_column() -> None:
@@ -225,7 +239,7 @@ def test_profile_table_reports_progress_per_column() -> None:
 
 def test_display_helpers() -> None:
     assert shape("Ab-12 é") == "Xx-99 x"
-    assert display_value("x" * 150, personal=False) == "x" * 99 + "…"
+    assert display_value("x" * 150, shaped=False) == "x" * 99 + "…"
     assert is_personal_header("CustomerName")
     assert is_personal_header("client_full_name")
     assert is_personal_header("Date of Birth")

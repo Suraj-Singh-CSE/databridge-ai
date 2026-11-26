@@ -46,14 +46,14 @@ class ColumnProfile(_CamelModel):
     distinct_count: int
     unique_percent: float  # distinct / non-empty
     # Numbers for integer/decimal, ISO 8601 text for date/datetime; None otherwise or when the
-    # column holds personal data.
+    # column's values are shown as shapes (mask by default, ADR 0028).
     min: int | float | str | None
     max: int | float | str | None
     min_length: int | None
     max_length: int | None
     avg_length: float | None
     top_values: list[TopValue]
-    samples: list[str]  # masked
+    samples: list[str]  # masked; shapes unless the column is proven non-personal
     patterns: list[PatternMatch]
     flags: list[QualityFlag]
     personal: bool

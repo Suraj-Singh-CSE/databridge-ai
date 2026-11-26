@@ -19,7 +19,14 @@ from typing import Any
 
 import polars as pl
 
-from app.profiling.display import display_value, header_words, is_personal_header
+from app.profiling.display import (
+    LONG_DIGIT_REGEX,
+    SAFE_MAX_DISTINCT,
+    display_value,
+    header_words,
+    is_personal_header,
+    shows_raw_values,
+)
 from app.profiling.models import (
     ColumnProfile,
     InferredType,
@@ -85,6 +92,7 @@ class _Counts:
     decimals: int
     temporal: int
     with_time: int
+    long_digits: int
 
 
 def profile_table(table: Table, on_column: ProgressCallback | None = None) -> list[ColumnProfile]:
@@ -105,7 +113,9 @@ def profile_column(series: pl.Series, name: str, position: int = 0) -> ColumnPro
     counts = _count(series, values, rows)
     inferred = _infer_type(counts)
     personal = _is_personal(name, inferred, counts)
-    low, high = (None, None) if personal else _range(values, inferred)
+    shaped = not _shows_raw(name, values, inferred, counts, personal)
+    # A column shown as shapes hides its range too (a min/max is a raw value).
+    low, high = (None, None) if shaped else _range(values, inferred)
     return ColumnProfile(
         column=name,
         position=position,
@@ -120,8 +130,8 @@ def profile_column(series: pl.Series, name: str, position: int = 0) -> ColumnPro
         min_length=counts.min_length,
         max_length=counts.max_length,
         avg_length=counts.avg_length,
-        top_values=_top_values(values, rows, personal),
-        samples=_samples(values, personal),
+        top_values=_top_values(values, rows, shaped),
+        samples=_samples(values, shaped),
         patterns=[
             PatternMatch(
                 code=p.code,
@@ -149,6 +159,7 @@ def _count(series: pl.Series, values: pl.Series, rows: int) -> _Counts:
         v.str.to_lowercase().is_in(list(BOOLEAN_TOKENS)).sum().alias("booleans"),
         v.str.contains(INTEGER_REGEX).sum().alias("integers"),
         v.str.contains(DECIMAL_REGEX).sum().alias("decimals"),
+        v.str.contains(LONG_DIGIT_REGEX).sum().alias("long_digits"),
         *(v.str.contains(p.regex).sum().alias(p.code) for p in ALL_PATTERNS),
     ]
     stats = frame.select(exprs).row(0, named=True) if values.len() else {}
@@ -181,6 +192,7 @@ def _count(series: pl.Series, values: pl.Series, rows: int) -> _Counts:
         decimals=int(stats.get("decimals") or 0),
         temporal=temporal,
         with_time=with_time,
+        long_digits=int(stats.get("long_digits") or 0),
     )
 
 
@@ -255,30 +267,55 @@ def _json_scalar(value: object) -> int | float | str | None:
     return value if isinstance(value, int | float) else None
 
 
-def _top_values(values: pl.Series, rows: int, personal: bool) -> list[TopValue]:
+def _shows_raw(
+    name: str, values: pl.Series, kind: InferredType, c: _Counts, personal: bool
+) -> bool:
+    distinct = (
+        values.unique(maintain_order=True).to_list()
+        if kind == "string" and 0 < c.distinct <= SAFE_MAX_DISTINCT
+        else []
+    )
+    return shows_raw_values(
+        kind,
+        name,
+        personal=personal,
+        distinct_values=[str(value) for value in distinct],
+        long_digit_values=c.long_digits,
+    )
+
+
+def _top_values(values: pl.Series, rows: int, shaped: bool) -> list[TopValue]:
+    """The most common values; in a shaped column the most common *shapes*, with the counts of
+    every value of that shape (so "Xxxxx Xxxxxx 62%" says how the column is written)."""
     if values.len() == 0:
         return []
-    counts = (
-        values.value_counts(name="count")
-        .sort(["count", values.name or "v"], descending=[True, False])
-        .head(TOP_VALUES)
-    )
+    counts = values.value_counts(name="count")
+    if not shaped:
+        top = counts.sort(["count", values.name or "v"], descending=[True, False]).head(TOP_VALUES)
+        return [
+            TopValue(
+                value=display_value(str(value), shaped=False),
+                count=int(count),
+                percent=_percent(int(count), rows),
+            )
+            for value, count in top.iter_rows()
+        ]
+    by_shape: dict[str, int] = {}
+    for value, count in counts.iter_rows():
+        key = display_value(str(value), shaped=True)
+        by_shape[key] = by_shape.get(key, 0) + int(count)
+    ranked = sorted(by_shape.items(), key=lambda item: (-item[1], item[0]))[:TOP_VALUES]
     return [
-        TopValue(
-            value=display_value(str(value), personal=personal),
-            count=int(count),
-            percent=_percent(int(count), rows),
-        )
-        for value, count in counts.iter_rows()
+        TopValue(value=key, count=count, percent=_percent(count, rows)) for key, count in ranked
     ]
 
 
-def _samples(values: pl.Series, personal: bool) -> list[str]:
+def _samples(values: pl.Series, shaped: bool) -> list[str]:
     """Up to ``SAMPLES`` different masked values, in file order (masking merges many values,
     e.g. every email becomes "[EMAIL]", so more distinct raw values are scanned)."""
     samples: list[str] = []
     for value in values.unique(maintain_order=True).head(SAMPLE_SCAN).to_list():
-        masked = display_value(str(value), personal=personal)
+        masked = display_value(str(value), shaped=shaped)
         if masked not in samples:
             samples.append(masked)
             if len(samples) == SAMPLES:
