@@ -193,7 +193,12 @@ describe('assistant: asking', () => {
     await user.keyboard('{Enter}');
 
     const answer = await screen.findByRole('article', { name: 'Question and answer' });
-    expect(answer.closest('[aria-live="polite"]')).not.toBeNull();
+    // Only the answer is announced, never the question (G3-25).
+    expect(answer.closest('[aria-live]')).toBeNull();
+    const announcer = screen.getByTestId('assistant-announcer');
+    expect(announcer).toHaveAttribute('aria-live', 'polite');
+    expect(announcer.textContent).toMatch(/^Answer: /);
+    expect(announcer).not.toHaveTextContent('Why did PIN completeness fail?');
     expect(bodies).toEqual([{ question: 'Why did PIN completeness fail?' }]);
     expect(box).toHaveFocus();
     expect(box).toHaveValue('');
@@ -298,19 +303,26 @@ describe('assistant: asking', () => {
     await questionBox();
     expect(screen.getByText(/Don't type customer details/)).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'How are duplicates found?' }));
-    expect(await screen.findByText('Searching project knowledge…')).toBeInTheDocument();
+    const searching = await screen.findByText('Searching project knowledge…');
+    expect(searching).toHaveAttribute('role', 'status');
+    // The pending question is shown but sits outside every live region.
+    const bubble = screen.getByTestId('pending-question');
+    expect(bubble).toHaveTextContent('How are duplicates found?');
+    expect(bubble.closest('[aria-live], [role="status"]')).toBeNull();
+    expect(screen.getByTestId('assistant-announcer')).toBeEmptyDOMElement();
     await screen.findByText('High confidence');
     expect(bodies).toEqual([{ question: 'How are duplicates found?' }]);
   });
 
-  it.each(['weak_retrieval', 'not_answerable', 'no_citation'] as const)(
+  it.each(['weak_retrieval', 'not_answerable', 'no_citation', 'daily_budget'] as const)(
     'shows a friendly message for the %s refusal',
     async (reason) => {
       answering(refusal(reason));
       setup();
       const user = userEvent.setup();
       await user.type(await questionBox(), 'What is the weather?{Enter}');
-      expect(await screen.findByText(REFUSAL_TEXT[reason])).toBeInTheDocument();
+      expect(await screen.findAllByText(REFUSAL_TEXT[reason])).toHaveLength(2);
+      expect(screen.getByTestId('assistant-announcer')).toHaveTextContent(REFUSAL_TEXT[reason]);
       expect(screen.getByText("Couldn't answer this one")).toBeInTheDocument();
       expect(screen.queryByText('Low confidence')).not.toBeInTheDocument();
     },
@@ -321,9 +333,10 @@ describe('assistant: asking', () => {
     setup();
     const user = userEvent.setup();
     await user.type(await questionBox(), 'Why was asha@example.com merged?{Enter}');
-    expect(
-      await screen.findByText("I can't use customer details. Ask with a customer ID instead."),
-    ).toBeInTheDocument();
+    const refused = "I can't use customer details. Ask with a customer ID instead.";
+    expect(await screen.findAllByText(refused)).toHaveLength(2); // the turn and the announcer
+    expect(screen.getByTestId('assistant-announcer')).toHaveTextContent(refused);
+    expect(screen.getByTestId('assistant-announcer')).not.toHaveTextContent('asha@example.com');
     expect(screen.getByText('Question hidden (it held customer details)')).toBeInTheDocument();
   });
 

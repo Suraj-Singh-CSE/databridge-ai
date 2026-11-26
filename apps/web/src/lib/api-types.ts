@@ -827,6 +827,16 @@ export interface DashboardAi {
     pairReviewUnavailable: number;
   };
   daily: { date: string; calls: number; tokens: number; costInr: number }[];
+  /** Today's shared AI request budget (ADR 0028); null when there is no daily cap. */
+  budget: {
+    dailyLimit: number | null;
+    usedToday: number;
+    projectDailyLimit: number | null;
+    projectUsedToday: number;
+    /** What this project may still send today; null when uncapped. */
+    remainingToday: number | null;
+    resetsAt: string;
+  } | null;
 }
 
 export const REVIEW_TYPES = [
@@ -930,7 +940,12 @@ export interface AssistantCitation {
 }
 
 export type AssistantRefusalReason =
-  'personal_data' | 'weak_retrieval' | 'not_answerable' | 'no_citation';
+  | 'personal_data'
+  | 'weak_retrieval'
+  | 'not_answerable'
+  | 'no_citation'
+  /** The free plan's daily AI request budget is used up (ADR 0028). */
+  | 'daily_budget';
 export type AssistantConfidence = 'high' | 'medium' | 'low';
 
 /** One question and its answer; `question` is null when it was refused for personal data. */

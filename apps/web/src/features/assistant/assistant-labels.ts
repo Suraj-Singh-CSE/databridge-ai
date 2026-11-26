@@ -41,6 +41,7 @@ export const REFUSAL_TEXT: Record<AssistantRefusalReason, string> = {
     "The project knowledge doesn't hold the answer to that. Try asking it a different way.",
   no_citation:
     "I couldn't back an answer with a project source, so I'm not showing one. Try a more specific question.",
+  daily_budget: 'The AI is resting for today on the free plan — try again tomorrow.',
 };
 
 export function refusalText(turn: AssistantTurn): string | null {
