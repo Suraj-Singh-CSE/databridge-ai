@@ -248,6 +248,8 @@ interface Setup {
   scores?: ScoreSummaryView | null;
   clusters?: ClusterSummaryView | null;
   pages?: { items: ClusterView[]; nextCursor: string | null }[];
+  /** Opened at this path instead of the plain Matching page (e.g. with `?customer=`). */
+  path?: string;
 }
 
 function notRun(reason: string) {
@@ -265,6 +267,7 @@ function setup({
   scores = scoresOf(),
   clusters = clustersOf(),
   pages = [{ items: [RAHUL, PRIYA], nextCursor: null }],
+  path = PATH,
 }: Setup = {}) {
   listRequests = [];
   const project = member
@@ -302,7 +305,7 @@ function setup({
         : fail(404, 'NOT_FOUND', 'No cluster with this customer id in the current proposals.');
     }),
   );
-  return renderApp(PATH);
+  return renderApp(path);
 }
 
 function step(name: string): HTMLElement {
@@ -760,6 +763,46 @@ describe('customers found', () => {
     ).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Clear search' }));
     expect(await screen.findByRole('rowheader', { name: 'C0123456789AB' })).toBeInTheDocument();
+  });
+
+  it('opens and focuses a linked customer that is not on the first page', async () => {
+    const { router } = setup({
+      pages: [
+        { items: [RAHUL], nextCursor: '1' },
+        { items: [PRIYA], nextCursor: null },
+      ],
+      path: `${PATH}?customer=c0000000000ff`,
+    });
+    const heading = await screen.findByRole('heading', { name: /Customer C0000000000FF/ });
+    await waitFor(() => {
+      expect(heading).toHaveFocus();
+    });
+    expect(screen.getByRole('searchbox', { name: 'Search by customer id' })).toHaveValue(
+      'C0000000000FF',
+    );
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: 'Clear search' }));
+    expect(await screen.findByRole('rowheader', { name: 'C0123456789AB' })).toBeInTheDocument();
+    expect(router.state.location.search).toBe('');
+  });
+
+  it('says so when a link names an invalid customer id, and still lists customers', async () => {
+    setup({ path: `${PATH}?customer=not-an-id` });
+    expect(await screen.findByText('This link does not name a valid customer')).toBeInTheDocument();
+    expect(await screen.findByRole('rowheader', { name: 'C0123456789AB' })).toBeInTheDocument();
+  });
+
+  it('keeps a searched customer in the address, so the link can be shared', async () => {
+    const { router } = setup();
+    const user = userEvent.setup();
+    await screen.findByRole('table', { name: 'Customers found' });
+    await user.type(
+      screen.getByRole('searchbox', { name: 'Search by customer id' }),
+      'C0000000000FF{Enter}',
+    );
+    await screen.findByRole('heading', { name: /Customer C0000000000FF/ });
+    expect(router.state.location.search).toBe('?customer=C0000000000FF');
   });
 
   it('says when no customers match the filters, and shows list errors', async () => {

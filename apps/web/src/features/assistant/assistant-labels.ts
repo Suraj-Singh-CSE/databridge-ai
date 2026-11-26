@@ -95,6 +95,9 @@ export function citationTarget(
   if (page === 'mapping' && params.sourceId) {
     to += `?${new URLSearchParams({ source: params.sourceId }).toString()}`;
   }
+  if (page === 'matching' && params.customerId) {
+    to += `?${new URLSearchParams({ customer: params.customerId }).toString()}`;
+  }
   return { to, label };
 }
 
