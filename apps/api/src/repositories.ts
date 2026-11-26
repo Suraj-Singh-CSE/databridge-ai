@@ -15,6 +15,8 @@ import type { CandidateRepository } from './modules/candidates/candidate.types.j
 import type { AuditRepository } from './modules/audit/audit.types.js';
 import { createMongoRefreshTokenRepository } from './modules/auth/refresh-token.repository.js';
 import type { RefreshTokenRepository } from './modules/auth/refresh-token.types.js';
+import { createMongoRetentionRepository } from './modules/retention/retention.repository.js';
+import type { RetentionRepository } from './modules/retention/retention.types.js';
 import { createMongoQualityRepository } from './modules/quality/quality.repository.js';
 import type { QualityRepository } from './modules/quality/quality.types.js';
 import { createMongoSqlVersionRepository } from './modules/sql/sql.repository.js';
@@ -67,6 +69,8 @@ export interface Repositories {
   knowledge: KnowledgeRepository;
   /** The project assistant's conversations, one per user thread (ADR 0025). */
   assistant: AssistantRepository;
+  /** Free-tier storage housekeeping and collection sizes (G3-11, ADR 0029). */
+  retention: RetentionRepository;
 }
 
 export function createMongoRepositories(): Repositories {
@@ -91,5 +95,6 @@ export function createMongoRepositories(): Repositories {
     dashboard: createMongoDashboardRepository(),
     knowledge: createMongoKnowledgeRepository(),
     assistant: createMongoAssistantRepository(),
+    retention: createMongoRetentionRepository(),
   };
 }

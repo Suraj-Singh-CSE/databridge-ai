@@ -9,6 +9,7 @@ import { defineScoresSuite } from './support/scores-suite.js';
 import { defineJobsSuite } from './support/jobs-suite.js';
 import { defineKnowledgeSuite } from './support/knowledge-suite.js';
 import { defineAssistantSuite } from './support/assistant-suite.js';
+import { defineRetentionSuite } from './support/retention-suite.js';
 import type { QualityRun } from '../src/modules/quality/quality.types.js';
 import type { SqlVersion } from '../src/modules/sql/sql.types.js';
 import type { Repositories } from '../src/repositories.js';
@@ -120,6 +121,13 @@ const memoryQuality = {
   },
 };
 defineQualitySuite('in-memory repositories', memoryQuality);
+defineRetentionSuite('in-memory repositories', {
+  ...memoryQuality,
+  async workerExport(repos, record) {
+    await Promise.resolve();
+    (repos as MemoryRepositories).exports.workerSave(record);
+  },
+});
 defineDashboardSuite('in-memory repositories', {
   ...memoryQuality,
   async workerExport(repos, record) {

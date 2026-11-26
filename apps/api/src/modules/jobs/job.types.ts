@@ -63,6 +63,11 @@ export interface NewJob {
   type: JobType;
   payload: Record<string, unknown>;
   createdBy: string;
+  /**
+   * Exclusive jobs: at most one queued job per (project, type, lockKey); `create` throws a
+   * duplicate-key error for a second one (G3-12). Omit for jobs that may run side by side.
+   */
+  lockKey?: string;
 }
 
 export interface JobEnding {

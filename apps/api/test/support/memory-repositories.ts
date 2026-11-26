@@ -164,6 +164,8 @@ export function createMemoryRepositories(): MemoryRepositories {
   // key: `${projectId}/${sourceId}`
   const profiles = new Map<string, ColumnProfile[]>();
   const jobs = new Map<string, Job>();
+  /** lockKey per job id (kept apart: the Job shape has no lockKey). */
+  const jobLocks = new Map<string, string>();
   const schemas = new Map<string, TargetSchema>();
   // key: `${projectId}/${sourceId}`
   const suggestions = new Map<string, StoredSuggestion[]>();
@@ -469,8 +471,19 @@ export function createMemoryRepositories(): MemoryRepositories {
     },
 
     jobs: {
-      async create(input) {
+      async create({ lockKey, ...input }) {
         await Promise.resolve();
+        // Mirrors the partial unique index `one_queued_job_per_lock` (G3-12).
+        const locked =
+          lockKey !== undefined &&
+          [...jobs.values()].some(
+            (j) =>
+              jobLocks.get(j.id) === lockKey &&
+              j.projectId === input.projectId &&
+              j.type === input.type &&
+              j.status === 'queued',
+          );
+        if (locked) throw new DuplicateKeyError('an active job holds this lock');
         const at = tick();
         const job: Job = {
           id: newId(),
@@ -489,6 +502,7 @@ export function createMemoryRepositories(): MemoryRepositories {
           updatedAt: at,
         };
         jobs.set(job.id, job);
+        if (lockKey !== undefined) jobLocks.set(job.id, lockKey);
         return structuredClone(job);
       },
       async findById(id) {
@@ -845,6 +859,13 @@ export function createMemoryRepositories(): MemoryRepositories {
       async listApprovals(projectId) {
         await Promise.resolve();
         return structuredClone([...inProject(approvals, projectId).values()]);
+      },
+      async deleteApprovalsOfRun(projectId, customerIds, runId) {
+        await Promise.resolve();
+        const stored = inProject(approvals, projectId);
+        for (const id of customerIds) {
+          if (stored.get(id)?.runId === runId) stored.delete(id);
+        }
       },
       async findApprovalsByKeys(projectId, keys) {
         await Promise.resolve();
@@ -1254,6 +1275,75 @@ export function createMemoryRepositories(): MemoryRepositories {
           ) as Record<(typeof REFUSAL_REASONS)[number], number>,
           avgLatencyMs: turns.length ? Math.round(latency / turns.length) : null,
         };
+      },
+    },
+
+    retention: {
+      async listExportsBefore(cutoff, limit) {
+        await Promise.resolve();
+        return [...exportRecords.values()]
+          .filter((e) => e.createdAt < cutoff)
+          .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime())
+          .slice(0, limit)
+          .map(({ id, projectId, format }) => ({ id, projectId, format }));
+      },
+      async pruneQualityRuns(cutoff) {
+        await Promise.resolve();
+        const newest = new Set(
+          [...new Set([...qualityRuns.values()].map((r) => r.projectId))].map(
+            (projectId) => runsOf(projectId)[0]?.id,
+          ),
+        );
+        let deleted = 0;
+        for (const [id, run] of qualityRuns) {
+          if (run.startedAt < cutoff && !newest.has(id)) {
+            qualityRuns.delete(id);
+            deleted += 1;
+          }
+        }
+        return deleted;
+      },
+      async trimAudit(maxPerProject) {
+        await Promise.resolve();
+        const kept = new Set<AuditEntry>();
+        for (const projectId of new Set(audit.map((e) => e.projectId))) {
+          audit
+            .filter((e) => e.projectId === projectId)
+            .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
+            .slice(0, maxPerProject)
+            .forEach((e) => kept.add(e));
+        }
+        const deleted = audit.length - kept.size;
+        audit.splice(0, audit.length, ...audit.filter((e) => kept.has(e)));
+        return deleted;
+      },
+      async deleteOrphanRuns() {
+        // Each map here holds only the current run (the worker fakes replace it).
+        await Promise.resolve();
+        return 0;
+      },
+      async collectionUsage() {
+        await Promise.resolve();
+        const counts: [string, number][] = [
+          ['users', users.size],
+          ['projects', projects.size],
+          ['sources', sources.size],
+          ['jobs', jobs.size],
+          ['exports', exportRecords.size],
+          ['quality_runs', qualityRuns.size],
+          ['audit_logs', audit.length],
+          ['assistant_conversations', conversations.size],
+          ['llm_calls', llmCalls.length],
+        ];
+        return counts
+          .map(([name, documents]) => ({
+            name,
+            documents,
+            dataBytes: null,
+            storageBytes: null,
+            indexBytes: null,
+          }))
+          .sort((a, b) => b.documents - a.documents);
       },
     },
   };

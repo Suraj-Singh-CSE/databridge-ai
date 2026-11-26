@@ -138,7 +138,10 @@ curl -X POST http://localhost:8080/api/v1/projects/$PROJECT/sources \
 Errors: `VALIDATION_ERROR` 400 (with `details: [{ field, message }]`), `UNAUTHORIZED` 401,
 `FORBIDDEN` 403, `NOT_FOUND` 404 (also for projects you are not a member of), `CONFLICT` 409,
 `LIMIT_REACHED` 409, `UNSUPPORTED_FILE` 400, `PAYLOAD_TOO_LARGE` 413, `TOO_MANY_ROWS` 413,
-`FILE_TOO_COMPLEX` 422, `RATE_LIMITED` 429.
+`FILE_TOO_COMPLEX` 422, `RATE_LIMITED` 429. A write that loses a race to a simultaneous one on a
+unique index answers `409 CONFLICT` ("Someone else just changed this at the same time — refresh
+and try again"), and starting a job that is already queued answers that step's `409 *_RUNNING`
+even for a double click ([ADR 0029](docs/adr/0029-concurrency-and-retention.md)).
 
 **Column profiling.** Start a `profile` job for a source, watch it like any job, then read the
 profile. Profiling is an explicit step (not started by the upload), so a failed or cancelled profile
@@ -432,7 +435,12 @@ naming a record that no longer exists is ignored and counted (`staleDecisionCoun
   `needs_review` that is not approved yet.
 - `409` (`details.reason`): `CLUSTERS_NOT_RUN`, `CLUSTERS_OUTDATED` (scored or reviewed again
   since grouping, or a member record is gone), `CLUSTERING_RUNNING` (decisions wait for the
-  rebuild), `NOTHING_TO_SPLIT`. A `recordId` outside the customer is a `400`.
+  rebuild), `NOTHING_TO_SPLIT`. A `recordId` outside the customer is a `400`. Decisions are
+  checked against the clustering run again when they are written: if "Build clusters" started
+  in between, the write is undone and the answer is `409 CLUSTERS_OUTDATED`. Two reviewers
+  approving the same customer at once both succeed (one upsert per customer); a rare clash is a
+  plain `409 CONFLICT` ("Someone else just updated this customer — refresh and try again"),
+  never a 500 ([ADR 0029](docs/adr/0029-concurrency-and-retention.md)).
 - Reading gains `status` from approvals, `approval`, `membershipChanged`, the `aiSuggested=true|false`
   filter, `status=approved|proposed` from approvals, `review` counts in every summary
   (`approvedCount`, `proposedCount`, `approvableHighCount`, same / different decisions) and, in the
@@ -593,7 +601,9 @@ curl -s "http://localhost:8080/api/v1/projects/$PROJECT/dashboard?range=7d" \
 | POST   | `/versions/:versionId/approve`          | owner, admin, data_engineer | 200; `409` `SQL_TESTS_FAILED` / `SQL_VERSION_NOT_DRAFT`  |
 | POST   | `/versions/:versionId/reject`           | owner, admin, data_engineer | 200 (`{ reason? }`); `409` `SQL_VERSION_DECIDED`         |
 
-One version is approved at a time: approving another marks the previous one `superseded`. Approve,
+One version is approved at a time: approving another marks the previous one `superseded`. A
+partial unique index allows only one approved version per project; approve supersedes first and
+retries if another approval wins the race (`409 SQL_APPROVE_CONFLICT` if it keeps losing). Approve,
 reject and run are audited (`sql_version.approve`, `.reject`, `.run`).
 
 **Background jobs.** Long work (profiling, mapping, standardising, matching; pipelines later) runs
@@ -1010,11 +1020,32 @@ Environment variables (values for the free demo in
 [`.env.free-tier.example`](.env.free-tier.example); every variable is explained in
 [`.env.example`](.env.example)):
 
-| Service    | Variables                                                                                                                                                                                                                                                                                                                                                                          |
-| ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| both       | `MONGODB_URI`, `REDIS_URL`, `AI_SERVICE_TOKEN`, `STORAGE_DRIVER=s3`, `S3_BUCKET`, `S3_REGION=auto`, `S3_ENDPOINT`, `S3_FORCE_PATH_STYLE`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`, `MAX_UPLOAD_BYTES`, `MAX_UPLOAD_ROWS`, `MAX_SOURCES_PER_PROJECT`                                                                                                                             |
-| api        | `NODE_ENV=production`, `JWT_ACCESS_SECRET`, `JWT_REFRESH_SECRET`, `AI_SERVICE_URL`, `AI_SERVICE_TIMEOUT_MS`, `AI_SERVICE_WAKE_TIMEOUT_MS`, `ASSISTANT_TIMEOUT_MS`, `CORS_ORIGIN`, `TRUST_PROXY=1`, `SERVE_WEB=true`, `WEB_DIST_DIR`, `BOOTSTRAP_ADMIN_EMAIL`, `REGISTRATION_MODE=invite`, `REGISTRATION_INVITE_CODES`, `JOB_STALE_AFTER_SECONDS`, `JOB_QUEUED_STALE_AFTER_SECONDS` |
-| ai-service | `ENV=production`, `RUN_WORKER=true`, `WORKER_POOL`, `WORKER_CONCURRENCY=1`, `WORKER_MAX_MEMORY_PER_CHILD_MB`, `SELF_PING_URL` (or Render's `RENDER_EXTERNAL_URL`), `SELF_PING_INTERVAL_SECONDS`, `LLM_PROVIDER=gemini`, `GEMINI_API_KEY`, and the memory caps (`MATCHING_MAX_*`, `SQL_*`, `EXPORT_MAX_ROWS`)                                                                       |
+| Service    | Variables                                                                                                                                                                                                                                                                                                                                                                                                        |
+| ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| both       | `MONGODB_URI`, `REDIS_URL`, `AI_SERVICE_TOKEN`, `STORAGE_DRIVER=s3`, `S3_BUCKET`, `S3_REGION=auto`, `S3_ENDPOINT`, `S3_FORCE_PATH_STYLE`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`, `MAX_UPLOAD_BYTES`, `MAX_UPLOAD_ROWS`, `MAX_SOURCES_PER_PROJECT`                                                                                                                                                           |
+| api        | `NODE_ENV=production`, `JWT_ACCESS_SECRET`, `JWT_REFRESH_SECRET`, `AI_SERVICE_URL`, `AI_SERVICE_TIMEOUT_MS`, `AI_SERVICE_WAKE_TIMEOUT_MS`, `ASSISTANT_TIMEOUT_MS`, `CORS_ORIGIN`, `TRUST_PROXY=1`, `SERVE_WEB=true`, `WEB_DIST_DIR`, `BOOTSTRAP_ADMIN_EMAIL`, `REGISTRATION_MODE=invite`, `REGISTRATION_INVITE_CODES`, `JOB_STALE_AFTER_SECONDS`, `JOB_QUEUED_STALE_AFTER_SECONDS`, the retention settings below |
+| ai-service | `ENV=production`, `RUN_WORKER=true`, `WORKER_POOL`, `WORKER_CONCURRENCY=1`, `WORKER_MAX_MEMORY_PER_CHILD_MB`, `SELF_PING_URL` (or Render's `RENDER_EXTERNAL_URL`), `SELF_PING_INTERVAL_SECONDS`, `LLM_PROVIDER=gemini`, `GEMINI_API_KEY`, and the memory caps (`MATCHING_MAX_*`, `SQL_*`, `EXPORT_MAX_ROWS`)                                                                                                     |
+
+### Data retention on the free tier
+
+MongoDB Atlas M0 stores at most 512 MB, so the api keeps only what the demo needs
+([ADR 0029](docs/adr/0029-concurrency-and-retention.md)). Every setting is an env variable
+(defaults below, documented in [`.env.example`](.env.example)):
+
+| Data                                                                     | Kept                                                                                 | How                                                                                                 |
+| ------------------------------------------------------------------------ | ------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------- |
+| Finished jobs                                                            | `JOB_RETENTION_DAYS=30` after they finish                                            | TTL index on `finishedAt`; queued/running never expire                                              |
+| LLM call logs (`llm_calls`)                                              | `LLM_CALL_RETENTION_DAYS=30`                                                         | TTL index on `created_at`                                                                           |
+| Assistant conversations                                                  | `ASSISTANT_RETENTION_DAYS=30` since the last message                                 | TTL index on `updatedAt`                                                                            |
+| Exports (file in storage + metadata)                                     | `EXPORT_RETENTION_DAYS=30`                                                           | retention sweep: file first, then the record                                                        |
+| Quality reports                                                          | 50 newest per project, and `QUALITY_RUN_RETENTION_DAYS=90` (the newest always stays) | worker prune + retention sweep                                                                      |
+| Audit log                                                                | newest `AUDIT_MAX_ENTRIES_PER_PROJECT=20000` per project                             | retention sweep (demo-tier cap; raise it on a paid tier)                                            |
+| Old pipeline runs (staged rows, pairs, scores, clusters, golden records) | current run only                                                                     | the worker drops the previous run when a new one commits; the sweep removes rows a crashed job left |
+
+The sweep runs at api startup and every `RETENTION_SWEEP_INTERVAL_MINUTES=60` (0 turns it off).
+TTL indexes are built (or their expiry changed) at startup. An admin can check usage with
+`GET /api/v1/admin/storage`: every collection's document count and, where the server reports
+them, data, storage and index bytes, against the 512 MB limit.
 
 ## Evaluating mapping accuracy
 

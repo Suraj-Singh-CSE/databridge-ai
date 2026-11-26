@@ -1,6 +1,9 @@
 import mongoose from 'mongoose';
 
+import { loadConfig } from '../../src/config.js';
 import { connectDb } from '../../src/db.js';
+import { ensureIndexes } from '../../src/indexes.js';
+import { createLogger } from '../../src/logger.js';
 
 const DEFAULT_TEST_URI = 'mongodb://localhost:27017/databridge_test';
 
@@ -12,6 +15,8 @@ export async function connectTestDb(): Promise<boolean> {
   const uri = process.env.MONGODB_URI ?? DEFAULT_TEST_URI;
   try {
     await connectDb(uri, { serverSelectionTimeoutMS: process.env.CI === 'true' ? 15_000 : 1_500 });
+    const config = loadConfig({ NODE_ENV: 'test' });
+    await ensureIndexes(config, createLogger(config));
     return true;
   } catch (error) {
     if (process.env.CI === 'true') {

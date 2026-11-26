@@ -8,6 +8,7 @@ import {
   AI_SERVICE_WAKING_MESSAGE,
   QUEUE_UNAVAILABLE_MESSAGE,
 } from '../../src/modules/jobs/job.service.js';
+import { isDuplicateKeyError } from '../../src/mongo-errors.js';
 import type { Repositories } from '../../src/repositories.js';
 
 import type { Harness } from './api-suite.js';
@@ -354,6 +355,45 @@ export function defineJobsSuite(label: string, harness: JobsHarness): void {
 
         await harness.workerUpdate(repos, first, { status: 'succeeded', progress: 100 });
         expect((await post(profile(sourceId))).status).toBe(202);
+      });
+
+      it('starts one job when the same start is sent twice at once; the other gets 409 (G3-12)', async () => {
+        const sourceId = await addSource();
+
+        const responses = await Promise.all([post(profile(sourceId)), post(profile(sourceId))]);
+
+        expect(responses.map((r) => r.status).sort()).toEqual([202, 409]);
+        const busy = responses.find((r) => r.status === 409);
+        expect(busy?.body.error.message).toMatch(/already being profiled/);
+        const knowledge = await Promise.all([
+          post({ type: 'knowledge_index', payload: {} }),
+          post({ type: 'knowledge_index', payload: {} }),
+        ]);
+        expect(knowledge.map((r) => r.status).sort()).toEqual([202, 409]);
+        expect(knowledge.find((r) => r.status === 409)?.body.error.details).toEqual({
+          reason: 'KNOWLEDGE_INDEX_RUNNING',
+        });
+        const active = await repos.jobs.listActive(projectId, 'profile');
+        expect(active).toHaveLength(1);
+      });
+
+      it('refuses a second active job with the same lock in the repository itself', async () => {
+        const sourceId = await addSource();
+        const input = {
+          projectId,
+          type: 'profile' as const,
+          payload: { sourceId },
+          createdBy: owner.id,
+          lockKey: sourceId,
+        };
+        const first = await repos.jobs.create(input);
+        await expect(repos.jobs.create(input)).rejects.toSatisfy(isDuplicateKeyError);
+        // Other locks, unlocked jobs and a lock released by a finished job are all fine.
+        await repos.jobs.create({ ...input, lockKey: 'other' });
+        const { lockKey: _lock, ...unlocked } = input;
+        await repos.jobs.create(unlocked);
+        await harness.workerUpdate(repos, first.id, { status: 'succeeded', progress: 100 });
+        await expect(repos.jobs.create(input)).resolves.toMatchObject({ status: 'queued' });
       });
 
       it('does not let a stale job block a new profile', async () => {

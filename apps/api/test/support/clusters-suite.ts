@@ -815,6 +815,53 @@ export function defineClustersSuite(label: string, harness: ClustersHarness): vo
         expect((await post(engineer, '/approve-high', { all: true })).status).toBe(400);
       });
 
+      it('survives simultaneous approve, approve and approve-high on one customer (G3-14)', async () => {
+        const [top] = await buildClusters(await prepare());
+        if (!top) throw new Error('no cluster');
+        const steward = await memberWith('data_steward');
+
+        const responses = await Promise.all([
+          post(owner, `/${top.customerId}/approve`),
+          post(steward, `/${top.customerId}/approve`),
+          post(owner, '/approve-high'),
+          post(steward, '/approve-high'),
+        ]);
+
+        for (const res of responses) {
+          expect([200, 409]).toContain(res.status);
+          if (res.status === 409) expect(res.body.error.code).toBe('CONFLICT');
+        }
+        expect(responses.filter((r) => r.status === 200).length).toBeGreaterThan(0);
+        expect((await detail(top.customerId)).cluster.status).toBe('approved');
+        const approvals = await repos.review.listApprovals(projectId);
+        expect(approvals.map((a) => a.customerId)).toEqual([top.customerId]);
+        expect(await repos.review.countPairDecisions(projectId)).toEqual({ same: 1, different: 0 });
+      });
+
+      it('undoes an approval when a newer clustering run starts during the write (409 CLUSTERS_OUTDATED)', async () => {
+        const [top] = await buildClusters(await prepare());
+        if (!top) throw new Error('no cluster');
+        const save = repos.review.saveApprovals.bind(repos.review);
+        repos.review.saveApprovals = async (id, approvals) => {
+          await save(id, approvals);
+          // Someone starts "Build clusters" between this write and the check after it.
+          await repos.jobs.create({
+            projectId,
+            type: 'clustering',
+            payload: {},
+            createdBy: owner.id,
+          });
+        };
+
+        const res = await post(owner, `/${top.customerId}/approve`);
+
+        expect(res.status).toBe(409);
+        expect(res.body.error.details).toEqual({ reason: 'CLUSTERS_OUTDATED' });
+        expect(await repos.review.listApprovals(projectId)).toEqual([]);
+        expect(await repos.review.countPairDecisions(projectId)).toEqual({ same: 0, different: 0 });
+        expect(await actions()).not.toContain('cluster.approve');
+      });
+
       it('splits a record out: different decisions, a clustering job, an audit entry', async () => {
         const [top] = await buildClusters(await prepare());
         if (!top) throw new Error('no cluster');

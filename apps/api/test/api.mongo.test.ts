@@ -1,7 +1,10 @@
 import mongoose from 'mongoose';
 import { afterAll, describe, expect, it } from 'vitest';
 
+import { loadConfig } from '../src/config.js';
 import { disconnectDb } from '../src/db.js';
+import { ensureIndexes } from '../src/indexes.js';
+import { createLogger } from '../src/logger.js';
 import { AuditLogModel } from '../src/modules/audit/audit.model.js';
 import {
   CandidatePairModel,
@@ -46,6 +49,7 @@ import { defineScoresSuite } from './support/scores-suite.js';
 import { defineJobsSuite } from './support/jobs-suite.js';
 import { defineKnowledgeSuite } from './support/knowledge-suite.js';
 import { defineAssistantSuite } from './support/assistant-suite.js';
+import { defineRetentionSuite } from './support/retention-suite.js';
 import { defineMappingsSuite, suggested } from './support/mappings-suite.js';
 import { columnProfile, defineProfilesSuite } from './support/profiles-suite.js';
 import { defineSourcesSuite } from './support/sources-suite.js';
@@ -294,6 +298,11 @@ describe.skipIf(!available)('MongoDB', () => {
     workerSqlVersion,
     workerQualityRun,
   });
+  defineRetentionSuite('MongoDB repositories', {
+    ...mongoClusters,
+    workerExport,
+    workerQualityRun,
+  });
   defineDashboardSuite('MongoDB repositories', {
     ...mongoClusters,
     workerSqlVersion,
@@ -375,6 +384,118 @@ describe.skipIf(!available)('MongoDB', () => {
   });
 
   describe('schema guarantees', () => {
+    it('keeps TTL indexes for finished jobs, LLM calls and idle assistant conversations (G3-11)', async () => {
+      const config = loadConfig({ NODE_ENV: 'test', JOB_RETENTION_DAYS: '7' });
+      await ensureIndexes(config, createLogger(config));
+      const ttl = async (collection: string) =>
+        (await mongoose.connection.collection(collection).indexes()).filter(
+          (index) => index.expireAfterSeconds !== undefined,
+        );
+
+      // A changed setting updates the expiry in place.
+      expect(await ttl('jobs')).toEqual([
+        expect.objectContaining({ key: { finishedAt: 1 }, expireAfterSeconds: 7 * 86_400 }),
+      ]);
+      expect(await ttl('llm_calls')).toEqual([
+        expect.objectContaining({ key: { created_at: 1 }, expireAfterSeconds: 30 * 86_400 }),
+      ]);
+      expect(await ttl('assistant_conversations')).toEqual([
+        expect.objectContaining({ key: { updatedAt: 1 }, expireAfterSeconds: 30 * 86_400 }),
+      ]);
+      const defaults = loadConfig({ NODE_ENV: 'test' });
+      await ensureIndexes(defaults, createLogger(defaults));
+      expect(await ttl('jobs')).toEqual([
+        expect.objectContaining({ key: { finishedAt: 1 }, expireAfterSeconds: 30 * 86_400 }),
+      ]);
+    });
+
+    it('allows one queued job per lock and one approved SQL version per project (G3-12, G3-13)', async () => {
+      const jobIndexes = await JobModel.collection.indexes();
+      expect(jobIndexes).toContainEqual(
+        expect.objectContaining({
+          name: 'one_queued_job_per_lock',
+          key: { projectId: 1, type: 1, lockKey: 1 },
+          unique: true,
+          partialFilterExpression: { status: 'queued', lockKey: { $exists: true } },
+        }),
+      );
+      const sqlIndexes = await SqlVersionModel.collection.indexes();
+      expect(sqlIndexes).toContainEqual(
+        expect.objectContaining({
+          name: 'one_approved_version_per_project',
+          key: { projectId: 1 },
+          unique: true,
+          partialFilterExpression: { status: 'approved' },
+        }),
+      );
+    });
+
+    it('supersedes older duplicate approvals before building the SQL index on old data', async () => {
+      await clearDb();
+      await SqlVersionModel.collection.dropIndex('one_approved_version_per_project');
+      const projectId = new mongoose.Types.ObjectId();
+      const base = { projectId, status: 'approved', sql: 'select 1', testsPassed: true };
+      await SqlVersionModel.collection.insertMany([
+        { ...base, version: 1 },
+        { ...base, version: 2 },
+      ]);
+      const config = loadConfig({ NODE_ENV: 'test' });
+
+      await ensureIndexes(config, createLogger(config));
+
+      const docs = await SqlVersionModel.find({ projectId }).sort({ version: 1 }).lean();
+      expect(docs.map((d) => d.status)).toEqual(['superseded', 'approved']);
+      expect((await SqlVersionModel.collection.indexes()).map((index) => index.name)).toContain(
+        'one_approved_version_per_project',
+      );
+    });
+
+    it('deletes rows of finished runs that are not current, keeping current and active runs', async () => {
+      await clearDb();
+      const projectId = new mongoose.Types.ObjectId();
+      const user = new mongoose.Types.ObjectId();
+      const job = async (status: string) =>
+        (
+          await JobModel.collection.insertOne({
+            projectId,
+            type: 'scoring',
+            status,
+            createdBy: user,
+            queuedAt: new Date(),
+          })
+        ).insertedId.toHexString();
+      const [current, crashed, running] = [
+        `${await job('succeeded')}:1`,
+        `${await job('failed')}:1`,
+        `${await job('running')}:2`,
+      ];
+      await ScoreSummaryModel.collection.insertOne({ projectId, runId: current });
+      for (const runId of [
+        current,
+        crashed,
+        running,
+        `${new mongoose.Types.ObjectId().toHexString()}:1`,
+      ]) {
+        await PairScoreModel.collection.insertOne({ projectId, runId, position: 1 });
+      }
+
+      const deleted = await createMongoRepositories().retention.deleteOrphanRuns();
+
+      expect(deleted).toBe(2); // the crashed run and one whose job is long gone
+      const left = await PairScoreModel.collection.distinct('runId');
+      expect(left.sort()).toEqual([current, running].sort());
+    });
+
+    it('reports collection sizes for the admin storage view', async () => {
+      await clearDb();
+      await JobModel.collection.insertOne({ projectId: new mongoose.Types.ObjectId() });
+      const usage = await createMongoRepositories().retention.collectionUsage();
+      const jobs = usage.find((c) => c.name === 'jobs');
+      expect(jobs?.documents).toBe(1);
+      // A self-hosted MongoDB reports byte sizes ($collStats); a shared tier may not.
+      expect(jobs?.storageBytes === null || (jobs?.storageBytes ?? 0) > 0).toBe(true);
+    });
+
     it('keeps one staged row per run and row number', async () => {
       await clearDb();
       await StagedRecordModel.syncIndexes();

@@ -1,4 +1,5 @@
 import { AppError } from '../../errors.js';
+import { isDuplicateKeyError } from '../../mongo-errors.js';
 import type { Repositories } from '../../repositories.js';
 import type { AuditService } from '../audit/audit.service.js';
 import type { JobService } from '../jobs/job.service.js';
@@ -77,6 +78,9 @@ export const REVIEW_MESSAGES = {
   single: 'This customer has only one record: there is nothing to split out.',
   sameCluster: 'must be two different customer ids',
   notApproved: 'This customer is not approved.',
+  newerRun:
+    'The clusters were rebuilt while you were reviewing. Refresh to see the new clusters, then try again.',
+  concurrent: 'Someone else just updated this customer — refresh and try again.',
 } as const;
 
 type ReviewRepos = Pick<
@@ -100,6 +104,49 @@ export function createReviewService(
       throw AppError.conflict(REVIEW_MESSAGES.running, { reason: 'CLUSTERING_RUNNING' });
     }
     return found;
+  }
+
+  /**
+   * At write time (G3-14): the clusters are still run `runId` and no clustering job started
+   * since `ready()`; else 409 CLUSTERS_OUTDATED.
+   */
+  async function assertSameRun(project: Project, runId: string): Promise<void> {
+    const [summary, running] = await Promise.all([
+      repos.clusters.findSummary(project.id),
+      jobs.hasActive(project, 'clustering'),
+    ]);
+    if (running || summary?.runId !== runId) {
+      throw AppError.conflict(REVIEW_MESSAGES.newerRun, { reason: 'CLUSTERS_OUTDATED' });
+    }
+  }
+
+  /**
+   * Writes approvals and their pinned links for run `runId`, checked against the current run
+   * just before and after the write; a write that lost the race to a new run is undone (409).
+   * A unique-index clash with a simultaneous write becomes a plain 409 CONFLICT.
+   */
+  async function writeApprovals(
+    project: Project,
+    runId: string,
+    approvals: ClusterApproval[],
+    pinned: PairDecision[],
+  ): Promise<void> {
+    await assertSameRun(project, runId);
+    try {
+      await repos.review.savePairDecisions(project.id, pinned);
+      await repos.review.saveApprovals(project.id, approvals);
+    } catch (error) {
+      if (isDuplicateKeyError(error)) throw AppError.conflict(REVIEW_MESSAGES.concurrent);
+      throw error;
+    }
+    try {
+      await assertSameRun(project, runId);
+    } catch (error) {
+      const ids = approvals.map((a) => a.customerId);
+      await repos.review.deleteApprovalsOfRun(project.id, ids, runId);
+      for (const id of ids) await repos.review.deleteApprovalDecisions(project.id, id);
+      throw error;
+    }
   }
 
   async function findCluster(project: Project, runId: string, customerId: string) {
@@ -223,8 +270,7 @@ export function createReviewService(
       const records = await membersOf(project, [cluster]);
       const approval = approvalOf(actor, summary.runId, cluster, records);
       const pinned = pins(actor, summary.runId, cluster, records);
-      await repos.review.savePairDecisions(project.id, pinned);
-      await repos.review.saveApprovals(project.id, [approval]);
+      await writeApprovals(project, summary.runId, [approval], pinned);
       await record(actor, project, 'cluster.approve', customerId, {
         size: cluster.size,
         label: cluster.label,
@@ -255,13 +301,11 @@ export function createReviewService(
       const todo = candidates.filter((c) => !approvedIds.has(c.customerId));
       const records =
         todo.length > 0 ? await membersOf(project, todo) : new Map<string, StagedRecordRef>();
-      await repos.review.savePairDecisions(
-        project.id,
-        todo.flatMap((c) => pins(actor, summary.runId, c, records)),
-      );
-      await repos.review.saveApprovals(
-        project.id,
+      await writeApprovals(
+        project,
+        summary.runId,
         todo.map((c) => approvalOf(actor, summary.runId, c, records)),
+        todo.flatMap((c) => pins(actor, summary.runId, c, records)),
       );
       const result = { approved: todo.length, alreadyApproved: candidates.length - todo.length };
       await record(actor, project, 'cluster.approve_high', project.id, {
@@ -293,6 +337,7 @@ export function createReviewService(
           ? [decision(actor, summary.runId, out, other, 'different', context)]
           : [];
       });
+      await assertSameRun(project, summary.runId);
       await repos.review.savePairDecisions(project.id, decisions);
       const started = await recluster(actor, project);
       await record(actor, project, 'cluster.split', customerId, {
@@ -338,6 +383,7 @@ export function createReviewService(
         customerId: first.customerId,
         reason: reason ?? null,
       });
+      await assertSameRun(project, summary.runId);
       await repos.review.savePairDecisions(project.id, [merged]);
       const started = await recluster(actor, project);
       await record(actor, project, 'cluster.merge', first.customerId, {

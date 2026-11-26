@@ -1,4 +1,5 @@
 import { AppError } from '../../errors.js';
+import { isDuplicateKeyError } from '../../mongo-errors.js';
 import type { Repositories } from '../../repositories.js';
 import type { AuditService } from '../audit/audit.service.js';
 import type { Actor } from '../projects/project.service.js';
@@ -29,6 +30,7 @@ export const SQL_MESSAGES = {
     'so it cannot be approved. Draft a new version.',
   notDraft: (status: string) => `Only a draft can be approved; this version is ${status}.`,
   decided: (status: string) => `This version is already ${status}.`,
+  concurrent: 'Someone else approved another version at the same time — refresh and try again.',
 };
 
 type SqlRepos = Pick<Repositories, 'sqlVersions'>;
@@ -77,12 +79,13 @@ export function createSqlService(
           failedChecks: failedChecks(version),
         });
       }
-      const result = await repos.sqlVersions.approve(
-        project.id,
-        version.id,
-        actor.user.userId,
-        now(),
-      );
+      let result;
+      try {
+        result = await repos.sqlVersions.approve(project.id, version.id, actor.user.userId, now());
+      } catch (error) {
+        if (!isDuplicateKeyError(error)) throw error;
+        throw AppError.conflict(SQL_MESSAGES.concurrent, { reason: 'SQL_APPROVE_CONFLICT' });
+      }
       if (!result) {
         // Decided by someone else between the read and the write.
         const latest = await find(project, versionId);

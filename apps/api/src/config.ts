@@ -163,6 +163,18 @@ const envSchema = z
     JOB_QUEUED_STALE_AFTER_SECONDS: positiveInt(600),
     // Keep-alive comment interval on /jobs/:jobId/events; the job is also re-read each time.
     JOB_EVENTS_KEEPALIVE_MS: z.coerce.number().int().min(10).default(15_000),
+    // Data retention for the 512 MB Atlas free tier (ADR 0029). TTL indexes: finished jobs,
+    // LLM call logs, assistant conversations (since last activity).
+    JOB_RETENTION_DAYS: positiveInt(30),
+    LLM_CALL_RETENTION_DAYS: positiveInt(30),
+    ASSISTANT_RETENTION_DAYS: positiveInt(30),
+    // Removed by the retention sweep: export files and their metadata, quality reports (the
+    // newest per project is always kept), audit entries beyond the newest N per project.
+    EXPORT_RETENTION_DAYS: positiveInt(30),
+    QUALITY_RUN_RETENTION_DAYS: positiveInt(90),
+    AUDIT_MAX_ENTRIES_PER_PROJECT: positiveInt(20_000),
+    // How often the sweep runs in each api process; 0 turns it off.
+    RETENTION_SWEEP_INTERVAL_MINUTES: z.coerce.number().int().min(0).default(60),
   })
   .superRefine((env, ctx) => {
     if (env.REGISTRATION_MODE === 'invite') {

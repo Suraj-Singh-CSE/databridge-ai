@@ -21,7 +21,10 @@ export interface AuditEntry extends NewAuditEntry {
   createdAt: Date;
 }
 
-/** Append-only by design: there is deliberately no update or delete method. */
+/**
+ * Append-only by design: there is deliberately no update or delete method. The only removal is
+ * the free-tier size cap (`RetentionRepository.trimAudit`, ADR 0029): oldest entries first.
+ */
 export interface AuditRepository {
   append(entry: NewAuditEntry): Promise<AuditEntry>;
   listByProject(projectId: string, page: PageRequest): Promise<Omit<Page<AuditEntry>, 'page'>>;

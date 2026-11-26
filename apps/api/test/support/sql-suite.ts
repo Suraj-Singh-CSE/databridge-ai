@@ -407,6 +407,39 @@ export function defineSqlSuite(label: string, harness: SqlHarness): void {
         expect(approvals[0]?.after).toMatchObject({ version: 2, supersededVersions: [1] });
       });
 
+      it('leaves exactly one approved version when approvals race (G3-13)', async () => {
+        const engineer = await memberWith('data_engineer');
+        const first = await drafted();
+        await request(app)
+          .post(url(`/versions/${first.id}/approve`))
+          .set(bearer(owner))
+          .send({})
+          .expect(200);
+        const racing = [await drafted(), await drafted(), await drafted()];
+
+        const responses = await Promise.all(
+          racing.flatMap((v) =>
+            [owner, engineer].map((session) =>
+              request(app)
+                .post(url(`/versions/${v.id}/approve`))
+                .set(bearer(session))
+                .send({}),
+            ),
+          ),
+        );
+
+        for (const res of responses) expect([200, 409]).toContain(res.status);
+        expect(responses.some((r) => r.status === 200)).toBe(true);
+        const versions = await repos.sqlVersions.listByProject(projectId, 10);
+        const approved = versions.filter((v) => v.status === 'approved');
+        expect(approved).toHaveLength(1);
+        // Every other version that was approved at some point is now superseded, none lost.
+        expect(versions.filter((v) => v.status === 'draft').length).toBeLessThan(racing.length);
+        expect(versions.every((v) => ['approved', 'superseded', 'draft'].includes(v.status))).toBe(
+          true,
+        );
+      });
+
       it('answers 409 SQL_TESTS_FAILED for a failing version and 409 when not a draft', async () => {
         const failing = await drafted({ testsPassed: false });
         const res = await request(app)

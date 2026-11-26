@@ -187,8 +187,13 @@ export interface ReviewRepository {
   countPairDecisions(projectId: string): Promise<Record<PairDecisionValue, number>>;
   /** Removes the `same` decisions an approval of this customer id wrote. */
   deleteApprovalDecisions(projectId: string, customerId: string): Promise<void>;
-  /** Saves approvals; approvals sharing a member with a new one are replaced (superseded). */
+  /**
+   * Saves approvals, one upsert per customer id (safe when two reviewers approve at once);
+   * approvals of other customers sharing a member with a new one are removed (superseded).
+   */
   saveApprovals(projectId: string, approvals: ClusterApproval[]): Promise<void>;
+  /** Removes these customers' approvals made on clustering run `runId` (a refused write). */
+  deleteApprovalsOfRun(projectId: string, customerIds: string[], runId: string): Promise<void>;
   /** Every approval of the project (stale ones too: they explain "membership changed"). */
   listApprovals(projectId: string): Promise<ClusterApproval[]>;
   /** Approvals holding any of these member keys. */

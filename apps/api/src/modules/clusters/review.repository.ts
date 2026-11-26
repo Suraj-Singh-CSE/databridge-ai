@@ -54,18 +54,34 @@ export function createMongoReviewRepository(): ReviewRepository {
     },
     async saveApprovals(projectId, approvals) {
       if (approvals.length === 0) return;
-      const keys = approvals.flatMap((a) => a.memberKeys);
+      const project = oid(projectId);
+      // Other customers holding one of these members are superseded by the new approvals.
       await ClusterApprovalModel.deleteMany({
-        projectId,
-        $or: [
-          { memberKeys: { $in: keys } },
-          { customerId: { $in: approvals.map((a) => a.customerId) } },
-        ],
+        projectId: project,
+        customerId: { $nin: approvals.map((a) => a.customerId) },
+        memberKeys: { $in: approvals.flatMap((a) => a.memberKeys) },
       });
-      await ClusterApprovalModel.insertMany(
-        approvals.map((a) => ({ projectId, ...a })),
+      // One upsert per customer (G3-14): idempotent, so two reviewers approving the same
+      // customer at once both succeed. The filter is the unique index's exact key, which lets
+      // MongoDB retry a racing upsert itself instead of answering E11000.
+      await ClusterApprovalModel.bulkWrite(
+        approvals.map((a) => ({
+          replaceOne: {
+            filter: { projectId: project, customerId: a.customerId },
+            replacement: { ...a, projectId: project, approvedBy: oid(a.approvedBy) },
+            upsert: true,
+          },
+        })),
         { ordered: false },
       );
+    },
+    async deleteApprovalsOfRun(projectId, customerIds, runId) {
+      if (customerIds.length === 0) return;
+      await ClusterApprovalModel.deleteMany({
+        projectId: oid(projectId),
+        customerId: { $in: customerIds },
+        runId,
+      });
     },
     async listApprovals(projectId) {
       const docs = await ClusterApprovalModel.find({ projectId }).lean<ClusterApprovalDoc[]>();
