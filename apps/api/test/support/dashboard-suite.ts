@@ -74,7 +74,10 @@ export function defineDashboardSuite(label: string, harness: DashboardHarness): 
 
     const url = (query = '', project = projectId) =>
       `/api/v1/projects/${project}/dashboard${query}`;
-    const ago = (ms: number) => new Date(Date.now() - ms);
+    // One instant per test: two separate Date.now() calls can be 1 ms apart, which made
+    // "approved 1 hour after creation" come out as 3,600,001 ms.
+    let seededAt = Date.now();
+    const ago = (ms: number) => new Date(seededAt - ms);
 
     function llmCall(overrides: Partial<LlmCall>): LlmCall {
       return {
@@ -271,6 +274,7 @@ export function defineDashboardSuite(label: string, harness: DashboardHarness): 
     }
 
     beforeEach(async () => {
+      seededAt = Date.now();
       repos = await harness.setup();
       app = buildTestApp({ repos });
       await register('first-admin@example.com');
