@@ -153,6 +153,11 @@ jobs:
             echo "LOG_LEVEL=INFO"
             # The e2e suite signs in and out several times from one IP (the nginx proxy).
             echo "AUTH_RATE_LIMIT_MAX=200"
+            echo "SESSION_RATE_LIMIT_MAX=2000"
+            # Only this account becomes admin (ADR 0027); the smoke tests register it first.
+            echo "BOOTSTRAP_ADMIN_EMAIL=smoke@example.com"
+            # Production hardening of the ai-service: no /internal/docs, no demo routes.
+            echo "ENV=production"
           } > .env.ci
 
       - name: Validate compose file
@@ -192,9 +197,38 @@ jobs:
               .catch((e) => { console.error(e.message); process.exit(1); });' > /tmp/ai-ready
           cat /tmp/ai-ready
           grep -q '"storage":"ok"' /tmp/ai-ready
+          # ENV=production: the ai-service serves no API docs.
+          $COMPOSE exec -T api node -e '
+            Promise.all(["/internal/docs", "/internal/openapi.json"].map((p) => fetch("http://ai-service:8000" + p)))
+              .then((rs) => { const codes = rs.map((r) => r.status); console.log("ai-service docs:", codes); process.exit(codes.every((c) => c === 404) ? 0 : 1); })
+              .catch((e) => { console.error(e.message); process.exit(1); });'
           # The Celery worker runs inside the ai-service container (no separate worker service).
           $COMPOSE exec -T ai-service celery -A app.worker.celery_app:celery_app inspect ping --timeout 10
           echo "ok: api and ai-service ready, worker running beside uvicorn"
+
+      - name: Single-origin smoke test (the api serves the web app, ADR 0027)
+        run: |
+          set -euo pipefail
+          origin=http://localhost:4000
+          for path in / /projects /projects/abc/mapping; do
+            curl -sS -D /tmp/headers -o /tmp/page "$origin$path"
+            echo "$path -> $(head -n 1 /tmp/headers | tr -d '\r')"
+            grep -q '<div id="root">' /tmp/page
+            grep -qi '^cache-control: no-cache' /tmp/headers
+            grep -qi "^content-security-policy: default-src 'self';script-src 'self';" /tmp/headers
+            grep -qi "frame-ancestors 'none'" /tmp/headers
+            grep -qi '^permissions-policy: ' /tmp/headers
+          done
+          asset=$(grep -oE '/assets/index-[A-Za-z0-9_-]+\.js' /tmp/page | head -n 1)
+          curl -sS -D /tmp/headers -o /dev/null "$origin$asset"
+          echo "$asset -> $(grep -i '^cache-control' /tmp/headers | tr -d '\r')"
+          grep -qi '^cache-control: public, max-age=31536000, immutable' /tmp/headers
+          code=$(curl -s -o /tmp/body -w '%{http_code}' "$origin/api/v1/no-such-route")
+          echo "/api/v1/no-such-route -> $code $(cat /tmp/body)"
+          test "$code" = 404
+          jq -e '.error.code == "NOT_FOUND"' /tmp/body > /dev/null
+          curl -sf "$origin/api/v1/auth/config" | jq -e '.data.registrationMode == "open"' > /dev/null
+          echo "ok: one origin for the web app and the API, with CSP and caching headers"
 
       - name: Auth smoke test through the nginx proxy (register, then /me)
         run: |
@@ -203,6 +237,11 @@ jobs:
             -H 'Content-Type: application/json' \
             -d '{"email":"smoke@example.com","name":"Smoke","password":"smoke-test-password"}')
           echo "$body" | jq -e '.data.user.role == "admin"' > /dev/null
+          # Any other registrant is not admin, even early on (BOOTSTRAP_ADMIN_EMAIL only).
+          curl -sf -X POST http://localhost:8080/api/v1/auth/register \
+            -H 'Content-Type: application/json' \
+            -d '{"email":"second@example.com","name":"Second","password":"smoke-test-password"}' \
+            | jq -e '.data.user.role == "data_engineer"' > /dev/null
           token=$(echo "$body" | jq -r '.data.accessToken')
           curl -sf http://localhost:8080/api/v1/auth/me -H "Authorization: Bearer $token" \
             | jq -e '.data.user.email == "smoke@example.com"'
@@ -867,10 +906,12 @@ jobs:
           npm ci --no-audit --no-fund
           cd apps/web && npx playwright install --with-deps chromium
 
-      - name: End-to-end tests (Playwright, against the compose stack)
+      # Single-origin mode, as on free hosting: the api serves the app with its CSP, and the
+      # suite fails on any CSP violation in the browser console (ADR 0027).
+      - name: End-to-end tests (Playwright, against the api serving the web app)
         run: npm run e2e --workspace apps/web
         env:
-          E2E_BASE_URL: http://localhost:8080
+          E2E_BASE_URL: http://localhost:4000
 
       - name: Upload Playwright report on failure
         if: failure()

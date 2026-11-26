@@ -1,6 +1,6 @@
 import { fileURLToPath } from 'node:url';
 
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Page } from './support/fixtures';
 
 const sample = (name: string) =>
   fileURLToPath(new URL(`../../../eval/samples/${name}`, import.meta.url));

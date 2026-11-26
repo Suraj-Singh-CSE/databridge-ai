@@ -8,7 +8,9 @@ import type { User, UserRepository } from './user.types.js';
 
 type StoredUser = UserDoc & { _id: Types.ObjectId; createdAt: Date; updatedAt: Date };
 
-const FIRST_ADMIN_KEY = 'first-admin';
+// A new key (Gate 2 used "first-admin" for "first registrant is admin"), so an existing
+// deployment's old claim does not block the configured bootstrap admin (ADR 0027).
+const BOOTSTRAP_ADMIN_KEY = 'bootstrap-admin';
 
 function toUser(doc: StoredUser): User {
   return {
@@ -44,12 +46,17 @@ export function createMongoUserRepository(): UserRepository {
       const doc = await UserModel.findOne({ email }).lean<StoredUser>();
       return doc ? { user: toUser(doc), passwordHash: doc.passwordHash } : null;
     },
-    count() {
-      return UserModel.countDocuments();
+    async setRole(id, role) {
+      const doc = await UserModel.findByIdAndUpdate(
+        id,
+        { $set: { role } },
+        { returnDocument: 'after', runValidators: true },
+      ).lean<StoredUser>();
+      return doc ? toUser(doc) : null;
     },
-    async claimFirstAdmin() {
+    async claimBootstrapAdmin() {
       try {
-        await AppMetaModel.create({ _id: FIRST_ADMIN_KEY, claimedAt: new Date() });
+        await AppMetaModel.create({ _id: BOOTSTRAP_ADMIN_KEY, claimedAt: new Date() });
         return true;
       } catch (error) {
         if (isDuplicateKeyError(error)) return false;

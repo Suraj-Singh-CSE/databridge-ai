@@ -31,12 +31,14 @@ def create_app(settings: Settings | None = None, services: Services | None = Non
         yield
         await services.close()
 
+    # The interactive docs map the whole internal API: never served in production (ADR 0027).
+    docs = not settings.is_production
     app = FastAPI(
         title="DataBridge AI service",
         version="0.0.0",
-        docs_url="/internal/docs",
+        docs_url="/internal/docs" if docs else None,
         redoc_url=None,
-        openapi_url="/internal/openapi.json",
+        openapi_url="/internal/openapi.json" if docs else None,
         lifespan=lifespan,
     )
     app.state.settings = settings
@@ -47,7 +49,8 @@ def create_app(settings: Settings | None = None, services: Services | None = Non
     # Open: liveness/readiness probes. Everything else needs the service token.
     app.include_router(health.router, prefix=API_PREFIX)
     protected = APIRouter(prefix=API_PREFIX, dependencies=[Depends(require_service_token)])
-    protected.include_router(llm.router)
+    if settings.enable_demo_routes and not settings.is_production:
+        protected.include_router(llm.router)
     protected.include_router(jobs.router)
     protected.include_router(knowledge.router)
     protected.include_router(assistant.router)

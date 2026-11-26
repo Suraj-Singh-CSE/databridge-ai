@@ -22,8 +22,70 @@ describe('loadConfig', () => {
     expect(config.PORT).toBe(4000);
     expect(config.AI_SERVICE_URL).toBe('http://localhost:8000');
     expect(config.TRUST_PROXY).toBe(false);
-    expect(config.AUTH_RATE_LIMIT_MAX).toBe(20);
+    expect(config.AUTH_RATE_LIMIT_MAX).toBe(10);
     expect(config.AUTH_RATE_LIMIT_WINDOW_MS).toBe(900_000);
+    expect(config.SESSION_RATE_LIMIT_MAX).toBe(120);
+    expect(config.SESSION_RATE_LIMIT_WINDOW_MS).toBe(900_000);
+    expect(config.REGISTRATION_MODE).toBe('open');
+    expect(config.REGISTRATION_INVITE_CODES).toEqual([]);
+    expect(config.BOOTSTRAP_ADMIN_EMAIL).toBeUndefined();
+    expect(config.SERVE_WEB).toBe(false);
+    expect(config.WEB_DIST_DIR).toBe('../web/dist');
+  });
+
+  it('parses TRUST_PROXY as false, true, a hop count or a pass-through value', () => {
+    const trust = (value: string) =>
+      loadConfig({ NODE_ENV: 'test', TRUST_PROXY: value }).TRUST_PROXY;
+
+    expect(trust('false')).toBe(false);
+    expect(trust('true')).toBe(true);
+    expect(trust('1')).toBe(1);
+    expect(trust('loopback')).toBe('loopback');
+  });
+
+  it('normalises BOOTSTRAP_ADMIN_EMAIL and treats an empty value as unset', () => {
+    const load = (value: string) =>
+      loadConfig({ NODE_ENV: 'test', BOOTSTRAP_ADMIN_EMAIL: value }).BOOTSTRAP_ADMIN_EMAIL;
+
+    expect(load('  Boss@Example.COM ')).toBe('boss@example.com');
+    expect(load('')).toBeUndefined();
+    expect(() => load('not-an-email')).toThrow(/BOOTSTRAP_ADMIN_EMAIL/);
+  });
+
+  it('requires invite codes of 8+ characters in invite mode', () => {
+    const load = (codes?: string) =>
+      loadConfig({
+        NODE_ENV: 'test',
+        REGISTRATION_MODE: 'invite',
+        ...(codes === undefined ? {} : { REGISTRATION_INVITE_CODES: codes }),
+      });
+
+    expect(() => load()).toThrow(/REGISTRATION_INVITE_CODES: is required/);
+    expect(() => load('short')).toThrow(/at least 8 characters/);
+    expect(load(' first-code-1 , second-code-2 ,').REGISTRATION_INVITE_CODES).toEqual([
+      'first-code-1',
+      'second-code-2',
+    ]);
+    expect(() => loadConfig({ NODE_ENV: 'test', REGISTRATION_MODE: 'maybe' })).toThrow(
+      /REGISTRATION_MODE/,
+    );
+  });
+
+  it('refuses placeholder invite codes in production, without printing them', () => {
+    const run = () =>
+      loadConfig({
+        ...PRODUCTION_ENV,
+        REGISTRATION_MODE: 'invite',
+        REGISTRATION_INVITE_CODES: 'CHANGE-ME-invite',
+      });
+
+    expect(run).toThrow(/REGISTRATION_INVITE_CODES: still contains/);
+    expect(run).not.toThrow(/CHANGE-ME-invite/);
+  });
+
+  it('parses SERVE_WEB as a boolean flag', () => {
+    expect(loadConfig({ NODE_ENV: 'test', SERVE_WEB: 'true' }).SERVE_WEB).toBe(true);
+    expect(() => loadConfig({ NODE_ENV: 'test', SERVE_WEB: 'yes' })).toThrow(/SERVE_WEB/);
   });
 
   it('fails fast outside test mode, naming missing variables without values', () => {
@@ -170,6 +232,7 @@ describe('loadConfig', () => {
     env.JWT_ACCESS_SECRET = 'a'.repeat(48);
     env.JWT_REFRESH_SECRET = 'b'.repeat(48);
     env.AI_SERVICE_TOKEN = 'c'.repeat(48);
+    env.REGISTRATION_INVITE_CODES = 'demo-invite-code-1';
 
     const config = loadConfig(env);
 
@@ -179,6 +242,10 @@ describe('loadConfig', () => {
     expect(config.MAX_SOURCES_PER_PROJECT).toBe(4);
     expect(config.MAX_UPLOAD_BYTES).toBe(10 * 1024 * 1024);
     expect(config.AI_SERVICE_WAKE_TIMEOUT_MS).toBe(90_000);
+    expect(config.TRUST_PROXY).toBe(1);
+    expect(config.SERVE_WEB).toBe(true);
+    expect(config.REGISTRATION_MODE).toBe('invite');
+    expect(config.BOOTSTRAP_ADMIN_EMAIL).toBe('you@example.com');
     // The placeholders themselves are refused in production.
     expect(() => loadConfig({ ...env, AI_SERVICE_TOKEN: 'CHANGE-ME-service-token' })).toThrow(
       /AI_SERVICE_TOKEN/,

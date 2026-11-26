@@ -32,12 +32,21 @@ def _default_prices() -> dict[str, ModelPrice]:
     }
 
 
+# On free hosting the ai-service is a public web service: the token is its only barrier.
+PRODUCTION_MIN_TOKEN_CHARS = 32
+
+
 class Settings(BaseSettings):
     """Runtime configuration. Secrets are SecretStr so they never appear in logs or reprs."""
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore", frozen=True)
 
+    # "production" hides the API docs and refuses demo routes and short tokens (ADR 0027).
+    env: Literal["development", "test", "production"] = "development"
     ai_service_token: SecretStr = Field(min_length=16)
+    # The demo route POST /internal/v1/llm/echo (gateway wiring check). Off by default; refused
+    # in production, where any token holder could spend the LLM quota with it.
+    enable_demo_routes: bool = False
     redis_url: str = Field(pattern=r"^rediss?://")
     mongodb_uri: str = Field(pattern=r"^mongodb(\+srv)?://")
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
@@ -274,6 +283,23 @@ class Settings(BaseSettings):
             raise ValueError(f"{names} must be set when STORAGE_DRIVER=s3")
         if (self.s3_access_key_id is None) != (self.s3_secret_access_key is None):
             raise ValueError("set both S3_ACCESS_KEY_ID and S3_SECRET_ACCESS_KEY, or neither")
+        return self
+
+    @property
+    def is_production(self) -> bool:
+        return self.env == "production"
+
+    @model_validator(mode="after")
+    def _production_hardening(self) -> Self:
+        if not self.is_production:
+            return self
+        if self.enable_demo_routes:
+            raise ValueError("ENABLE_DEMO_ROUTES must be false when ENV=production")
+        if len(self.ai_service_token.get_secret_value()) < PRODUCTION_MIN_TOKEN_CHARS:
+            raise ValueError(
+                f"AI_SERVICE_TOKEN must be at least {PRODUCTION_MIN_TOKEN_CHARS} characters "
+                "when ENV=production (the service is public on free hosting)"
+            )
         return self
 
     @model_validator(mode="after")

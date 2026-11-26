@@ -19,6 +19,9 @@ import { FakeAiService, MemoryJobEventBus } from './fakes.js';
 
 import { createMemoryRepositories } from './memory-repositories.js';
 
+/** The account that becomes admin in test apps (see BOOTSTRAP_ADMIN_EMAIL). */
+export const TEST_BOOTSTRAP_ADMIN_EMAIL = 'first-admin@example.com';
+
 /** bcrypt cost 4 keeps API tests fast; production cost 12 is asserted in password.test.ts. */
 export const fastPasswords = createPasswordHasher(4);
 
@@ -37,8 +40,15 @@ export interface TestAppOptions {
 }
 
 export function buildTestApp(options: TestAppOptions = {}): Express {
-  // High rate limit by default so suites are not throttled; rate-limit tests lower it.
-  const config = loadConfig({ NODE_ENV: 'test', AUTH_RATE_LIMIT_MAX: '10000', ...options.env });
+  // High rate limits by default so suites are not throttled; rate-limit tests lower them.
+  // Suites register BOOTSTRAP_ADMIN_EMAIL first when they need a global admin.
+  const config = loadConfig({
+    NODE_ENV: 'test',
+    AUTH_RATE_LIMIT_MAX: '10000',
+    SESSION_RATE_LIMIT_MAX: '10000',
+    BOOTSTRAP_ADMIN_EMAIL: TEST_BOOTSTRAP_ADMIN_EMAIL,
+    ...options.env,
+  });
   return createApp({
     config,
     logger: createLogger(config),

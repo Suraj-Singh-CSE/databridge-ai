@@ -41,6 +41,27 @@ const trustProxy = z
     return value;
   });
 
+const booleanFlag = (fallback: 'true' | 'false') =>
+  z
+    .enum(['true', 'false'])
+    .default(fallback)
+    .transform((value) => value === 'true');
+
+/** Comma-separated list; blanks are dropped (e.g. `REGISTRATION_INVITE_CODES=a, b,`). */
+const commaList = () =>
+  z
+    .string()
+    .default('')
+    .transform((value) =>
+      value
+        .split(',')
+        .map((item) => item.trim())
+        .filter((item) => item.length > 0),
+    );
+
+export const REGISTRATION_MODES = ['open', 'invite', 'closed'] as const;
+export type RegistrationMode = (typeof REGISTRATION_MODES)[number];
+
 const envSchema = z
   .object({
     NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
@@ -68,12 +89,38 @@ const envSchema = z
     ASSISTANT_MAX_TURNS: positiveInt(50),
     CORS_ORIGIN: z.url({ error: 'is required and must be a valid URL' }),
     TRUST_PROXY: trustProxy,
-    AUTH_RATE_LIMIT_MAX: z.coerce.number().int().min(1).default(20),
+    // Sign-in and registration attempts per client IP + email (brute-force guard; ADR 0027).
+    AUTH_RATE_LIMIT_MAX: positiveInt(10),
     AUTH_RATE_LIMIT_WINDOW_MS: z.coerce
       .number()
       .int()
       .min(1000)
       .default(15 * 60 * 1000),
+    // Session calls (refresh, me, logout, config) per client IP: generous, so normal use
+    // (several tabs, reloads) never locks anyone out.
+    SESSION_RATE_LIMIT_MAX: positiveInt(120),
+    SESSION_RATE_LIMIT_WINDOW_MS: z.coerce
+      .number()
+      .int()
+      .min(1000)
+      .default(15 * 60 * 1000),
+
+    // Access control (ADR 0027). Only a user with exactly this email becomes admin; unset = nobody.
+    BOOTSTRAP_ADMIN_EMAIL: z.preprocess(
+      (value) => (value === '' ? undefined : value),
+      z
+        .string()
+        .trim()
+        .toLowerCase()
+        .pipe(z.email({ error: 'must be a valid email' }))
+        .optional(),
+    ),
+    REGISTRATION_MODE: z.enum(REGISTRATION_MODES).default('open'),
+    REGISTRATION_INVITE_CODES: commaList(),
+
+    // Same-origin web app (ADR 0027): the api serves the built SPA (apps/web/dist).
+    SERVE_WEB: booleanFlag('false'),
+    WEB_DIST_DIR: z.string().trim().min(1).default('../web/dist'),
 
     // File uploads and storage (ADR 0009).
     STORAGE_DRIVER: z.enum(['local', 's3']).default('local'),
@@ -84,10 +131,7 @@ const envSchema = z
       (value) => (value === '' ? undefined : value),
       z.url({ error: 'must be a valid URL' }).optional(),
     ),
-    S3_FORCE_PATH_STYLE: z
-      .enum(['true', 'false'])
-      .default('false')
-      .transform((value) => value === 'true'),
+    S3_FORCE_PATH_STYLE: booleanFlag('false'),
     S3_ACCESS_KEY_ID: optionalString(),
     S3_SECRET_ACCESS_KEY: optionalString(),
     MAX_UPLOAD_BYTES: positiveInt(50 * MIB),
@@ -117,6 +161,22 @@ const envSchema = z
     JOB_EVENTS_KEEPALIVE_MS: z.coerce.number().int().min(10).default(15_000),
   })
   .superRefine((env, ctx) => {
+    if (env.REGISTRATION_MODE === 'invite') {
+      if (env.REGISTRATION_INVITE_CODES.length === 0) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['REGISTRATION_INVITE_CODES'],
+          message: 'is required when REGISTRATION_MODE=invite',
+        });
+      }
+      if (env.REGISTRATION_INVITE_CODES.some((code) => code.length < 8)) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['REGISTRATION_INVITE_CODES'],
+          message: 'every invite code must be at least 8 characters',
+        });
+      }
+    }
     if (env.STORAGE_DRIVER === 's3') {
       for (const key of ['S3_BUCKET', 'S3_REGION'] as const) {
         if (!env[key]) {
@@ -144,6 +204,15 @@ const envSchema = z
           message: `still contains the "${PLACEHOLDER_MARKER}" placeholder; set a real secret`,
         });
       }
+    }
+    if (
+      env.REGISTRATION_INVITE_CODES.some((code) => code.toLowerCase().includes(PLACEHOLDER_MARKER))
+    ) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['REGISTRATION_INVITE_CODES'],
+        message: `still contains the "${PLACEHOLDER_MARKER}" placeholder; set real invite codes`,
+      });
     }
     if (env.JWT_ACCESS_SECRET === env.JWT_REFRESH_SECRET) {
       ctx.addIssue({

@@ -1,4 +1,4 @@
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Page } from './support/fixtures';
 
 /** Full-page screenshots for comparing with the Figma screens (uploaded by CI). */
 async function snapshot(page: Page, name: string): Promise<void> {
@@ -8,6 +8,19 @@ async function snapshot(page: Page, name: string): Promise<void> {
     animations: 'disabled',
   });
 }
+
+test('serves the app with a strict Content-Security-Policy', async ({ page }) => {
+  const response = await page.goto('/sign-in');
+  const csp = response?.headers()['content-security-policy'] ?? '';
+
+  expect(csp).toContain("script-src 'self'");
+  expect(csp).not.toMatch(/script-src[^;]*unsafe/);
+  expect(csp).toContain("frame-ancestors 'none'");
+  await expect(page.getByRole('heading', { name: 'Sign in' })).toBeVisible();
+  await expect(
+    page.getByText('First load may take up to a minute on the free plan.'),
+  ).toBeVisible();
+});
 
 test('create account, create a project, sign out and sign in again', async ({ page }) => {
   const email = `e2e-${Date.now()}@example.com`;

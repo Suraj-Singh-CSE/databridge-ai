@@ -1,4 +1,6 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
+
+import type { RegistrationMode } from '../../config.js';
 
 import { AppError, DuplicateKeyError } from '../../errors.js';
 import type { Logger } from '../../logger.js';
@@ -17,7 +19,7 @@ export interface Session {
 
 export interface AuthService {
   register(
-    input: { email: string; name: string; password: string },
+    input: { email: string; name: string; password: string; inviteCode?: string | undefined },
     requestId: string,
   ): Promise<Session>;
   login(input: { email: string; password: string }, requestId: string): Promise<Session>;
@@ -26,13 +28,39 @@ export interface AuthService {
   me(userId: string): Promise<User>;
 }
 
+/** Who may register, and who becomes admin (ADR 0027). */
+export interface AccessPolicy {
+  /** Lower-case email of the one user who becomes admin; undefined = nobody automatically. */
+  bootstrapAdminEmail?: string | undefined;
+  registrationMode: RegistrationMode;
+  /** Accepted invite codes when registrationMode is "invite". Never logged. */
+  inviteCodes: readonly string[];
+}
+
 export interface AuthServiceDeps {
   repos: Pick<Repositories, 'users' | 'refreshTokens'>;
   tokens: TokenService;
   passwords: PasswordHasher;
   audit: AuditService;
   logger: Logger;
+  /** Defaults to open registration and no bootstrap admin. */
+  access?: AccessPolicy;
   now?: () => Date;
+}
+
+const OPEN_ACCESS: AccessPolicy = { registrationMode: 'open', inviteCodes: [] };
+
+const sha256 = (value: string): Buffer => createHash('sha256').update(value, 'utf8').digest();
+
+/**
+ * True when `given` equals one of `codes`. Compares fixed-length digests with timingSafeEqual
+ * and always checks every code, so the time taken does not reveal how much of a code matched.
+ */
+export function inviteCodeMatches(given: string, codes: readonly string[]): boolean {
+  const digest = sha256(given);
+  let matched = false;
+  for (const code of codes) matched = timingSafeEqual(digest, sha256(code)) || matched;
+  return matched;
 }
 
 const INVALID_CREDENTIALS = 'Email or password is incorrect.';
@@ -41,7 +69,52 @@ const DEFAULT_ROLE: Role = 'data_engineer';
 
 export function createAuthService(deps: AuthServiceDeps): AuthService {
   const { repos, tokens, passwords, audit, logger } = deps;
+  const access = deps.access ?? OPEN_ACCESS;
   const now = deps.now ?? (() => new Date());
+
+  function checkRegistrationAllowed(inviteCode: string | undefined): void {
+    if (access.registrationMode === 'closed') {
+      throw new AppError(
+        403,
+        'REGISTRATION_CLOSED',
+        'New accounts are not being created right now. Ask an admin for access.',
+      );
+    }
+    if (
+      access.registrationMode === 'invite' &&
+      !(inviteCode && inviteCodeMatches(inviteCode, access.inviteCodes))
+    ) {
+      throw new AppError(
+        403,
+        'INVITE_CODE_INVALID',
+        'That invite code is not valid. Check it and try again.',
+      );
+    }
+  }
+
+  /**
+   * Promotes the user to admin when their email is exactly BOOTSTRAP_ADMIN_EMAIL and the
+   * one-time claim is still free. Runs after a successful register or login, so only someone
+   * who owns that account (knows its password) can trigger it.
+   */
+  async function promoteIfBootstrapAdmin(user: User, requestId: string): Promise<User> {
+    const email = access.bootstrapAdminEmail;
+    if (!email || user.role === 'admin' || user.email.toLowerCase() !== email) return user;
+    if (!(await repos.users.claimBootstrapAdmin())) return user;
+    const promoted = await repos.users.setRole(user.id, 'admin');
+    if (!promoted) return user;
+    await audit.record({
+      actorId: user.id,
+      action: 'user.bootstrap_admin',
+      entityType: 'user',
+      entityId: user.id,
+      before: { role: user.role },
+      after: { role: promoted.role },
+      requestId,
+    });
+    logger.info({ userId: user.id }, 'bootstrap admin claimed');
+    return promoted;
+  }
   // Compared against when the email is unknown, so both failure paths cost one bcrypt check.
   const dummyHash = passwords.hash(randomUUID());
 
@@ -62,19 +135,13 @@ export function createAuthService(deps: AuthServiceDeps): AuthService {
   }
 
   return {
-    async register({ email, name, password }, requestId) {
+    async register({ email, name, password, inviteCode }, requestId) {
+      checkRegistrationAllowed(inviteCode);
       // Hash first so a duplicate email costs the same time as a new one.
       const passwordHash = await passwords.hash(password);
-      const isFirstUser =
-        (await repos.users.count()) === 0 && (await repos.users.claimFirstAdmin());
       let user: User;
       try {
-        user = await repos.users.create({
-          email,
-          name,
-          passwordHash,
-          role: isFirstUser ? 'admin' : DEFAULT_ROLE,
-        });
+        user = await repos.users.create({ email, name, passwordHash, role: DEFAULT_ROLE });
       } catch (error) {
         if (error instanceof DuplicateKeyError) {
           throw AppError.conflict('An account with this email already exists.');
@@ -89,6 +156,7 @@ export function createAuthService(deps: AuthServiceDeps): AuthService {
         after: { role: user.role },
         requestId,
       });
+      user = await promoteIfBootstrapAdmin(user, requestId);
       return (await issueSession(user, randomUUID())).session;
     },
 
@@ -99,14 +167,15 @@ export function createAuthService(deps: AuthServiceDeps): AuthService {
         credentials?.passwordHash ?? (await dummyHash),
       );
       if (!credentials || !valid) throw AppError.unauthorized(INVALID_CREDENTIALS);
-      const { user } = credentials;
       await audit.record({
-        actorId: user.id,
+        actorId: credentials.user.id,
         action: 'auth.login',
         entityType: 'user',
-        entityId: user.id,
+        entityId: credentials.user.id,
         requestId,
       });
+      // Also here, for a bootstrap account that registered before the variable was set.
+      const user = await promoteIfBootstrapAdmin(credentials.user, requestId);
       return (await issueSession(user, randomUUID())).session;
     },
 

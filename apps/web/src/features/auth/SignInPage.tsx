@@ -87,6 +87,9 @@ export function SignInPage() {
           {isSubmitting && <LoaderCircle aria-hidden="true" className="animate-spin" />}
           {isSubmitting ? 'Signing in…' : 'Sign in'}
         </Button>
+        <p className="text-xs text-muted-foreground">
+          First load may take up to a minute on the free plan.
+        </p>
       </form>
     </AuthCard>
   );

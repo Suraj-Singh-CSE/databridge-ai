@@ -12,6 +12,9 @@ export function createLogger(config: Pick<Config, 'NODE_ENV'>) {
         'req.headers.cookie',
         'req.headers["x-service-token"]',
         'res.headers["set-cookie"]',
+        // Defence in depth: request bodies are never logged, but these must never appear.
+        '*.password',
+        '*.inviteCode',
       ],
       censor: '[REDACTED]',
     },

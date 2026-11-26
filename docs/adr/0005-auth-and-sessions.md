@@ -46,7 +46,9 @@ every character counts. Unknown emails are still checked against a dummy hash, a
 before inserting, so response time does not reveal whether an email exists (beyond the 409 that
 register must return).
 
-**First user is admin.** If the `users` collection is empty, register claims a one-time
+**First user is admin.** _Superseded by [ADR 0027](0027-same-origin-and-access.md): only the
+account with `BOOTSTRAP_ADMIN_EMAIL` becomes admin (claim `_id: "bootstrap-admin"`)._ If the
+`users` collection is empty, register claims a one-time
 `app_meta` document (`_id: "first-admin"`, unique by construction). Only one caller can win the
 claim, so simultaneous first registrations cannot create two admins. Everyone else starts as
 `data_engineer`; admins will manage roles in a later milestone.

@@ -1,4 +1,6 @@
-import { Router, type Request } from 'express';
+import { Router, type Request, type RequestHandler } from 'express';
+
+import type { RegistrationMode } from '../../config.js';
 
 import { AppError } from '../../errors.js';
 import { sendData } from '../../http.js';
@@ -15,6 +17,13 @@ export interface AuthRouterDeps {
   auth: AuthService;
   tokens: TokenService;
   secureCookies: boolean;
+  registrationMode: RegistrationMode;
+  limiters: {
+    /** Strict, per client IP + email: register and login (password guessing). */
+    credentials: RequestHandler;
+    /** Generous, per client IP: refresh, me, logout and config (normal session traffic). */
+    session: RequestHandler;
+  };
 }
 
 function refreshTokenFrom(req: Request): string | null {
@@ -23,24 +32,36 @@ function refreshTokenFrom(req: Request): string | null {
   return typeof value === 'string' && value.length > 0 && value.length <= 128 ? value : null;
 }
 
-export function createAuthRouter({ auth, tokens, secureCookies }: AuthRouterDeps): Router {
+export function createAuthRouter({
+  auth,
+  tokens,
+  secureCookies,
+  registrationMode,
+  limiters,
+}: AuthRouterDeps): Router {
   const router = Router();
+  const { credentials, session } = limiters;
 
-  router.post('/register', validate({ body: registerBody }), async (req, res) => {
+  // Public: lets the Create account page show the invite-code field or a "closed" message.
+  router.get('/config', session, (_req, res) => {
+    sendData(res, { registrationMode });
+  });
+
+  router.post('/register', credentials, validate({ body: registerBody }), async (req, res) => {
     const input = validated(req, 'body', registerBody);
     const { user, accessToken, refreshToken } = await auth.register(input, requestIdOf(req));
     setRefreshCookie(res, refreshToken, secureCookies);
     sendData(res, { user, accessToken }, 201);
   });
 
-  router.post('/login', validate({ body: loginBody }), async (req, res) => {
+  router.post('/login', credentials, validate({ body: loginBody }), async (req, res) => {
     const input = validated(req, 'body', loginBody);
     const { user, accessToken, refreshToken } = await auth.login(input, requestIdOf(req));
     setRefreshCookie(res, refreshToken, secureCookies);
     sendData(res, { user, accessToken });
   });
 
-  router.post('/refresh', async (req, res) => {
+  router.post('/refresh', session, async (req, res) => {
     const token = refreshTokenFrom(req);
     if (!token) throw AppError.unauthorized('Your session has expired. Please sign in again.');
     try {
@@ -53,14 +74,14 @@ export function createAuthRouter({ auth, tokens, secureCookies }: AuthRouterDeps
     }
   });
 
-  router.post('/logout', async (req, res) => {
+  router.post('/logout', session, async (req, res) => {
     const token = refreshTokenFrom(req);
     if (token) await auth.logout(token);
     clearRefreshCookie(res, secureCookies);
     res.status(204).end();
   });
 
-  router.get('/me', authenticate(tokens), async (req, res) => {
+  router.get('/me', session, authenticate(tokens), async (req, res) => {
     sendData(res, { user: await auth.me(currentUser(req).userId) });
   });
 

@@ -22,6 +22,13 @@ export interface AuthSession {
   accessToken: string;
 }
 
+/** Who may create an account (GET /auth/config; ADR 0027). */
+export type RegistrationMode = 'open' | 'invite' | 'closed';
+
+export interface AuthConfig {
+  registrationMode: RegistrationMode;
+}
+
 export const PROJECT_STEPS = [
   'sources',
   'profile',
@@ -67,6 +74,8 @@ export type ApiErrorCode =
   | 'FILE_TOO_COMPLEX'
   | 'LIMIT_REACHED'
   | 'RATE_LIMITED'
+  | 'REGISTRATION_CLOSED'
+  | 'INVITE_CODE_INVALID'
   | 'QUEUE_UNAVAILABLE'
   | 'KNOWLEDGE_NOT_BUILT'
   | 'AI_SERVICE_UNAVAILABLE'

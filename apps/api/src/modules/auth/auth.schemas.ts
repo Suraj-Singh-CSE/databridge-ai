@@ -13,6 +13,8 @@ export const registerBody = z.strictObject({
     .string()
     .min(10, 'must be at least 10 characters')
     .max(128, 'must be at most 128 characters'),
+  // Required only when REGISTRATION_MODE=invite; checked by the auth service, never logged.
+  inviteCode: z.string().trim().max(200, 'must be at most 200 characters').optional(),
 });
 
 export const loginBody = z.strictObject({

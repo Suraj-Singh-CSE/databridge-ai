@@ -52,8 +52,17 @@ All routes live under `/api/v1` and answer in one envelope: `{ "data": ..., "err
 **Auth flow**
 
 - `register` or `login` returns `{ user, accessToken }` and sets the `db_rt` refresh cookie
-  (httpOnly, SameSite=Strict, path `/api/v1/auth`, 7 days). The very first user becomes `admin`;
-  everyone else starts as `data_engineer`.
+  (httpOnly, SameSite=Strict, Secure in production, path `/api/v1/auth`, 7 days). New accounts
+  start as `data_engineer`. Only the account with exactly `BOOTSTRAP_ADMIN_EMAIL` becomes `admin`
+  (once, on its register or sign-in); when it is unset nobody does
+  ([ADR 0027](docs/adr/0027-same-origin-and-access.md)).
+- `REGISTRATION_MODE`: `open` (default), `invite` (register needs `inviteCode`, one of
+  `REGISTRATION_INVITE_CODES`; otherwise `403 INVITE_CODE_INVALID`) or `closed`
+  (`403 REGISTRATION_CLOSED`). `GET /auth/config` tells the web app which one is on.
+- Rate limits (in memory, per api process): register and login 10 per 15 minutes per client IP +
+  email (`AUTH_RATE_LIMIT_*`); refresh, me, logout and config 120 per 15 minutes per IP
+  (`SESSION_RATE_LIMIT_*`); then `429 RATE_LIMITED`. Behind a proxy set `TRUST_PROXY` to its hop
+  count (`1` on Render) so the real client IP is used.
 - Keep the access token in memory and send it as `Authorization: Bearer <token>`; it expires after
   15 minutes.
 - When it expires (401), call `POST /auth/refresh` with the cookie: you get a new access token and
@@ -64,7 +73,8 @@ All routes live under `/api/v1` and answer in one envelope: `{ "data": ..., "err
 
 | Method | Path                             | Who                                  | Result                                           |
 | ------ | -------------------------------- | ------------------------------------ | ------------------------------------------------ |
-| POST   | `/auth/register`                 | anyone (rate-limited)                | 201 `{ user, accessToken }`                      |
+| GET    | `/auth/config`                   | anyone                               | 200 `{ registrationMode }`                       |
+| POST   | `/auth/register`                 | anyone (rate-limited; mode above)    | 201 `{ user, accessToken }`                      |
 | POST   | `/auth/login`                    | anyone (rate-limited)                | 200 `{ user, accessToken }`                      |
 | POST   | `/auth/refresh`                  | refresh cookie                       | 200 `{ user, accessToken }`                      |
 | POST   | `/auth/logout`                   | anyone                               | 204                                              |
@@ -723,18 +733,18 @@ React 18 + Vite + Tailwind with shadcn/ui components (`apps/web/src/components/u
 (data router), TanStack Query for server data and react-hook-form + Zod for forms. Design notes:
 [ADR 0007](docs/adr/0007-frontend-architecture-and-sessions.md).
 
-| Route                         | What                                                         |
-| ----------------------------- | ------------------------------------------------------------ |
-| `/sign-in`, `/create-account` | Sign in / register (signed-in users are sent to `/projects`) |
-| `/projects`                   | Your projects; admins and data engineers can create one      |
-| `/projects/:id/sources`       | Upload CSV/XLSX files, watch profiling live, preview, remove |
-| `/projects/:id/profile`       | Column profile per file: types, empty %, patterns, flags     |
-| `/projects/:id/mapping`       | Mapping Review: run mapping, accept/reject/change per column |
-| `/projects/:id/matching`      | Match Review: run the matching steps, browse customers       |
-| `/projects/:id/pipeline`      | Pipeline: draft, approve and run SQL; start and get exports  |
-| `/projects/:id/quality`       | Data quality: run checks, report, history, edit thresholds   |
-| `/projects/:id/dashboard`     | Dashboard: progress, quality, AI usage, reviews, jobs        |
-| `/projects/:id/assistant`     | Assistant: build project knowledge, ask, cited answers       |
+| Route                         | What                                                                                                                                              |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `/sign-in`, `/create-account` | Sign in / register (signed-in users are sent to `/projects`); asks for an invite code when registration is invite-only, says so when it is closed |
+| `/projects`                   | Your projects; admins and data engineers can create one                                                                                           |
+| `/projects/:id/sources`       | Upload CSV/XLSX files, watch profiling live, preview, remove                                                                                      |
+| `/projects/:id/profile`       | Column profile per file: types, empty %, patterns, flags                                                                                          |
+| `/projects/:id/mapping`       | Mapping Review: run mapping, accept/reject/change per column                                                                                      |
+| `/projects/:id/matching`      | Match Review: run the matching steps, browse customers                                                                                            |
+| `/projects/:id/pipeline`      | Pipeline: draft, approve and run SQL; start and get exports                                                                                       |
+| `/projects/:id/quality`       | Data quality: run checks, report, history, edit thresholds                                                                                        |
+| `/projects/:id/dashboard`     | Dashboard: progress, quality, AI usage, reviews, jobs                                                                                             |
+| `/projects/:id/assistant`     | Assistant: build project knowledge, ask, cited answers                                                                                            |
 
 Every route except sign-in, create-account and the 404 page needs a session; others redirect to
 `/sign-in?next=<where you were going>`.
@@ -922,11 +932,16 @@ cp .env.example .env    # then replace the change-me secrets
 docker compose --env-file .env -f infra/docker-compose.yml up --build
 ```
 
-| URL                                 | What                                            |
-| ----------------------------------- | ----------------------------------------------- |
-| http://localhost:8080               | Web UI (nginx; also proxies `/api/` to the api) |
-| http://localhost:8080/api/v1/health | API health, through the web proxy               |
-| http://localhost:4000/api/v1/health | API health, direct                              |
+| URL                                 | What                                                         |
+| ----------------------------------- | ------------------------------------------------------------ |
+| http://localhost:8080               | Web UI (nginx; also proxies `/api/` to the api)              |
+| http://localhost:4000               | Web UI served by the api itself (single origin, as deployed) |
+| http://localhost:8080/api/v1/health | API health, through the web proxy                            |
+| http://localhost:4000/api/v1/health | API health, direct                                           |
+
+The api image also contains the built web app and, with `SERVE_WEB=true` (compose sets it),
+serves it with the production Content-Security-Policy; CI runs the browser tests against
+http://localhost:4000 for that reason. Set `BOOTSTRAP_ADMIN_EMAIL` in `.env` to get an admin.
 
 The AI service, its worker, MongoDB and Redis are not published to your machine; they are reachable only inside
 the compose network (the AI service is internal by design). Uploaded files live in the `uploads`
@@ -950,8 +965,20 @@ Placeholder: the step-by-step deployment guide (Render blueprint, Cloudflare R2,
 comes with the deploy step. The runtime it relies on is in place and described in
 [ADR 0026](docs/adr/0026-free-tier-runtime.md):
 
-- **Services (all free):** Render web services for web, api and ai-service; Render Key Value
+- **Services (all free):** two Render web services, api and ai-service; Render Key Value
   (Redis); MongoDB Atlas M0; a private Cloudflare R2 bucket `databridge-uploads`; Gemini free tier.
+- **One origin for the web app and the API** ([ADR 0027](docs/adr/0027-same-origin-and-access.md)):
+  the api image ships the built web app and serves it (`SERVE_WEB=true`): hashed `/assets/*`
+  cached for a year, `index.html` for client routes with `no-cache`, `/api/*` always JSON. Two
+  `*.onrender.com` services would be different sites, so the `SameSite=Strict` refresh cookie
+  would never be sent. Every response carries a strict CSP, HSTS, `Permissions-Policy`,
+  `Cross-Origin-Opener-Policy`, `X-Content-Type-Options` and `Referrer-Policy`.
+- **Access:** set `BOOTSTRAP_ADMIN_EMAIL` to your email and register it yourself before sharing
+  the URL; use `REGISTRATION_MODE=invite` with private `REGISTRATION_INVITE_CODES` (or `closed`)
+  so strangers cannot create accounts and spend the free quotas. `TRUST_PROXY=1` (one Render
+  proxy hop) gives rate limits the real client IP.
+- **ai-service** with `ENV=production` serves no `/internal/docs` or OpenAPI schema and no demo
+  route, and needs an `AI_SERVICE_TOKEN` of 32+ characters (it is public on the free plan).
 - **ai-service** runs `python -m app.supervisor`: uvicorn on `$PORT` plus the Celery worker
   (`RUN_WORKER=true`, one job at a time). While a job runs it pings its own public URL every
   5 minutes so the free service does not sleep mid-job.
@@ -965,11 +992,11 @@ Environment variables (values for the free demo in
 [`.env.free-tier.example`](.env.free-tier.example); every variable is explained in
 [`.env.example`](.env.example)):
 
-| Service    | Variables                                                                                                                                                                                                                                                                                  |
-| ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| both       | `MONGODB_URI`, `REDIS_URL`, `AI_SERVICE_TOKEN`, `STORAGE_DRIVER=s3`, `S3_BUCKET`, `S3_REGION=auto`, `S3_ENDPOINT`, `S3_FORCE_PATH_STYLE`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`, `MAX_UPLOAD_BYTES`, `MAX_UPLOAD_ROWS`, `MAX_SOURCES_PER_PROJECT`                                     |
-| api        | `NODE_ENV=production`, `JWT_ACCESS_SECRET`, `JWT_REFRESH_SECRET`, `AI_SERVICE_URL`, `AI_SERVICE_TIMEOUT_MS`, `AI_SERVICE_WAKE_TIMEOUT_MS`, `ASSISTANT_TIMEOUT_MS`, `CORS_ORIGIN`, `TRUST_PROXY=1`, `JOB_STALE_AFTER_SECONDS`, `JOB_QUEUED_STALE_AFTER_SECONDS`                             |
-| ai-service | `RUN_WORKER=true`, `WORKER_POOL`, `WORKER_CONCURRENCY=1`, `WORKER_MAX_MEMORY_PER_CHILD_MB`, `SELF_PING_URL` (or Render's `RENDER_EXTERNAL_URL`), `SELF_PING_INTERVAL_SECONDS`, `LLM_PROVIDER=gemini`, `GEMINI_API_KEY`, and the memory caps (`MATCHING_MAX_*`, `SQL_*`, `EXPORT_MAX_ROWS`) |
+| Service    | Variables                                                                                                                                                                                                                                                                                                                                                                          |
+| ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| both       | `MONGODB_URI`, `REDIS_URL`, `AI_SERVICE_TOKEN`, `STORAGE_DRIVER=s3`, `S3_BUCKET`, `S3_REGION=auto`, `S3_ENDPOINT`, `S3_FORCE_PATH_STYLE`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`, `MAX_UPLOAD_BYTES`, `MAX_UPLOAD_ROWS`, `MAX_SOURCES_PER_PROJECT`                                                                                                                             |
+| api        | `NODE_ENV=production`, `JWT_ACCESS_SECRET`, `JWT_REFRESH_SECRET`, `AI_SERVICE_URL`, `AI_SERVICE_TIMEOUT_MS`, `AI_SERVICE_WAKE_TIMEOUT_MS`, `ASSISTANT_TIMEOUT_MS`, `CORS_ORIGIN`, `TRUST_PROXY=1`, `SERVE_WEB=true`, `WEB_DIST_DIR`, `BOOTSTRAP_ADMIN_EMAIL`, `REGISTRATION_MODE=invite`, `REGISTRATION_INVITE_CODES`, `JOB_STALE_AFTER_SECONDS`, `JOB_QUEUED_STALE_AFTER_SECONDS` |
+| ai-service | `ENV=production`, `RUN_WORKER=true`, `WORKER_POOL`, `WORKER_CONCURRENCY=1`, `WORKER_MAX_MEMORY_PER_CHILD_MB`, `SELF_PING_URL` (or Render's `RENDER_EXTERNAL_URL`), `SELF_PING_INTERVAL_SECONDS`, `LLM_PROVIDER=gemini`, `GEMINI_API_KEY`, and the memory caps (`MATCHING_MAX_*`, `SQL_*`, `EXPORT_MAX_ROWS`)                                                                       |
 
 ## Evaluating mapping accuracy
 

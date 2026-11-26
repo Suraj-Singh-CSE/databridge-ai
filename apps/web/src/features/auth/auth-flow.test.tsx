@@ -184,6 +184,126 @@ describe('create account', () => {
   });
 });
 
+describe('create account: invite-only and closed registration', () => {
+  async function fillAccount(inviteCode?: string) {
+    const user = userEvent.setup();
+    await user.type(await screen.findByLabelText('Name'), 'Asha Rao');
+    await user.type(screen.getByLabelText('Email'), 'asha@example.com');
+    await user.type(screen.getByLabelText('Password'), 'long-enough-password');
+    if (inviteCode !== undefined) await user.type(screen.getByLabelText('Invite code'), inviteCode);
+    await user.click(screen.getByRole('button', { name: 'Create account' }));
+  }
+
+  it('hides the invite code field when registration is open', async () => {
+    server.use(...signedOutHandlers('open'));
+    renderApp('/create-account');
+
+    expect(await screen.findByLabelText('Name')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Invite code')).not.toBeInTheDocument();
+  });
+
+  it('asks for an invite code and sends it', async () => {
+    let body: unknown = null;
+    server.use(
+      ...signedOutHandlers('invite'),
+      ...projectHandlers(),
+      http.post(`${API}/auth/register`, async ({ request }) => {
+        body = await request.json();
+        return ok(makeSession(), 201);
+      }),
+    );
+    renderApp('/create-account');
+
+    expect(await screen.findByLabelText('Invite code')).toBeInTheDocument();
+    await fillAccount('demo-invite-2026');
+
+    expect(await screen.findByRole('heading', { level: 1, name: 'Projects' })).toBeInTheDocument();
+    expect(body).toEqual({
+      name: 'Asha Rao',
+      email: 'asha@example.com',
+      password: 'long-enough-password',
+      inviteCode: 'demo-invite-2026',
+    });
+  });
+
+  it('requires the invite code before calling the api', async () => {
+    let called = false;
+    server.use(
+      ...signedOutHandlers('invite'),
+      http.post(`${API}/auth/register`, () => {
+        called = true;
+        return ok(makeSession(), 201);
+      }),
+    );
+    renderApp('/create-account');
+    await screen.findByLabelText('Invite code');
+
+    await fillAccount();
+
+    expect(await screen.findByText('Enter the invite code you were given.')).toBeInTheDocument();
+    expect(called).toBe(false);
+  });
+
+  it('explains a wrong invite code next to the field and in the alert', async () => {
+    server.use(
+      ...signedOutHandlers('invite'),
+      http.post(`${API}/auth/register`, () =>
+        fail(403, 'INVITE_CODE_INVALID', 'That invite code is not valid.'),
+      ),
+    );
+    renderApp('/create-account');
+    await screen.findByLabelText('Invite code');
+
+    await fillAccount('wrong-code-1');
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'That invite code is not valid. Check it and try again.',
+    );
+    expect(screen.getByText('This invite code is not valid.')).toBeInTheDocument();
+    expect(screen.getByLabelText('Invite code')).toHaveAttribute('aria-invalid', 'true');
+  });
+
+  it('says plainly when registration is closed, with no form', async () => {
+    server.use(...signedOutHandlers('closed'));
+    renderApp('/create-account');
+
+    expect(
+      await screen.findByText(
+        'New accounts are not being created right now. Ask an admin for access.',
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByLabelText('Name')).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Sign in' })).toBeInTheDocument();
+  });
+
+  it('explains REGISTRATION_CLOSED if the mode changed after the page loaded', async () => {
+    server.use(
+      ...signedOutHandlers('open'),
+      http.post(`${API}/auth/register`, () =>
+        fail(403, 'REGISTRATION_CLOSED', 'Registration is closed.'),
+      ),
+    );
+    renderApp('/create-account');
+
+    await fillAccount();
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'New accounts are not being created right now. Ask an admin for access.',
+    );
+  });
+});
+
+describe('sign in: free plan note', () => {
+  it('warns that the first load can be slow', async () => {
+    server.use(...signedOutHandlers());
+    renderApp('/sign-in');
+
+    expect(
+      await screen.findByText('First load may take up to a minute on the free plan.'),
+    ).toBeInTheDocument();
+  });
+});
+
 describe('sign out', () => {
   it('signs out from the user menu and returns to sign in', async () => {
     let loggedOut = false;
