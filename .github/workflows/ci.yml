@@ -125,6 +125,30 @@ jobs:
       - run: mypy
       - run: pytest
 
+  blueprint:
+    name: Render blueprint
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - run: pip install "pyyaml>=6" "pydantic>=2.7" "pydantic-settings>=2.4"
+      # Free plans and region, references, every variable each service requires at startup,
+      # no unknown variables, and the ai-service's Settings validate (ADR 0031).
+      - name: Check render.yaml against both config schemas
+        run: python infra/render/check_blueprint.py
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci --workspace apps/api --include-workspace-root --no-audit --no-fund
+      - name: The api's loadConfig() accepts the blueprint's environment
+        run: |
+          python infra/render/check_blueprint.py --emit-env databridge-api > "$RUNNER_TEMP/api-env.json"
+          npx tsx -e "import { readFileSync } from 'node:fs'; import { loadConfig } from './apps/api/src/config.ts'; loadConfig(JSON.parse(readFileSync(process.env.RUNNER_TEMP + '/api-env.json', 'utf8'))); console.log('api config OK');"
+
   docker:
     name: Docker (full stack smoke test)
     needs: [js, python]

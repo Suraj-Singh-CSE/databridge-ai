@@ -142,31 +142,23 @@ uvicorn app.asgi:app --reload --port 8000   # http://localhost:8000/internal/v1/
 
 ## Deploy (free tier)
 
-Everything runs on free plans ([ADR 0026](docs/adr/0026-free-tier-runtime.md)):
+Everything runs on free plans ([ADR 0026](docs/adr/0026-free-tier-runtime.md)), described by the
+Render Blueprint [`render.yaml`](render.yaml) ([ADR 0031](docs/adr/0031-render-blueprint.md)):
 
-| Piece         | Free service                                                                                                |
-| ------------- | ----------------------------------------------------------------------------------------------------------- |
-| api + web app | Render web service (Docker, `apps/api/Dockerfile`); health check `/api/v1/ready`                            |
-| ai-service    | Render web service (Docker, `apps/ai-service/Dockerfile`), worker inside; health check `/internal/v1/ready` |
-| Redis         | Render Key Value (free)                                                                                     |
-| MongoDB       | MongoDB Atlas M0 (512 MB), a database user with `readWrite` on the app database only                        |
-| Files         | Cloudflare R2: a private bucket and a token scoped to it (object read and write)                            |
-| LLM           | Gemini free tier, paced to 12 requests a minute and a daily budget shared by both services                  |
+| Piece         | Free service                                                                                                                 |
+| ------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| api + web app | Render web service `databridge-api` (Docker, `apps/api/Dockerfile`); health check `/api/v1/health`                           |
+| ai-service    | Render web service `databridge-ai` (Docker, `apps/ai-service/Dockerfile`), worker inside; health check `/internal/v1/health` |
+| Redis         | Render Key Value `databridge-redis` (free, internal only)                                                                    |
+| MongoDB       | MongoDB Atlas M0 (512 MB), a database user with `readWrite` on the app database only                                         |
+| Files         | Cloudflare R2: a private bucket and a token scoped to it (object read and write)                                             |
+| LLM           | Gemini free tier, paced to 12 requests a minute and a daily budget shared by both services                                   |
 
-Steps, in short: create the Atlas cluster, the R2 bucket and token, and a Gemini key; create the
-Key Value instance and the two Render services; set the variables below (fresh random secrets,
-placeholders replaced); register `BOOTSTRAP_ADMIN_EMAIL` yourself before sharing the URL. Values
-for the demo are in [`.env.free-tier.example`](.env.free-tier.example), and every variable is
-explained in [`.env.example`](.env.example). Never commit real values.
-
-| Service    | Variables                                                                                                                                                                                                                                                                                         |
-| ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| both       | `MONGODB_URI`, `REDIS_URL`, `AI_SERVICE_TOKEN`, `STORAGE_DRIVER=s3`, `S3_BUCKET`, `S3_REGION=auto`, `S3_ENDPOINT`, `S3_FORCE_PATH_STYLE`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`, `MAX_UPLOAD_BYTES`, `MAX_UPLOAD_ROWS`, `MAX_SOURCES_PER_PROJECT`, optional `QUALITY_*` thresholds           |
-| api        | `NODE_ENV=production`, `JWT_ACCESS_SECRET`, `JWT_REFRESH_SECRET`, `AI_SERVICE_URL`, `AI_SERVICE_TIMEOUT_MS`, `AI_SERVICE_WAKE_TIMEOUT_MS`, `CORS_ORIGIN`, `TRUST_PROXY=1`, `SERVE_WEB=true`, `BOOTSTRAP_ADMIN_EMAIL`, `REGISTRATION_MODE=invite`, `REGISTRATION_INVITE_CODES`, retention settings |
-| ai-service | `ENV=production`, `RUN_WORKER=true`, `WORKER_CONCURRENCY=1`, `SELF_PING_URL` (or Render's `RENDER_EXTERNAL_URL`), `LLM_PROVIDER=gemini`, `GEMINI_API_KEY`, `LLM_MAX_REQUESTS_PER_MINUTE`, `LLM_DAILY_REQUEST_BUDGET`, memory caps (`MATCHING_MAX_*`, `SQL_*`, `EXPORT_MAX_ROWS`)                  |
-
-Cold starts, the shared AI quota, health checks and data retention on the 512 MB database:
-[deploy on free hosting](docs/deploy-free-tier.md).
+Render → New → Blueprint → this repository creates all three; Render makes the JWT secrets and the
+service token, and asks only for the values that come from Atlas, R2, Gemini and you. Register
+`BOOTSTRAP_ADMIN_EMAIL` yourself before sharing the URL. CI checks the Blueprint against both
+services' config schemas. Step-by-step guide, smoke test and troubleshooting:
+[deploy on free hosting](docs/deploy-free-tier.md). Never commit real values.
 
 ## Screenshots
 
@@ -233,6 +225,7 @@ to measure mapping, pair review, the SQL agent, retrieval and the assistant
 | [0028](docs/adr/0028-privacy-and-quota-hardening.md)        | Masked profile samples, shared AI quota and daily budget      |
 | [0029](docs/adr/0029-concurrency-and-retention.md)          | Safe concurrent approvals and job starts, data retention      |
 | [0030](docs/adr/0030-names-defaults-links-and-bundle.md)    | Display names, threshold defaults, customer links, web bundle |
+| [0031](docs/adr/0031-render-blueprint.md)                   | Render Blueprint for the free deployment                      |
 
 ## License
 

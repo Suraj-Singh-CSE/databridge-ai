@@ -1,0 +1,251 @@
+# Render Blueprint for the free demo deployment (docs/deploy-free-tier.md, ADR 0026-0031).
+# Free plans only: two free web services, a free Key Value instance; MongoDB Atlas M0,
+# Cloudflare R2 and the Gemini free tier are outside Render and come in as secrets.
+#
+# Every value here matches .env.free-tier.example. Secrets are never written here:
+#   generateValue: true  -> Render makes a random value once (JWT secrets, service token)
+#   sync: false          -> Render asks for the value when the Blueprint is first applied
+# CI checks this file against both services' config schemas (infra/render/check_blueprint.py).
+
+envVarGroups:
+  # Non-secret settings both services must agree on: the same bucket and the same upload limits.
+  - name: databridge-shared
+    envVars:
+      - key: STORAGE_DRIVER
+        value: s3
+      - key: S3_BUCKET
+        value: databridge-uploads
+      # Cloudflare R2 uses the region "auto".
+      - key: S3_REGION
+        value: auto
+      # R2's S3 endpoint is per account (https://<account-id>.r2.cloudflarestorage.com), so the
+      # bucket goes in the path.
+      - key: S3_FORCE_PATH_STYLE
+        value: 'true'
+      # Demo limits sized for 512 MB: 4 sources of at most 20,000 rows and 10 MB each.
+      - key: MAX_UPLOAD_BYTES
+        value: '10485760'
+      - key: MAX_UPLOAD_ROWS
+        value: '20000'
+      - key: XLSX_MAX_UNCOMPRESSED_BYTES
+        value: '52428800'
+
+services:
+  # ------------------------------------------------------------------ api (+ the web app)
+  - type: web
+    name: databridge-api
+    runtime: docker
+    plan: free
+    region: singapore
+    branch: main
+    # Deploy a commit on main only after its GitHub checks (CI) pass.
+    autoDeployTrigger: checksPass
+    # The image builds the api AND the web app (multi-stage), from the repo root.
+    dockerfilePath: ./apps/api/Dockerfile
+    dockerContext: .
+    # Liveness. The api listens only after MongoDB is connected and its indexes are built, so a
+    # passing check already proves the database. /api/v1/ready also pings Redis: a free Key Value
+    # restart would make Render pull and restart a healthy api (ADR 0031).
+    healthCheckPath: /api/v1/health
+    buildFilter:
+      paths:
+        - apps/api/**
+        - apps/web/**
+        - package.json
+        - package-lock.json
+        - tsconfig.base.json
+        - .dockerignore
+    envVars:
+      - fromGroup: databridge-shared
+      - key: NODE_ENV
+        value: production
+      # One origin: the api serves the built web app shipped in the image (ADR 0027).
+      - key: SERVE_WEB
+        value: 'true'
+      - key: WEB_DIST_DIR
+        value: /app/apps/web/dist
+      # Exactly one Render proxy in front of the service.
+      - key: TRUST_PROXY
+        value: '1'
+      # The api's own public URL. Confirm it after the first deploy (docs/deploy-free-tier.md).
+      - key: CORS_ORIGIN
+        value: https://databridge-api.onrender.com
+      # The ai-service's PUBLIC URL: free web services cannot receive private-network traffic,
+      # so the internal host:port (fromService property hostport) would not answer. Confirm the
+      # hostname after the first deploy.
+      - key: AI_SERVICE_URL
+        value: https://databridge-ai.onrender.com
+      - key: AI_SERVICE_TIMEOUT_MS
+        value: '10000'
+      # A sleeping free ai-service is woken first (up to 90 s).
+      - key: AI_SERVICE_WAKE_TIMEOUT_MS
+        value: '90000'
+      - key: ASSISTANT_TIMEOUT_MS
+        value: '60000'
+      - key: ASSISTANT_RATE_LIMIT_MAX
+        value: '5'
+      - key: RATE_LIMIT_STORE
+        value: redis
+      - key: REGISTRATION_MODE
+        value: invite
+      - key: MAX_SOURCES_PER_PROJECT
+        value: '4'
+      - key: JOB_STALE_AFTER_SECONDS
+        value: '300'
+      - key: JOB_QUEUED_STALE_AFTER_SECONDS
+        value: '600'
+      # Data retention for MongoDB Atlas M0, 512 MB (ADR 0029).
+      - key: JOB_RETENTION_DAYS
+        value: '30'
+      - key: LLM_CALL_RETENTION_DAYS
+        value: '30'
+      - key: ASSISTANT_RETENTION_DAYS
+        value: '30'
+      - key: EXPORT_RETENTION_DAYS
+        value: '30'
+      - key: QUALITY_RUN_RETENTION_DAYS
+        value: '90'
+      - key: AUDIT_MAX_ENTRIES_PER_PROJECT
+        value: '20000'
+      - key: RETENTION_SWEEP_INTERVAL_MINUTES
+        value: '60'
+      # Random secrets made by Render once; they survive later Blueprint syncs.
+      - key: JWT_ACCESS_SECRET
+        generateValue: true
+      - key: JWT_REFRESH_SECRET
+        generateValue: true
+      # The service token is made here and copied into databridge-ai below.
+      - key: AI_SERVICE_TOKEN
+        generateValue: true
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: databridge-redis
+          property: connectionString
+      # Asked for when the Blueprint is applied (docs/deploy-free-tier.md, step 2).
+      - key: MONGODB_URI
+        sync: false
+      - key: S3_ENDPOINT
+        sync: false
+      - key: S3_ACCESS_KEY_ID
+        sync: false
+      - key: S3_SECRET_ACCESS_KEY
+        sync: false
+      - key: BOOTSTRAP_ADMIN_EMAIL
+        sync: false
+      - key: REGISTRATION_INVITE_CODES
+        sync: false
+
+  # ------------------------------------------------------------------ ai-service (+ worker)
+  - type: web
+    name: databridge-ai
+    runtime: docker
+    plan: free
+    region: singapore
+    branch: main
+    autoDeployTrigger: checksPass
+    dockerfilePath: ./apps/ai-service/Dockerfile
+    dockerContext: .
+    # Liveness. /internal/v1/ready also checks MongoDB, Redis and R2 (HeadBucket); a bucket-scoped
+    # R2 token or a Key Value restart would then fail the deploy or restart the service (ADR 0031).
+    healthCheckPath: /internal/v1/health
+    buildFilter:
+      paths:
+        - apps/ai-service/**
+        - docs/adr/**
+        - README.md
+        - .dockerignore
+    envVars:
+      - fromGroup: databridge-shared
+      # Hides the API docs and demo routes; requires a 32+ character service token (ADR 0027).
+      - key: ENV
+        value: production
+      - key: LOG_LEVEL
+        value: INFO
+      # The Celery worker runs inside this container, one job at a time (ADR 0026).
+      - key: RUN_WORKER
+        value: 'true'
+      - key: WORKER_POOL
+        value: prefork
+      - key: WORKER_CONCURRENCY
+        value: '1'
+      - key: WORKER_MAX_MEMORY_PER_CHILD_MB
+        value: '300'
+      # SELF_PING_URL is not set: the keep-alive uses RENDER_EXTERNAL_URL, which Render sets.
+      - key: SELF_PING_INTERVAL_SECONDS
+        value: '300'
+      - key: JOB_SOFT_TIME_LIMIT_SECONDS
+        value: '600'
+      - key: JOB_HARD_TIME_LIMIT_SECONDS
+        value: '660'
+      # Gemini free tier, shared quota in Key Value (ADR 0028).
+      - key: LLM_PROVIDER
+        value: gemini
+      - key: GEMINI_MODEL
+        value: gemini-3.5-flash-lite
+      - key: LLM_MAX_REQUESTS_PER_MINUTE
+        value: '12'
+      - key: LLM_DAILY_REQUEST_BUDGET
+        value: '400'
+      - key: LLM_PROJECT_DAILY_REQUEST_BUDGET
+        value: '200'
+      - key: LLM_DAILY_BUDGET_RESET_TIMEZONE
+        value: America/Los_Angeles
+      - key: LLM_QUOTA_STORE
+        value: redis
+      - key: LLM_CACHE_TTL_SECONDS
+        value: '3600'
+      # In-memory caps for 512 MB (4 sources x 20,000 rows = 80,000 records).
+      - key: BLOCKING_MAX_BLOCK_SIZE
+        value: '100'
+      - key: MATCHING_MAX_RECORDS
+        value: '80000'
+      - key: MATCHING_MAX_PAIRS
+        value: '500000'
+      - key: SQL_MEMORY_LIMIT_MB
+        value: '128'
+      - key: SQL_THREADS
+        value: '1'
+      - key: SQL_MAX_RECORDS
+        value: '80000'
+      - key: EXPORT_MAX_ROWS
+        value: '80000'
+      - key: EMBEDDING_BATCH_SIZE
+        value: '16'
+      - key: KNOWLEDGE_QUALITY_RUNS
+        value: '3'
+      - key: QUALITY_HISTORY_LIMIT
+        value: '20'
+      # The same token the api sends in X-Service-Token.
+      - key: AI_SERVICE_TOKEN
+        fromService:
+          type: web
+          name: databridge-api
+          envVarKey: AI_SERVICE_TOKEN
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: databridge-redis
+          property: connectionString
+      - key: MONGODB_URI
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: S3_ENDPOINT
+        sync: false
+      - key: S3_ACCESS_KEY_ID
+        sync: false
+      - key: S3_SECRET_ACCESS_KEY
+        sync: false
+
+  # ------------------------------------------------------------------ Key Value (Redis)
+  - type: keyvalue
+    name: databridge-redis
+    plan: free
+    region: singapore
+    # No access from the internet. Both services use the internal URL: free web services can open
+    # private-network connections (they only cannot receive them), in the same region.
+    ipAllowList: []
+    # Celery's queue has no TTL and is never evicted; under memory pressure the LLM cache (1 h TTL)
+    # goes first. noeviction would fail every enqueue once the 25 MB fill up (ADR 0031).
+    maxmemoryPolicy: volatile-lru
