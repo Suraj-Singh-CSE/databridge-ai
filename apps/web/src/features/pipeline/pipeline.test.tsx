@@ -193,6 +193,11 @@ function setup({
   server.use(
     ...signedInHandlers(makeSession(member ?? 'data_engineer')),
     http.get(`${API}/projects/:id`, () => ok({ project })),
+    http.get(`${API}/projects/:id/people`, () =>
+      ok({
+        people: [{ userId: ENGINEER_ID, label: 'Priya', role: 'data_engineer', owner: false }],
+      }),
+    ),
     http.get(`${API}/projects/:id/sql/versions`, () => ok({ items: versions.map(summary) })),
     http.get(`${API}/projects/:id/sql/versions/:versionId`, ({ params }) => {
       const found = versions.find((v) => v.id === params.versionId);
@@ -223,7 +228,7 @@ describe('pipeline: current SQL and versions', () => {
     expect(within(current).getByText('AI (mock-model)')).toBeInTheDocument();
     expect(within(current).getByText('Approved only')).toBeInTheDocument();
     expect(within(current).getByText(/by you/)).toBeInTheDocument();
-    expect(within(current).getByText(/by a data engineer/)).toBeInTheDocument();
+    expect(await within(current).findByText(/by Priya/)).toBeInTheDocument();
     const code = within(current).getByLabelText('SQL of version 3');
     expect(code).toHaveTextContent("WHERE g.status = 'approved'");
     expect(code).toHaveAttribute('tabindex', '0');
@@ -343,6 +348,21 @@ describe('pipeline: exports', () => {
     vi.unstubAllGlobals();
   });
 
+  it('names people by their display label, and anyone who left as a former member', async () => {
+    setup({
+      exports: [
+        { ...CSV_EXPORT, id: '64b0000000000000000000f2', createdBy: '64b0000000000000000000ff' },
+        CSV_EXPORT,
+      ],
+    });
+    const table = await screen.findByRole('table', { name: 'Exports' });
+    const [, gone, priya] = within(table).getAllByRole('row');
+    await waitFor(() => {
+      expect(present(gone)).toHaveTextContent('by a former member');
+    });
+    expect(present(priya)).toHaveTextContent('by Priya');
+  });
+
   it('lists the exports with the CSV note', async () => {
     setup();
     const table = await screen.findByRole('table', { name: 'Exports' });
@@ -351,7 +371,9 @@ describe('pipeline: exports', () => {
     expect(row).toHaveTextContent('Approved only');
     expect(row).toHaveTextContent('4,987');
     expect(row).toHaveTextContent('512.0 KB');
-    expect(row).toHaveTextContent('by a data engineer');
+    await waitFor(() => {
+      expect(row).toHaveTextContent('by Priya');
+    });
     expect(
       screen.getByText("Phone numbers start with ' in CSV to stop spreadsheet formulas."),
     ).toBeInTheDocument();

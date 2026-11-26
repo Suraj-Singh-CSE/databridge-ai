@@ -13,7 +13,7 @@ import {
   READ_ONLY_PIPELINE_NOTE,
   STEWARD_PIPELINE_NOTE,
 } from '@/features/projects/access';
-import { personLabel } from '@/features/projects/people';
+import { usePersonOf, type PersonOf } from '@/features/projects/people';
 import { ProjectPageFrame } from '@/features/projects/ProjectPageFrame';
 import { projectPage } from '@/features/projects/steps';
 import { LiveJobs } from '@/features/sources/LiveJobs';
@@ -30,8 +30,6 @@ import { VersionsSection } from './VersionsSection';
 const PIPELINE_JOBS = new Set(['sql_draft', 'sql_run', 'export']);
 
 const PAGE = projectPage('pipeline');
-
-type PersonOf = (userId: string | null) => string;
 
 function CurrentSql({
   projectId,
@@ -154,7 +152,7 @@ function SqlSections({
 function PipelineContent({ project }: { project: Project }) {
   const { user } = useAuth();
   const access = user ? projectAccessOf(project, user) : null;
-  const personOf: PersonOf = (userId) => personLabel(userId, project, user?.id);
+  const personOf = usePersonOf(project.id);
   const canManage = canManagePipeline(access);
   const canExport = canStartExport(access);
   const jobs = useProjectJobs(project.id);

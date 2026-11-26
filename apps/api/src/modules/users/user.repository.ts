@@ -38,6 +38,11 @@ export function createMongoUserRepository(): UserRepository {
       const doc = await UserModel.findById(id).lean<StoredUser>();
       return doc ? toUser(doc) : null;
     },
+    async findByIds(ids) {
+      if (ids.length === 0) return [];
+      const docs = await UserModel.find({ _id: { $in: ids } }).lean<StoredUser[]>();
+      return docs.map(toUser);
+    },
     async findByEmail(email) {
       const doc = await UserModel.findOne({ email }).lean<StoredUser>();
       return doc ? toUser(doc) : null;

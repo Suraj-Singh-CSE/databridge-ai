@@ -164,9 +164,10 @@ describe('assistant: helpers', () => {
       link: { page, params },
     });
     expect(citationTarget('p1', cite('matching', { customerId: 'C1' }))).toEqual({
-      to: '/projects/p1/matching',
+      to: '/projects/p1/matching?customer=C1',
       label: 'Matching',
     });
+    expect(citationTarget('p1', cite('matching'))?.to).toBe('/projects/p1/matching');
     expect(citationTarget('p1', cite('mapping', { sourceId: 's1' }))?.to).toBe(
       '/projects/p1/mapping?source=s1',
     );
@@ -265,7 +266,7 @@ describe('assistant: asking', () => {
     if (!second) throw new Error('missing');
     expect(within(second).getByRole('link', { name: 'Open source 1 in Matching' })).toHaveAttribute(
       'href',
-      `/projects/${PROJECT_ID}/matching`,
+      `/projects/${PROJECT_ID}/matching?customer=C3F9A1B2C4D5E`,
     );
     expect(within(second).getByText('Design doc')).toBeInTheDocument();
     expect(within(second).getByText('ADR 0013 — Entity resolution')).toBeInTheDocument();

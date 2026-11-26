@@ -14,6 +14,7 @@ export interface RuleSpec {
   rule: string;
   direction: 'min' | 'max';
   max: number;
+  defaults: { warn: number; fail: number | null };
 }
 
 export type RowErrors = Partial<Record<'warn' | 'fail', string>>;
@@ -36,6 +37,19 @@ export function inputLabel(kind: 'warn' | 'fail', spec: RuleSpec): string {
   const side = spec.direction === 'min' ? 'below' : 'above';
   const unit = unitOfRule(spec.rule) === 'hours' ? 'hours' : '%';
   return `${verb} ${side} (${unit})`;
+}
+
+function amount(value: number, spec: RuleSpec): string {
+  const text = value.toLocaleString('en-US', { maximumFractionDigits: 2 });
+  return unitOfRule(spec.rule) === 'hours' ? `${text} hours` : `${text}%`;
+}
+
+/** "Default: warn below 99%, fail below 95%." or "…; it never fails." in plain words. */
+export function defaultsText(spec: RuleSpec): string {
+  const side = spec.direction === 'min' ? 'below' : 'above';
+  const { warn, fail } = spec.defaults;
+  const failText = fail === null ? 'never fail' : `fail ${side} ${amount(fail, spec)}`;
+  return `Default: warn ${side} ${amount(warn, spec)}, ${failText}.`;
 }
 
 export function ruleName(rule: string): string {

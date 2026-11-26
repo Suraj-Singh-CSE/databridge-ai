@@ -6,16 +6,28 @@ import type { Actor } from '../projects/project.service.js';
 import type { Project } from '../projects/project.types.js';
 
 import {
+  defaultThresholds,
   QUALITY_RULES,
+  type QualityDefaultSettings,
+  type QualityRuleId,
   type QualityRuleOverrides,
   type QualityRules,
   type QualityRun,
   type QualityRunSummary,
+  type Threshold,
 } from './quality.types.js';
+
+/** One configurable rule: which side is bad, the largest value allowed, and its defaults. */
+export interface QualityCatalogueEntry {
+  rule: QualityRuleId;
+  direction: 'min' | 'max';
+  max: number;
+  defaults: Threshold;
+}
 
 /** The rule settings as the UI needs them: the project's overrides and what can be set. */
 export interface QualityRulesView extends QualityRules {
-  catalogue: { rule: string; direction: 'min' | 'max'; max: number }[];
+  catalogue: QualityCatalogueEntry[];
 }
 
 export interface QualityService {
@@ -33,7 +45,6 @@ export interface QualityService {
 }
 
 export const QUALITY_RUN_NOT_FOUND = 'Quality report not found.';
-const CATALOGUE = Object.entries(QUALITY_RULES).map(([rule, spec]) => ({ rule, ...spec }));
 const EMPTY: QualityRules = { rules: {}, fields: {}, updatedBy: null, updatedAt: null };
 
 type QualityRepos = Pick<Repositories, 'quality'>;
@@ -41,9 +52,14 @@ type QualityRepos = Pick<Repositories, 'quality'>;
 export function createQualityService(
   repos: QualityRepos,
   audit: AuditService,
+  settings: QualityDefaultSettings,
   now: () => Date = () => new Date(),
 ): QualityService {
-  const view = (rules: QualityRules): QualityRulesView => ({ ...rules, catalogue: CATALOGUE });
+  const defaults = defaultThresholds(settings);
+  const catalogue: QualityCatalogueEntry[] = (Object.keys(QUALITY_RULES) as QualityRuleId[]).map(
+    (rule) => ({ rule, ...QUALITY_RULES[rule], defaults: defaults[rule] }),
+  );
+  const view = (rules: QualityRules): QualityRulesView => ({ ...rules, catalogue });
 
   return {
     async listRuns(project, page, limit) {

@@ -75,8 +75,9 @@ refused, 0-100 for percentages, 0-8760 hours, 0-1000% change, fail not on the wr
 at most 50 fields) and audits every change (`quality_rules.update`, before and after: thresholds
 only). The worker validates the stored document again with Pydantic (`QUALITY_RULES_INVALID`).
 Every report stores the effective `config` it used, so history stays readable after a change.
-The api does not duplicate the default numbers: `GET .../rules` returns the overrides and a
-catalogue (rule, direction, maximum); the defaults in force are in each result's `threshold`.
+`GET .../rules` returns the overrides and a catalogue (rule, direction, maximum and the default
+warn/fail); the defaults in force for a run are in each result's `threshold`. The api mirrors the
+default numbers, checked against this file by a test ([ADR 0030](0030-names-defaults-links-and-bundle.md)).
 
 **Reports and history.** `quality_runs` (`_id` = the job id): `projectId`, `jobId`, `startedAt`,
 `finishedAt`, `source` (`kind`, `label`, `versionId`, `version`, `scope`, `sqlTestsPassed`,

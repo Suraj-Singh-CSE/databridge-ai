@@ -27,6 +27,8 @@ export interface UserRepository {
   /** Throws DuplicateKeyError when the email is already registered. */
   create(input: NewUser): Promise<User>;
   findById(id: string): Promise<User | null>;
+  /** The users that exist among `ids` (any order); unknown ids are skipped. */
+  findByIds(ids: string[]): Promise<User[]>;
   findByEmail(email: string): Promise<User | null>;
   findCredentialsByEmail(email: string): Promise<UserCredentials | null>;
   /** Changes a user's global role; returns the updated user, or null when it does not exist. */

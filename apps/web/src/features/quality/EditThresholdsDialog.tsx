@@ -21,6 +21,7 @@ import type { QualityRulesView } from '@/lib/api-types';
 import { useSaveQualityRules } from './queries';
 import {
   DEFAULT_ROW,
+  defaultsText,
   inputLabel,
   overridesOf,
   rowFromOverride,
@@ -40,6 +41,8 @@ function rowsOf(view: QualityRulesView): Record<string, RuleRow> {
 function NumberField({
   label,
   value,
+  placeholder,
+  hintId,
   error,
   disabled,
   max,
@@ -47,6 +50,10 @@ function NumberField({
 }: {
   label: string;
   value: string;
+  /** The default, shown while the field is empty ("empty means default"). */
+  placeholder: string;
+  /** The rule's "Default: …" line, read out with the field. */
+  hintId: string;
   error: string | undefined;
   disabled: boolean;
   max: number;
@@ -66,12 +73,12 @@ function NumberField({
         min={0}
         max={max}
         step="any"
-        placeholder="Default"
+        placeholder={placeholder}
         className="w-28"
         value={value}
         disabled={disabled}
         aria-invalid={error ? true : undefined}
-        aria-describedby={error ? errorId : undefined}
+        aria-describedby={error ? `${hintId} ${errorId}` : hintId}
         onChange={(event) => {
           onChange(event.target.value);
         }}
@@ -97,6 +104,8 @@ function RuleFields({
   onChange: (row: RuleRow) => void;
 }) {
   const name = ruleName(spec.rule);
+  const hintId = useId();
+  const { warn, fail } = spec.defaults;
   return (
     <fieldset className="space-y-2 border-t px-1 py-3 first:border-t-0">
       <legend className="sr-only">{name}</legend>
@@ -116,6 +125,9 @@ function RuleFields({
           Reset to default
         </Button>
       </div>
+      <p id={hintId} className="text-xs text-muted-foreground">
+        {defaultsText(spec)}
+      </p>
       <div className="flex flex-wrap items-start gap-4">
         <label className="flex items-center gap-2 pt-5 text-sm">
           <input
@@ -131,6 +143,8 @@ function RuleFields({
         <NumberField
           label={inputLabel('warn', spec)}
           value={row.warn}
+          placeholder={String(warn)}
+          hintId={hintId}
           error={errors.warn}
           disabled={!row.enabled}
           max={spec.max}
@@ -141,6 +155,8 @@ function RuleFields({
         <NumberField
           label={inputLabel('fail', spec)}
           value={row.neverFails ? '' : row.fail}
+          placeholder={fail === null ? 'Never' : String(fail)}
+          hintId={hintId}
           error={errors.fail}
           disabled={!row.enabled || row.neverFails}
           max={spec.max}

@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
 import { api } from '@/lib/api';
-import type { Page, Project, Role } from '@/lib/api-types';
+import type { Page, Project, ProjectPerson, Role } from '@/lib/api-types';
 
 /** The api caps a page at 100; more than that will need paging in the UI (not needed yet). */
 const PAGE_LIMIT = 100;
@@ -10,6 +10,7 @@ export const projectKeys = {
   all: ['projects'] as const,
   list: () => [...projectKeys.all, 'list'] as const,
   detail: (id: string) => [...projectKeys.all, 'detail', id] as const,
+  people: (id: string) => [...projectKeys.all, 'people', id] as const,
 };
 
 export function useProjects() {
@@ -27,6 +28,18 @@ export function useProject(id: string | undefined) {
         (data) => data.project,
       ),
     enabled: Boolean(id),
+  });
+}
+
+/** Current members with display labels, for "by …" lines. Changes rarely, so cache it. */
+export function useProjectPeople(id: string) {
+  return useQuery({
+    queryKey: projectKeys.people(id),
+    queryFn: ({ signal }) =>
+      api<{ people: ProjectPerson[] }>(`/projects/${encodeURIComponent(id)}/people`, {
+        signal,
+      }).then((data) => data.people),
+    staleTime: 5 * 60_000,
   });
 }
 

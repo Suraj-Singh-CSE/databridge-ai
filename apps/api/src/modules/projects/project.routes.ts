@@ -103,6 +103,15 @@ export function createProjectRouter({
   );
 
   router.get(
+    '/:id/people',
+    validate({ params: projectIdParams }),
+    access('viewer'),
+    async (req, res) => {
+      sendData(res, { people: await projectService.people(currentProject(req)) });
+    },
+  );
+
+  router.get(
     '/:id/audit',
     validate({ params: projectIdParams, query: pageQuery }),
     access('viewer'),

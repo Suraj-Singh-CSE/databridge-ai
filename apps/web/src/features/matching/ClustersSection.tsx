@@ -1,5 +1,6 @@
 import { CircleAlert, Search } from 'lucide-react';
 import { useState, type FormEvent } from 'react';
+import { useSearchParams } from 'react-router';
 
 import { EmptyState } from '@/components/EmptyState';
 import { ProgressBar } from '@/components/ProgressBar';
@@ -205,6 +206,37 @@ export function ClustersSection({
   const [searchId, setSearchId] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
+  // `?customer=<id>` (from an assistant source, a shared link or a search) opens that customer,
+  // fetched by id so it need not be on the current page. Applied when the URL changes to an id
+  // other than the one shown (a search here writes the URL too, so it is not applied twice).
+  const [params, setParams] = useSearchParams();
+  const linked = params.get('customer');
+  const linkedId = linked?.trim().toUpperCase() ?? '';
+  const linkValid = CUSTOMER_ID_PATTERN.test(linkedId);
+  const [seenLink, setSeenLink] = useState<string | null>(null);
+  const [focusId, setFocusId] = useState<string | null>(null);
+  if (linked !== seenLink) {
+    setSeenLink(linked);
+    if (linkValid && linkedId !== searchId) {
+      setQuery(linkedId);
+      setQueryError(null);
+      setSearchId(linkedId);
+      setSelectedId(linkedId);
+      setFocusId(linkedId);
+    }
+  }
+  const setLink = (id: string | null) => {
+    setParams(
+      (current) => {
+        const next = new URLSearchParams(current);
+        if (id === null) next.delete('customer');
+        else next.set('customer', id);
+        return next;
+      },
+      { replace: true },
+    );
+  };
+
   const filters: ClusterFilters = {
     ...(needsReview ? { flag: 'needs_review' as const } : {}),
     ...(multiOnly ? { minSize: 2 } : {}),
@@ -228,6 +260,7 @@ export function ClustersSection({
     if (!id) {
       setSearchId(null);
       setQueryError(null);
+      setLink(null);
       return;
     }
     if (!CUSTOMER_ID_PATTERN.test(id)) {
@@ -237,6 +270,7 @@ export function ClustersSection({
     setQueryError(null);
     setSearchId(id);
     setSelectedId(id);
+    setLink(id);
   };
 
   let rows: ClusterView[] = [];
@@ -397,6 +431,7 @@ export function ClustersSection({
                 setQuery('');
                 setSearchId(null);
                 setSelectedId(null);
+                setLink(null);
               }}
             >
               Clear search
@@ -439,6 +474,16 @@ export function ClustersSection({
           {queryError}
         </p>
       )}
+      {linked !== null && !linkValid && (
+        <Alert>
+          <CircleAlert aria-hidden="true" />
+          <AlertTitle>This link does not name a valid customer</AlertTitle>
+          <AlertDescription>
+            Customer ids look like C1A2B3C4D5E6F. Search for the customer above, or browse the list
+            below.
+          </AlertDescription>
+        </Alert>
+      )}
 
       {body ?? <ClusterTable clusters={rows} selectedId={selectedId} onSelect={setSelectedId} />}
 
@@ -479,6 +524,7 @@ export function ClustersSection({
           cluster={selected}
           canDecide={canDecide}
           rebuilding={rebuilding !== null}
+          focusOnOpen={selected.customerId === focusId}
           onClose={() => {
             setSelectedId(null);
           }}

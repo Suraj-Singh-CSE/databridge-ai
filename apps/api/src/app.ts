@@ -138,7 +138,11 @@ export function createApp({
   const reviewService = createReviewService(repos, jobService, audit);
   const exportService = createExportService(repos, files, audit);
   const sqlService = createSqlService(repos, audit);
-  const qualityService = createQualityService(repos, audit);
+  const qualityService = createQualityService(repos, audit, {
+    freshnessWarnHours: config.QUALITY_FRESHNESS_WARN_HOURS,
+    freshnessFailHours: config.QUALITY_FRESHNESS_FAIL_HOURS,
+    rowChangeWarnPercent: config.QUALITY_ROW_CHANGE_WARN_PERCENT,
+  });
   const dashboardService = createDashboardService(repos, undefined, (projectId, requestId) =>
     aiClient.aiBudget(projectId, requestId),
   );

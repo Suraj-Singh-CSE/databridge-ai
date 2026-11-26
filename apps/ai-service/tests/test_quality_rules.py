@@ -1,15 +1,22 @@
 """The pure quality rules and their configuration (ADR 0022)."""
 
+import re
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any
 
 import pytest
 from pydantic import ValidationError
 
 from app.quality.config import (
+    CLUSTERING_FRESHNESS,
+    CUSTOMER_ID_UNIQUE,
+    ROW_COUNT_CHANGE,
+    SQL_RUN_FRESHNESS,
     QualityDefaults,
     QualityRulesDocument,
     Threshold,
+    default_rules,
     resolve,
 )
 from app.quality.pin_zones import CITY_ZONE, ZONES, zone_of_city
@@ -329,3 +336,29 @@ def test_disabled_rules_are_not_run() -> None:
     data = QualityInput(rows=[row("C1")], fields=FIELDS, now=NOW)
     results = run_rules(data, resolve(document, QualityDefaults()))
     assert [r.rule for r in results] == ["customer_id_unique"]
+
+
+# ---- the api shows these defaults in the thresholds dialog; keep the two copies in step
+
+API_QUALITY_TYPES = (
+    Path(__file__).parents[3] / "apps" / "api" / "src" / "modules" / "quality" / "quality.types.ts"
+)
+
+
+def test_api_default_thresholds_match_the_worker() -> None:
+    source = API_QUALITY_TYPES.read_text(encoding="utf-8")
+    block = source.split("export function defaultThresholds", 1)[1].split("\n}\n", 1)[0]
+    fixed = {
+        rule: (float(warn), None if fail == "null" else float(fail))
+        for rule, warn, fail in re.findall(
+            r"^\s+(\w+): \{ warn: ([\d.]+), fail: ([\d.]+|null) \},$", block, re.MULTILINE
+        )
+    }
+    by_setting = dict(re.findall(r"^\s+(\w+): (freshness|\{ warn: settings\.\w+)", block, re.M))
+    defaults = default_rules(QualityDefaults())
+
+    assert set(fixed) | set(by_setting) == set(defaults) - {CUSTOMER_ID_UNIQUE}
+    for rule, (warn, fail) in fixed.items():
+        assert defaults[rule].threshold == Threshold(warn, fail), rule
+    # The environment-set rules: the api reads the same QUALITY_* variables.
+    assert set(by_setting) == {CLUSTERING_FRESHNESS, SQL_RUN_FRESHNESS, ROW_COUNT_CHANGE}

@@ -1,5 +1,5 @@
 import { ChevronDown, ChevronRight, CircleAlert } from 'lucide-react';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 import { StatusPill } from '@/components/StatusPill';
 import { Button } from '@/components/ui/button';
@@ -121,6 +121,8 @@ export interface ClusterDetailProps {
   canDecide: boolean;
   /** A clustering job is running: decisions wait for it. */
   rebuilding: boolean;
+  /** Opened from a link (`?customer=`): move focus here, which also scrolls it into view. */
+  focusOnOpen?: boolean;
   onClose: () => void;
   /** A decision's outcome (or error) in plain words, announced by the section. */
   onResult: (message: string) => void;
@@ -132,9 +134,14 @@ export function ClusterDetail({
   cluster: fromList,
   canDecide,
   rebuilding,
+  focusOnOpen = false,
   onClose,
   onResult,
 }: ClusterDetailProps) {
+  const headingRef = useRef<HTMLHeadingElement>(null);
+  useEffect(() => {
+    if (focusOnOpen) headingRef.current?.focus();
+  }, [focusOnOpen]);
   // The detail adds the evidence behind each link; the list's copy shows meanwhile.
   const detail = useCluster(projectId, fromList.customerId);
   const cluster: ClusterView | ClusterDetailView = detail.data?.cluster ?? fromList;
@@ -170,7 +177,12 @@ export function ClusterDetail({
     <section aria-labelledby={headingId} className="space-y-4 rounded-xl border px-5 py-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="space-y-1">
-          <h3 id={headingId} className="flex flex-wrap items-center gap-2 text-base font-medium">
+          <h3
+            id={headingId}
+            ref={headingRef}
+            tabIndex={-1}
+            className="flex flex-wrap items-center gap-2 rounded-sm text-base font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
             Customer <span className="font-mono">{cluster.customerId}</span>
             <StatusPill tone={confidence.tone}>{confidence.text}</StatusPill>
             <StatusPill tone={status.tone}>{status.text}</StatusPill>

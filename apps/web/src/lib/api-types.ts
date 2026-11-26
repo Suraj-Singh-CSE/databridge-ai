@@ -54,6 +54,14 @@ export interface Project {
   updatedAt: string;
 }
 
+/** A current member with the display label the api gives (a name, never an email). */
+export interface ProjectPerson {
+  userId: string;
+  label: string;
+  role: ProjectRole;
+  owner: boolean;
+}
+
 export interface Page<T> {
   items: T[];
   page: number;
@@ -731,7 +739,13 @@ export interface QualityRulesView {
   fields: Record<string, { warn?: number; fail?: number | null }>;
   updatedBy: string | null;
   updatedAt: string | null;
-  catalogue: { rule: string; direction: 'min' | 'max'; max: number }[];
+  /** Each configurable rule with its default thresholds (`fail: null`: it only warns). */
+  catalogue: {
+    rule: string;
+    direction: 'min' | 'max';
+    max: number;
+    defaults: { warn: number; fail: number | null };
+  }[];
 }
 
 /* ---------- Dashboard (apps/api dashboard.service.ts, ADR 0023) ---------- */

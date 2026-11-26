@@ -21,6 +21,14 @@ export interface ProjectMember {
   role: ProjectRole;
 }
 
+/** A current member as other members see them: a display label, never an email. */
+export interface ProjectPerson {
+  userId: string;
+  label: string;
+  role: ProjectRole;
+  owner: boolean;
+}
+
 export interface Project {
   id: string;
   name: string;

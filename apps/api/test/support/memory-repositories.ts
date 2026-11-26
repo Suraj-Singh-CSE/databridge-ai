@@ -233,6 +233,13 @@ export function createMemoryRepositories(): MemoryRepositories {
         const user = users.get(id);
         return user ? publicUser(user) : null;
       },
+      async findByIds(ids) {
+        await Promise.resolve();
+        return ids.flatMap((id) => {
+          const user = users.get(id);
+          return user ? [publicUser(user)] : [];
+        });
+      },
       async findByEmail(email) {
         await Promise.resolve();
         const user = byEmail(email);

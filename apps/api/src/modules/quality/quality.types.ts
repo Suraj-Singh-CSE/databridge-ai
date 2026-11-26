@@ -18,6 +18,41 @@ export const QUALITY_RULES = {
   row_count_change: { direction: 'max', max: 1000 },
 } as const satisfies Record<string, { direction: 'min' | 'max'; max: number }>;
 export type QualityRuleId = keyof typeof QUALITY_RULES;
+
+/** A rule's default warn and fail values; `fail: null` means it only ever warns. */
+export interface Threshold {
+  warn: number;
+  fail: number | null;
+}
+
+/** The defaults the environment sets (QUALITY_* variables, read by the worker too). */
+export interface QualityDefaultSettings {
+  freshnessWarnHours: number;
+  freshnessFailHours: number;
+  rowChangeWarnPercent: number;
+}
+
+/**
+ * Every configurable rule's default thresholds. Mirrors `default_rules` in
+ * apps/ai-service/app/quality/config.py, which the worker applies; a Python test fails if the
+ * fixed numbers here drift from it.
+ */
+export function defaultThresholds(
+  settings: QualityDefaultSettings,
+): Record<QualityRuleId, Threshold> {
+  const freshness = { warn: settings.freshnessWarnHours, fail: settings.freshnessFailHours };
+  return {
+    completeness_required: { warn: 100, fail: 99 },
+    completeness_optional: { warn: 80, fail: 50 },
+    validity: { warn: 99, fail: 95 },
+    phone_shared: { warn: 2, fail: null },
+    email_shared: { warn: 2, fail: null },
+    city_pin_consistency: { warn: 98, fail: 90 },
+    clustering_freshness: freshness,
+    sql_run_freshness: freshness,
+    row_count_change: { warn: settings.rowChangeWarnPercent, fail: null },
+  };
+}
 export const MAX_FIELD_OVERRIDES = 50;
 
 export const QUALITY_STATUSES = ['pass', 'warn', 'fail', 'skipped'] as const;
