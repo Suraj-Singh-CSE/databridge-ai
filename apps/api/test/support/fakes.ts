@@ -1,4 +1,5 @@
 import type {
+  AiBudget,
   AiServiceClient,
   AskAssistantInput,
   AssistantAnswer,
@@ -21,6 +22,9 @@ export class FakeAiService implements AiServiceClient {
   waking = false;
   /** The ai-service's error code to fail `askAssistant` with (e.g. `KNOWLEDGE_NOT_BUILT`). */
   askError: { status: number; code: string } | null = null;
+  /** What `aiBudget` answers (null: no daily cap, as with the mock provider). */
+  budget: AiBudget | null = null;
+  readonly budgetAsked: string[] = [];
   /** What `askAssistant` answers; by default a grounded answer citing one quality chunk. */
   answer: (input: AskAssistantInput) => AssistantAnswer = () => ({
     answer: 'The PIN code rule failed because some customers have no PIN code [1].',
@@ -65,6 +69,13 @@ export class FakeAiService implements AiServiceClient {
     }
     this.asked.push({ input: structuredClone(input), requestId });
     return this.answer(input);
+  }
+
+  async aiBudget(projectId: string, _requestId: string): Promise<AiBudget | null> {
+    await Promise.resolve();
+    if (this.down) throw new AiServiceError('ai-service unreachable');
+    this.budgetAsked.push(projectId);
+    return this.budget;
   }
 }
 

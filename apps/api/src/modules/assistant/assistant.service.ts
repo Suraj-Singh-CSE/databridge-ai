@@ -87,7 +87,7 @@ export function createAssistantService({
 
   return {
     async ask(actor, project, { question, conversationId }) {
-      if (!limiter.take(actor.user.userId)) {
+      if (!(await limiter.take(actor.user.userId))) {
         throw new AppError(429, 'RATE_LIMITED', 'Too many questions. Please wait a minute.');
       }
       const existing = conversationId ? await own(actor, project, conversationId) : null;

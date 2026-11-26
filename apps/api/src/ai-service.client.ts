@@ -1,3 +1,5 @@
+import { z } from 'zod';
+
 import type { Config } from './config.js';
 
 export interface EnqueueJobInput {
@@ -23,7 +25,12 @@ export interface AssistantCitation {
 }
 
 export type AssistantRefusalReason =
-  'personal_data' | 'weak_retrieval' | 'not_answerable' | 'no_citation';
+  | 'personal_data'
+  | 'weak_retrieval'
+  | 'not_answerable'
+  | 'no_citation'
+  /** The free tier's daily LLM request budget is used up (ADR 0028). */
+  | 'daily_budget';
 
 /** `POST /internal/v1/assistant/ask` (ADR 0025). */
 export interface AssistantAnswer {
@@ -39,11 +46,30 @@ export interface AssistantAnswer {
   invalidCitations: number;
 }
 
+/** `GET /internal/v1/llm/budget` (ADR 0028): today's LLM request counts. Counts only. */
+const aiBudgetSchema = z.object({
+  provider: z.string(),
+  model: z.string(),
+  dailyLimit: z.int().min(0).nullable(),
+  usedToday: z.int().min(0),
+  projectDailyLimit: z.int().min(0).nullable(),
+  projectUsedToday: z.int().min(0),
+  /** Requests left today for the project (the smaller remainder); null when uncapped. */
+  remainingToday: z.int().min(0).nullable(),
+  resetsAt: z.string(),
+});
+export type AiBudget = z.infer<typeof aiBudgetSchema>;
+
+/** Reading the budget must never hold up the dashboard (and never wakes a sleeping service). */
+const BUDGET_TIMEOUT_MS = 3000;
+
 /** The internal ai-service routes the api calls (`/internal/v1`, `X-Service-Token`). */
 export interface AiServiceClient {
   enqueueJob(input: EnqueueJobInput, requestId: string): Promise<void>;
   cancelJob(jobId: string, requestId: string): Promise<void>;
   askAssistant(input: AskAssistantInput, requestId: string): Promise<AssistantAnswer>;
+  /** Today's LLM budget for the project; null when the ai-service keeps none (mock provider). */
+  aiBudget(projectId: string, requestId: string): Promise<AiBudget | null>;
 }
 
 /** The ai-service could not be reached, timed out, or answered with an error status. */
@@ -182,6 +208,28 @@ export function createAiServiceClient(
     return body.data;
   }
 
+  /** No wake: a sleeping ai-service has made no calls, and the dashboard must not wait. */
+  async function aiBudget(projectId: string, requestId: string): Promise<AiBudget | null> {
+    const query = new URLSearchParams({ projectId });
+    let response: Response;
+    try {
+      response = await fetch(`${base}/internal/v1/llm/budget?${query.toString()}`, {
+        headers: { 'X-Service-Token': config.AI_SERVICE_TOKEN, 'X-Request-ID': requestId },
+        signal: AbortSignal.timeout(Math.min(config.AI_SERVICE_TIMEOUT_MS, BUDGET_TIMEOUT_MS)),
+      });
+    } catch (error) {
+      throw new AiServiceError(`ai-service unreachable: ${String(error)}`);
+    }
+    const body = (await response.json().catch(() => null)) as { data?: unknown } | null;
+    if (!response.ok || body === null) {
+      throw new AiServiceError(`ai-service answered ${response.status}`, response.status);
+    }
+    if (body.data === null) return null;
+    const parsed = aiBudgetSchema.safeParse(body.data);
+    if (!parsed.success) throw new AiServiceError('ai-service sent an invalid budget');
+    return parsed.data;
+  }
+
   return {
     async enqueueJob(input, requestId) {
       await wake(requestId);
@@ -191,5 +239,6 @@ export function createAiServiceClient(
     cancelJob: (jobId, requestId) =>
       post(`/jobs/${encodeURIComponent(jobId)}/cancel`, {}, requestId),
     askAssistant,
+    aiBudget,
   };
 }

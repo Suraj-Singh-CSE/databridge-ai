@@ -1,30 +1,21 @@
+import type { CounterBackend } from '../../rate-limit-store.js';
+
 /**
  * Per-user question limit for the assistant: at most `max` questions in any `windowMs`
- * (sliding window). In memory, so it is per api process; a shared Redis limiter is a Gate 3
- * item when the api runs more than one instance.
+ * (sliding window). The counters are shared by every api process through Redis, and kept per
+ * process while Redis is down (ADR 0028).
  */
 export interface QuestionLimiter {
   /** Records one question; false when the user is over the limit (nothing is recorded). */
-  take(userId: string): boolean;
+  take(userId: string): Promise<boolean>;
 }
 
 export function createQuestionLimiter(
+  counters: CounterBackend,
   max: number,
   windowMs: number,
-  now: () => number = Date.now,
 ): QuestionLimiter {
-  const seen = new Map<string, number[]>();
   return {
-    take(userId) {
-      const at = now();
-      const recent = (seen.get(userId) ?? []).filter((t) => at - t < windowMs);
-      if (recent.length >= max) {
-        seen.set(userId, recent);
-        return false;
-      }
-      recent.push(at);
-      seen.set(userId, recent);
-      return true;
-    },
+    take: (userId) => counters.take(`assistant:${userId}`, max, windowMs),
   };
 }

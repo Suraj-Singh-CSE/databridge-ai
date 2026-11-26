@@ -8,6 +8,7 @@ import type { LlmCall } from '../../src/modules/dashboard/dashboard.types.js';
 import type { Repositories } from '../../src/repositories.js';
 
 import { buildTestApp, fastPasswords } from './build-app.js';
+import { FakeAiService } from './fakes.js';
 import type { ExportsHarness } from './exports-suite.js';
 import type { JobsHarness } from './jobs-suite.js';
 import { suggested } from './mappings-suite.js';
@@ -465,6 +466,38 @@ export function defineDashboardSuite(label: string, harness: DashboardHarness): 
       expect(data.review).toMatchObject({ total: 0, byRole: {}, medianTimeToDecisionMs: {} });
       expect(data.jobs).toEqual({ byType: [], recentFailures: [] });
       expect(data.benchmarks.items.length).toBeGreaterThan(0);
+      expect(data.ai.budget).toBeNull(); // the mock provider keeps no daily cap
+    });
+
+    it("shows today's AI requests left, and null when the ai-service cannot say", async () => {
+      const aiService = new FakeAiService();
+      aiService.budget = {
+        provider: 'gemini',
+        model: 'gemini-3.5-flash-lite',
+        dailyLimit: 400,
+        usedToday: 150,
+        projectDailyLimit: 200,
+        projectUsedToday: 120,
+        remainingToday: 80,
+        resetsAt: '2026-11-27T08:00:00+00:00',
+      };
+      app = buildTestApp({ repos, aiService });
+      const res = await request(app).get(url()).set(bearer(owner)).expect(200);
+      const { data } = res.body as { data: Dashboard };
+
+      expect(data.ai.budget).toEqual({
+        dailyLimit: 400,
+        usedToday: 150,
+        projectDailyLimit: 200,
+        projectUsedToday: 120,
+        remainingToday: 80,
+        resetsAt: '2026-11-27T08:00:00+00:00',
+      });
+      expect(aiService.budgetAsked).toEqual([projectId]);
+
+      aiService.down = true;
+      const down = await request(app).get(url()).set(bearer(owner)).expect(200);
+      expect((down.body as { data: Dashboard }).data.ai.budget).toBeNull();
     });
 
     it('shows that steps are outdated once a source is profiled again', async () => {

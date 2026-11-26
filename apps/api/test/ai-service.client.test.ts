@@ -222,4 +222,52 @@ describe('ai-service client', () => {
       expect(seen).toEqual(['POST /internal/v1/jobs', 'POST /internal/v1/jobs/j1/cancel']);
     });
   });
+
+  it('reads the daily budget without waking the service', async () => {
+    const budget = {
+      provider: 'gemini',
+      model: 'flash-lite',
+      dailyLimit: 400,
+      usedToday: 12,
+      projectDailyLimit: null,
+      projectUsedToday: 3,
+      remainingToday: 388,
+      resetsAt: '2026-11-27T08:00:00+00:00',
+    };
+    const { url, seen } = await fakeAiService(
+      200,
+      0,
+      JSON.stringify({ data: budget, error: null }),
+    );
+    const client = createAiServiceClient({ ...config(url), AI_SERVICE_WAKE_TIMEOUT_MS: 90_000 });
+
+    await expect(client.aiBudget('p1', 'req-b')).resolves.toEqual(budget);
+    expect(seen).toHaveLength(1); // no /health wake-up first
+    expect(seen[0]).toMatchObject({ method: 'GET', url: '/internal/v1/llm/budget?projectId=p1' });
+    expect(seen[0]?.headers['x-service-token']).toBe('service-token-for-tests');
+    expect(seen[0]?.headers['x-request-id']).toBe('req-b');
+  });
+
+  it('answers null without a cap and fails on errors or a bad body', async () => {
+    const empty = await fakeAiService(200);
+    await expect(createAiServiceClient(config(empty.url)).aiBudget('p', 'r')).resolves.toBeNull();
+    server?.closeAllConnections();
+    await new Promise((resolve) => server?.close(resolve));
+
+    const bad = await fakeAiService(200, 0, '{"data":{"usedToday":-1},"error":null}');
+    await expect(createAiServiceClient(config(bad.url)).aiBudget('p', 'r')).rejects.toThrow(
+      'invalid budget',
+    );
+    server?.closeAllConnections();
+    await new Promise((resolve) => server?.close(resolve));
+
+    const failing = await fakeAiService(500, 0, 'oops');
+    await expect(
+      createAiServiceClient(config(failing.url)).aiBudget('p', 'r'),
+    ).rejects.toBeInstanceOf(AiServiceError);
+
+    await expect(
+      createAiServiceClient(config('http://127.0.0.1:1/')).aiBudget('p', 'r'),
+    ).rejects.toThrow('unreachable');
+  });
 });

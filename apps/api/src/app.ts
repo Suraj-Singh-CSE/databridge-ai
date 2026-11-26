@@ -36,6 +36,11 @@ import { createSqlRouter } from './modules/sql/sql.routes.js';
 import { createAssistantRouter } from './modules/assistant/assistant.routes.js';
 import { createAssistantService } from './modules/assistant/assistant.service.js';
 import { createQuestionLimiter } from './modules/assistant/rate-limit.js';
+import {
+  createCounterStore,
+  createMemoryCounters,
+  type CounterBackend,
+} from './rate-limit-store.js';
 import { createSqlService } from './modules/sql/sql.service.js';
 import { createScoreRouter } from './modules/scores/score.routes.js';
 import { createScoreService } from './modules/scores/score.service.js';
@@ -68,6 +73,8 @@ export interface AppDeps {
   aiService?: AiServiceClient;
   /** Checks for GET /api/v1/ready; defaults to MongoDB (mongoose) and Redis (the event bus). */
   readiness?: ReadinessChecks;
+  /** Rate-limit counters (Redis, shared by api processes); defaults to this process's memory. */
+  counters?: CounterBackend;
 }
 
 export function createApp({
@@ -79,6 +86,7 @@ export function createApp({
   jobEvents,
   aiService,
   readiness,
+  counters = createMemoryCounters(),
 }: AppDeps): Express {
   const files = storage ?? createStorage(config);
   const tokens = createTokenService(config);
@@ -129,7 +137,9 @@ export function createApp({
   const exportService = createExportService(repos, files, audit);
   const sqlService = createSqlService(repos, audit);
   const qualityService = createQualityService(repos, audit);
-  const dashboardService = createDashboardService(repos);
+  const dashboardService = createDashboardService(repos, undefined, (projectId, requestId) =>
+    aiClient.aiBudget(projectId, requestId),
+  );
   const assistantService = createAssistantService({
     conversations: repos.assistant,
     knowledge: repos.knowledge,
@@ -137,6 +147,7 @@ export function createApp({
     aiService: aiClient,
     audit,
     limiter: createQuestionLimiter(
+      counters,
       config.ASSISTANT_RATE_LIMIT_MAX,
       config.ASSISTANT_RATE_LIMIT_WINDOW_MS,
     ),
@@ -182,7 +193,8 @@ export function createApp({
     });
   });
 
-  // In memory, per api process (one instance on the free plan). req.ip honours TRUST_PROXY.
+  // Counters in Redis, shared by every api process (memory while Redis is down; ADR 0028).
+  // req.ip honours TRUST_PROXY.
   const limiterOptions: Partial<Options> = {
     standardHeaders: 'draft-8',
     legacyHeaders: false,
@@ -192,6 +204,7 @@ export function createApp({
   };
   const credentialsLimiter = rateLimit({
     ...limiterOptions,
+    store: createCounterStore(counters, 'auth:credentials:'),
     windowMs: config.AUTH_RATE_LIMIT_WINDOW_MS,
     limit: config.AUTH_RATE_LIMIT_MAX,
     // Per IP + email: guessing one account's password is slowed down, while people sharing an
@@ -200,6 +213,7 @@ export function createApp({
   });
   const sessionLimiter = rateLimit({
     ...limiterOptions,
+    store: createCounterStore(counters, 'auth:session:'),
     windowMs: config.SESSION_RATE_LIMIT_WINDOW_MS,
     limit: config.SESSION_RATE_LIMIT_MAX,
   });

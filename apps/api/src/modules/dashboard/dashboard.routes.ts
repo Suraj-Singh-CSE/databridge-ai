@@ -40,7 +40,7 @@ export function createDashboardRouter({
     async (req, res) => {
       const { range } = validated(req, 'query', dashboardQuery);
       const started = performance.now();
-      const dashboard = await dashboardService.get(currentProject(req), range);
+      const dashboard = await dashboardService.get(currentProject(req), range, requestIdOf(req));
       const ms = Math.round(performance.now() - started);
       logger.info({ requestId: requestIdOf(req), range, ms }, 'dashboard built');
       sendData(res, dashboard);
