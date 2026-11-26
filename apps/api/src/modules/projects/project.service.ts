@@ -8,7 +8,9 @@ import type { AuditService } from '../audit/audit.service.js';
 import type { AuditEntry } from '../audit/audit.types.js';
 import type { AccessClaims } from '../auth/tokens.js';
 
-import type { Project, ProjectPatch, ProjectRole } from './project.types.js';
+import { displayLabel } from '../users/display-label.js';
+
+import type { Project, ProjectPatch, ProjectPerson, ProjectRole } from './project.types.js';
 
 export interface Actor {
   user: AccessClaims;
@@ -27,6 +29,8 @@ export interface ProjectService {
   ): Promise<Project>;
   removeMember(actor: Actor, project: Project, userId: string): Promise<Project>;
   auditLog(project: Project, page: number, limit: number): Promise<Page<AuditEntry>>;
+  /** Current members (owner first) with display labels, for "by …" lines in history. */
+  people(project: Project): Promise<ProjectPerson[]>;
 }
 
 /** The fields worth keeping in an audit snapshot (no personal data). */
@@ -170,6 +174,21 @@ export function createProjectService(
         before: { userId, role: member.role },
       });
       return updated;
+    },
+
+    async people(project) {
+      const roles = new Map(project.members.map((m) => [m.userId, m.role] as const));
+      // An owner who is somehow not in `members` is still part of the project.
+      if (!roles.has(project.ownerId)) roles.set(project.ownerId, 'data_engineer');
+      const users = await repos.users.findByIds([...roles.keys()]);
+      return users
+        .map((user) => ({
+          userId: user.id,
+          label: displayLabel(user),
+          role: roles.get(user.id) ?? 'viewer',
+          owner: user.id === project.ownerId,
+        }))
+        .sort((a, b) => Number(b.owner) - Number(a.owner) || a.label.localeCompare(b.label));
     },
 
     async auditLog(project, page, limit) {

@@ -647,6 +647,66 @@ export function defineApiSuite(label: string, harness: Harness): void {
         });
       });
 
+      describe('GET /projects/:id/people', () => {
+        it('labels current members by name, owner first, without emails', async () => {
+          const id = await createProject(alice);
+          await repos.users.create({
+            email: 'carol.smith@example.com',
+            name: '  ',
+            role: 'data_steward',
+            passwordHash: await fastPasswords.hash(PASSWORD),
+          });
+          for (const email of ['bob@example.com', 'carol.smith@example.com']) {
+            await request(app)
+              .post(`/api/v1/projects/${id}/members`)
+              .set(bearer(alice))
+              .send({ email, role: 'data_steward' })
+              .expect(201);
+          }
+
+          const res = await request(app).get(`/api/v1/projects/${id}/people`).set(bearer(bob));
+
+          expect(res.status).toBe(200);
+          const people = (res.body as { data: { people: { label: string }[] } }).data.people;
+          expect(people).toEqual([
+            { userId: alice.id, label: 'Alice', role: 'data_engineer', owner: true },
+            { userId: bob.id, label: 'Bob', role: 'data_steward', owner: false },
+            {
+              userId: expect.any(String) as string,
+              label: 'carol.smith',
+              role: 'data_steward',
+              owner: false,
+            },
+          ]);
+          expect(JSON.stringify(res.body)).not.toMatch(/@example\.com/);
+        });
+
+        it('drops people once they leave the project', async () => {
+          const id = await createProject(alice);
+          await request(app)
+            .post(`/api/v1/projects/${id}/members`)
+            .set(bearer(alice))
+            .send({ email: 'bob@example.com', role: 'viewer' })
+            .expect(201);
+          await request(app)
+            .delete(`/api/v1/projects/${id}/members/${bob.id}`)
+            .set(bearer(alice))
+            .expect(200);
+
+          const res = await request(app).get(`/api/v1/projects/${id}/people`).set(bearer(alice));
+          expect(res.body.data.people).toEqual([
+            { userId: alice.id, label: 'Alice', role: 'data_engineer', owner: true },
+          ]);
+        });
+
+        it('validates the id, requires authentication and hides the project from outsiders', async () => {
+          const id = await createProject(alice);
+          await request(app).get('/api/v1/projects/nope/people').set(bearer(alice)).expect(400);
+          await request(app).get(`/api/v1/projects/${id}/people`).expect(401);
+          await request(app).get(`/api/v1/projects/${id}/people`).set(bearer(bob)).expect(404);
+        });
+      });
+
       describe('GET /projects/:id/audit', () => {
         it('lists project audit entries newest first, to any member', async () => {
           const id = await createProject(alice);
