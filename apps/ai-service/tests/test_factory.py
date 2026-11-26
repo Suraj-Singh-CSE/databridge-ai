@@ -86,7 +86,7 @@ def test_settings_reject_negative_prices(monkeypatch: pytest.MonkeyPatch) -> Non
 def test_default_services_build_lazily_and_close(settings: Settings) -> None:
     services = build_services(settings)
 
-    assert set(services.readiness_checks) == {"redis", "mongodb"}
+    assert set(services.readiness_checks) == {"redis", "mongodb", "storage"}
     assert isinstance(services.gateway.provider, MockProvider)
     # No server is running: building and closing must not need one.
     with TestClient(create_app(settings, services)) as client:
@@ -106,7 +106,8 @@ async def test_default_readiness_reports_unavailable_without_servers(settings: S
     finally:
         await services.close()
 
-    assert checks == {"redis": "unavailable", "mongodb": "unavailable"}
+    # The default local storage folder does not exist here either.
+    assert checks == {"redis": "unavailable", "mongodb": "unavailable", "storage": "unavailable"}
 
 
 def test_process_limiter_is_shared_per_limit() -> None:

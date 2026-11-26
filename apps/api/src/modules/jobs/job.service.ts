@@ -1,4 +1,8 @@
-import type { AiServiceClient } from '../../ai-service.client.js';
+import {
+  AI_SERVICE_WAKING,
+  AiServiceError,
+  type AiServiceClient,
+} from '../../ai-service.client.js';
 import { AppError } from '../../errors.js';
 import type { Logger } from '../../logger.js';
 import type { Repositories } from '../../repositories.js';
@@ -50,15 +54,24 @@ export interface JobServiceDeps {
   aiService: AiServiceClient;
   logger: Logger;
   staleAfterMs: number;
+  /** A queued job no worker claimed for this long is failed with QUEUE_LOST (ADR 0026). */
+  queuedStaleAfterMs?: number;
   now?: () => Date;
 }
 
 export const QUEUE_UNAVAILABLE_MESSAGE =
   'The job could not be started because the job queue is unavailable. Please try again shortly.';
+export const AI_SERVICE_WAKING_MESSAGE =
+  'Starting the AI service — this can take up to a minute on the free plan. Please try again in a moment.';
 const WORKER_LOST = {
   code: 'WORKER_LOST',
   message: 'The worker running this job stopped responding. Please start the job again.',
 };
+const QUEUE_LOST = {
+  code: 'QUEUE_LOST',
+  message: 'The job was lost while waiting to start — please run it again.',
+};
+const DEFAULT_QUEUED_STALE_MS = 10 * 60 * 1000;
 
 type SourceJobType = 'profile' | 'mapping' | 'standardise';
 const SOURCE_JOBS: ReadonlySet<JobType> = new Set<SourceJobType>([
@@ -183,6 +196,7 @@ export function createJobService({
   aiService,
   logger,
   staleAfterMs,
+  queuedStaleAfterMs = DEFAULT_QUEUED_STALE_MS,
   now = () => new Date(),
 }: JobServiceDeps): JobService {
   /** Live updates are best effort: the stream also re-reads MongoDB on every keep-alive. */
@@ -207,19 +221,30 @@ export function createJobService({
   }
 
   /**
-   * Lazy stale check: a running job whose worker has not sent a heartbeat for staleAfterMs is
-   * failed with WORKER_LOST the next time anyone reads it (conditional, so it never overrides
-   * a status the worker set meanwhile).
+   * Lazy stale checks, applied the next time anyone reads the job. Both are conditional writes
+   * (the same fencing as the worker's: status and last sign of life must still match), so they
+   * never override a status the worker set meanwhile, and a worker that claims the job later
+   * finds it failed and leaves it alone.
+   *
+   * - running, no heartbeat for staleAfterMs: WORKER_LOST (worker crashed or restarted);
+   * - queued and never claimed for queuedStaleAfterMs: QUEUE_LOST (the broker lost the
+   *   message). Not while another job runs with a fresh heartbeat, since a single busy worker
+   *   (one job at a time on free hosting) is not a lost queue.
    */
   async function withStaleCheck(job: Job): Promise<Job> {
-    if (job.status !== 'running') return job;
+    if (job.status !== 'running' && job.status !== 'queued') return job;
     const at = now();
-    const cutoff = new Date(at.getTime() - staleAfterMs);
+    const running = job.status === 'running';
+    const cutoff = new Date(at.getTime() - (running ? staleAfterMs : queuedStaleAfterMs));
     const lastSeen = job.heartbeatAt ?? job.startedAt ?? job.queuedAt;
     if (lastSeen >= cutoff) return job;
-    const failed = await repos.jobs.failIfStale(job.id, cutoff, WORKER_LOST, at);
+    if (!running && (await repos.jobs.anyRunningSince(new Date(at.getTime() - staleAfterMs)))) {
+      return job;
+    }
+    const reason = running ? WORKER_LOST : QUEUE_LOST;
+    const failed = await repos.jobs.failIfStale(job.id, job.status, cutoff, reason, at);
     if (!failed) return (await repos.jobs.findById(job.id)) ?? job;
-    logger.warn({ jobId: job.id }, 'job marked WORKER_LOST');
+    logger.warn({ jobId: job.id }, `job marked ${reason.code}`);
     await announce(failed);
     return failed;
   }
@@ -523,17 +548,16 @@ export function createJobService({
         );
       } catch (error) {
         logger.error({ jobId: job.id, err: String(error) }, 'job enqueue failed');
+        const waking = error instanceof AiServiceError && error.code === AI_SERVICE_WAKING;
+        const code = waking ? 'AI_SERVICE_WAKING' : 'QUEUE_UNAVAILABLE';
+        const message = waking ? AI_SERVICE_WAKING_MESSAGE : QUEUE_UNAVAILABLE_MESSAGE;
         const failed = await repos.jobs.finishIfActive(
           job.id,
-          {
-            status: 'failed',
-            message: QUEUE_UNAVAILABLE_MESSAGE,
-            error: { code: 'QUEUE_UNAVAILABLE', message: QUEUE_UNAVAILABLE_MESSAGE },
-          },
+          { status: 'failed', message, error: { code, message } },
           now(),
         );
         if (failed) await announce(failed);
-        throw new AppError(503, 'QUEUE_UNAVAILABLE', QUEUE_UNAVAILABLE_MESSAGE, { jobId: job.id });
+        throw new AppError(503, code, message, { jobId: job.id });
       }
       return job;
     },

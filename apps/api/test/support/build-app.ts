@@ -9,6 +9,7 @@ import { createApp } from '../../src/app.js';
 import { loadConfig } from '../../src/config.js';
 import { createLogger } from '../../src/logger.js';
 import { createPasswordHasher } from '../../src/modules/auth/password.js';
+import type { ReadinessChecks } from '../../src/readiness.js';
 import type { Repositories } from '../../src/repositories.js';
 import { LocalDiskStorage } from '../../src/storage/local-disk.storage.js';
 import type { FileStorage } from '../../src/storage/storage.types.js';
@@ -32,6 +33,7 @@ export interface TestAppOptions {
   storage?: FileStorage;
   jobEvents?: JobEventBus;
   aiService?: AiServiceClient;
+  readiness?: ReadinessChecks;
 }
 
 export function buildTestApp(options: TestAppOptions = {}): Express {
@@ -45,5 +47,6 @@ export function buildTestApp(options: TestAppOptions = {}): Express {
     storage: options.storage ?? tempStorage(),
     jobEvents: options.jobEvents ?? new MemoryJobEventBus(),
     aiService: options.aiService ?? new FakeAiService(),
+    ...(options.readiness ? { readiness: options.readiness } : {}),
   });
 }

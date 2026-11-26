@@ -4,7 +4,10 @@ import type { Express } from 'express';
 import request from 'supertest';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { QUEUE_UNAVAILABLE_MESSAGE } from '../../src/modules/jobs/job.service.js';
+import {
+  AI_SERVICE_WAKING_MESSAGE,
+  QUEUE_UNAVAILABLE_MESSAGE,
+} from '../../src/modules/jobs/job.service.js';
 import type { Repositories } from '../../src/repositories.js';
 
 import type { Harness } from './api-suite.js';
@@ -239,6 +242,29 @@ export function defineJobsSuite(label: string, harness: JobsHarness): void {
         ]);
       });
 
+      it('fails the job with AI_SERVICE_WAKING and answers 503 when the ai-service stays asleep', async () => {
+        ai.waking = true;
+        const res = await request(app)
+          .post(`/api/v1/projects/${projectId}/jobs`)
+          .set(bearer(owner))
+          .send(DEMO);
+
+        expect(res.status).toBe(503);
+        expect(res.body.error).toMatchObject({
+          code: 'AI_SERVICE_WAKING',
+          message: AI_SERVICE_WAKING_MESSAGE,
+        });
+        expect(AI_SERVICE_WAKING_MESSAGE).toMatch(/up to a minute on the free plan/);
+        const jobId = res.body.error.details.jobId as string;
+        expect(await repos.jobs.findById(jobId)).toMatchObject({
+          status: 'failed',
+          error: { code: 'AI_SERVICE_WAKING', message: AI_SERVICE_WAKING_MESSAGE },
+        });
+        // The type is not blocked: the next start succeeds once the service is up.
+        ai.waking = false;
+        await startJob();
+      });
+
       it('validates the project id and requires authentication', async () => {
         await request(app)
           .post('/api/v1/projects/nope/jobs')
@@ -441,6 +467,56 @@ export function defineJobsSuite(label: string, harness: JobsHarness): void {
           .set(bearer(outsider))
           .expect(404);
         await request(app).get(`/api/v1/projects/${projectId}/jobs`).expect(401);
+      });
+
+      it('reports a queued job no worker claimed as failed QUEUE_LOST', async () => {
+        const app2 = appWith({ JOB_QUEUED_STALE_AFTER_SECONDS: '600' });
+        const lost = await startJob();
+        const waiting = await startJob();
+        await harness.workerUpdate(repos, lost, { queuedAt: new Date(Date.now() - 601_000) });
+
+        const res = await request(app2).get(`/api/v1/jobs/${lost}`).set(bearer(owner));
+
+        expect(res.body.data.job).toMatchObject({
+          status: 'failed',
+          message: 'The job was lost while waiting to start — please run it again.',
+          error: { code: 'QUEUE_LOST' },
+        });
+        expect((await repos.jobs.findById(waiting))?.status).toBe('queued');
+        expect(events.published.map((p) => p.jobId)).toEqual([lost]);
+        // Terminal: nothing moves it back (the worker's fenced claim needs queued or running).
+        expect(
+          await repos.jobs.finishIfActive(
+            lost,
+            { status: 'cancelled', message: 'x', error: null },
+            new Date(),
+          ),
+        ).toBeNull();
+      });
+
+      it('keeps an old queued job while another job is running (one busy worker)', async () => {
+        const app2 = appWith({
+          JOB_QUEUED_STALE_AFTER_SECONDS: '600',
+          JOB_STALE_AFTER_SECONDS: '60',
+        });
+        const busy = await startJob();
+        const behind = await startJob();
+        const old = new Date(Date.now() - 601_000);
+        await harness.workerUpdate(repos, busy, {
+          status: 'running',
+          attempts: 1,
+          startedAt: old,
+          heartbeatAt: new Date(),
+        });
+        await harness.workerUpdate(repos, behind, { queuedAt: old });
+
+        const res = await request(app2).get(`/api/v1/jobs/${behind}`).set(bearer(owner));
+        expect(res.body.data.job.status).toBe('queued');
+
+        // The busy job goes silent: now the queued one is lost too.
+        await harness.workerUpdate(repos, busy, { heartbeatAt: new Date(Date.now() - 61_000) });
+        const later = await request(app2).get(`/api/v1/jobs/${behind}`).set(bearer(owner));
+        expect(later.body.data.job.error).toMatchObject({ code: 'QUEUE_LOST' });
       });
 
       it('reports a running job with an old heartbeat as failed WORKER_LOST', async () => {

@@ -23,6 +23,8 @@ export interface JobEventBus {
   /** Resolves once updates for the job are being received; call the result to stop. */
   subscribe(jobId: string, listener: JobUpdateListener): Promise<() => void>;
   publish(jobId: string, update: JobUpdate): Promise<void>;
+  /** Readiness check: throws unless Redis answers. */
+  ping(): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -107,6 +109,9 @@ export function createRedisJobEventBus(redisUrl: string, logger: Logger): JobEve
     },
     async publish(jobId, update) {
       await publisher.publish(jobChannel(jobId), JSON.stringify(update));
+    },
+    async ping() {
+      await publisher.ping();
     },
     async close() {
       listeners.clear();

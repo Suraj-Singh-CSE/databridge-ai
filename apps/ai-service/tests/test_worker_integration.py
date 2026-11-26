@@ -27,6 +27,7 @@ from redis.exceptions import RedisError
 from app.config import Settings
 from app.profiling.store import ProfileStore
 from app.profiling.zip_guard import ZipLimits
+from app.storage import LocalDiskStorage
 from app.worker.celery_config import create_celery
 from app.worker.context import JobContext
 from app.worker.handlers import build_registry
@@ -111,7 +112,7 @@ def celery(redis: Redis, collection: Any, uploads: Path) -> Iterator[Celery]:  #
     profiler = ProfileHandler(
         ProfileStore(collection.database),
         ProfilerSettings(
-            upload_dir=uploads,
+            storage=LocalDiskStorage(uploads),
             max_rows=200_000,
             zip_limits=ZipLimits(max_uncompressed_bytes=200 * 1024 * 1024, max_ratio=100),
         ),

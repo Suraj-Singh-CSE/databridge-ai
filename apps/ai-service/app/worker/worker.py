@@ -1,7 +1,6 @@
 """Wiring for the worker process: settings -> Celery app with ``jobs.run`` registered."""
 
 from functools import cache
-from pathlib import Path
 
 from celery import Celery
 from pymongo import MongoClient
@@ -36,9 +35,10 @@ from app.sql.agent import AgentSettings
 from app.sql.sandbox import SandboxLimits
 from app.sql.store import SqlStore
 from app.standardise.store import StandardiseStore
+from app.storage import ObjectStorage, create_storage
 from app.worker.celery_config import create_celery
 from app.worker.handlers import build_registry
-from app.worker.handlers.candidates import CandidatesHandler
+from app.worker.handlers.candidates import CandidatesHandler, MatchingLimits
 from app.worker.handlers.clustering import ClusteringHandler, ClusteringSettings
 from app.worker.handlers.export import ExportHandler, ExportSettings
 from app.worker.handlers.knowledge import KnowledgeIndexHandler, KnowledgeSettings
@@ -49,6 +49,7 @@ from app.worker.handlers.quality import QualityHandler, QualitySettings
 from app.worker.handlers.scoring import ScoringHandler
 from app.worker.handlers.sql import SqlDraftHandler, SqlRunHandler, SqlSettings
 from app.worker.handlers.standardise import StandardiseHandler
+from app.worker.keepalive import KeepAlive, install_keepalive
 from app.worker.runner import JobRunner, RetryPolicy
 from app.worker.signals import JobSignals
 from app.worker.store import Document, JobStore
@@ -64,9 +65,9 @@ def build_runner(settings: Settings) -> JobRunner:
     ``match_decisions``, ``clusters``, ``golden_records``, ``cluster_summaries``,
     ``cluster_approvals``, ``exports``, ``sql_versions``, ``sql_runs``, ``quality_rules``,
     ``quality_runs``, ``audit_logs``, ``users``, ``projects``, ``knowledge_chunks``,
-    ``knowledge_summaries``, ``llm_calls``), Redis,
-    the storage folder (uploads read, exports written), the LLM gateway and an in-memory DuckDB
-    per SQL job. Clients connect lazily."""
+    ``knowledge_summaries``, ``llm_calls``), Redis, the object storage (uploads read, exports
+    written; ``STORAGE_DRIVER``), the LLM gateway and an in-memory DuckDB per SQL job.
+    Clients connect lazily."""
     mongo: MongoClient[Document] = MongoClient(
         settings.mongodb_uri, serverSelectionTimeoutMS=CLIENT_TIMEOUT_SECONDS * 1000
     )
@@ -82,7 +83,8 @@ def build_runner(settings: Settings) -> JobRunner:
         backoff_seconds=settings.job_retry_backoff_seconds,
         backoff_max_seconds=settings.job_retry_backoff_max_seconds,
     )
-    reading = profiler_settings(settings)
+    storage = create_storage(settings)
+    reading = profiler_settings(settings, storage)
     profiler = ProfileHandler(ProfileStore(database), reading)
 
     def gateway() -> LLMGateway:
@@ -98,12 +100,16 @@ def build_runner(settings: Settings) -> JobRunner:
     mapper = MappingHandler(MappingStore(database), gateway, mapping_settings(settings))
     standardiser = StandardiseHandler(StandardiseStore(database), reading)
     blocker = CandidatesHandler(
-        CandidateStore(database), BlockingConfig(max_block_size=settings.blocking_max_block_size)
+        CandidateStore(database),
+        BlockingConfig(max_block_size=settings.blocking_max_block_size),
+        MatchingLimits(
+            max_records=settings.matching_max_records, max_pairs=settings.matching_max_pairs
+        ),
     )
     scorer = ScoringHandler(ScoreStore(database), scoring_config(settings))
     reviewer = PairReviewHandler(PairReviewStore(database), gateway, review_settings(settings))
     clusterer = ClusteringHandler(ClusterStore(database), clustering_settings(settings))
-    exporter = ExportHandler(ExportStore(database), export_settings(settings))
+    exporter = ExportHandler(ExportStore(database), export_settings(settings, storage))
     sql_store = SqlStore(database)
     sql = sql_settings(settings)
     registry = build_registry(
@@ -136,9 +142,10 @@ def mapping_settings(settings: Settings) -> MappingHandlerSettings:
     )
 
 
-def profiler_settings(settings: Settings) -> ProfilerSettings:
+def profiler_settings(settings: Settings, storage: ObjectStorage) -> ProfilerSettings:
     return ProfilerSettings(
-        upload_dir=Path(settings.upload_dir),
+        storage=storage,
+        max_bytes=settings.max_upload_bytes,
         max_rows=settings.max_upload_rows,
         zip_limits=ZipLimits(
             max_uncompressed_bytes=settings.xlsx_max_uncompressed_bytes,
@@ -151,6 +158,9 @@ def create_worker_app(settings: Settings) -> Celery:
     configure_logging(settings.log_level)
     celery = create_celery(settings)
     register_tasks(celery, cache(lambda: build_runner(settings)))
+    target = settings.self_ping_target
+    if target:
+        install_keepalive(KeepAlive(target, settings.self_ping_interval_seconds))
     return celery
 
 
@@ -184,8 +194,10 @@ def clustering_settings(settings: Settings) -> ClusteringSettings:
     )
 
 
-def export_settings(settings: Settings) -> ExportSettings:
-    return ExportSettings(root=Path(settings.upload_dir), max_rows=settings.export_max_rows)
+def export_settings(settings: Settings, storage: ObjectStorage) -> ExportSettings:
+    return ExportSettings(
+        storage=storage, max_rows=settings.export_max_rows, temp_dir=settings.storage_temp_dir
+    )
 
 
 def sql_settings(settings: Settings) -> SqlSettings:

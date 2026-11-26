@@ -14,6 +14,7 @@ from pymongo.errors import AutoReconnect
 
 from app.profiling.zip_guard import ZipLimits
 from app.standardise.store import StandardiseStore
+from app.storage import LocalDiskStorage, ObjectStorage
 from app.worker.context import JobContext
 from app.worker.handlers import build_registry
 from app.worker.handlers import standardise as module
@@ -49,15 +50,17 @@ E164 = re.compile(r"^\+91[6-9]\d{9}$")
 class World:
     """A project with an uploaded, profiled and mapped source, and a runner wired to it."""
 
-    def __init__(self, tmp_path: Path) -> None:
+    def __init__(self, tmp_path: Path, storage: ObjectStorage | None = None) -> None:
         self.db: Any = mongomock.MongoClient().db
         self.redis = fakeredis.FakeRedis()
         self.uploads = tmp_path / "uploads"
         self.uploads.mkdir()
+        # Local folder by default; another driver also gets every file added (see add_source).
+        self.storage = storage or LocalDiskStorage(self.uploads)
         self.project_id = str(ObjectId())
         self.store = StandardiseStore(self.db)
         settings = ProfilerSettings(
-            upload_dir=self.uploads,
+            storage=self.storage,
             max_rows=200_000,
             zip_limits=ZipLimits(max_uncompressed_bytes=200 * MIB, max_ratio=100),
         )
@@ -75,6 +78,8 @@ class World:
         key = f"projects/{self.project_id}/sources/{source_id}/original.{fmt}"
         (self.uploads / key).parent.mkdir(parents=True)
         shutil.copyfile(SAMPLES / file, self.uploads / key)
+        if not isinstance(self.storage, LocalDiskStorage):
+            self.storage.upload(self.uploads / key, key, content_type="application/octet-stream")
         self.db.sources.insert_one(
             {
                 "_id": ObjectId(source_id),

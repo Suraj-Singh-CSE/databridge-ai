@@ -28,7 +28,7 @@ from app.standardise.plan import (
 from app.standardise.store import StandardiseStore
 from app.worker.context import JobContext
 from app.worker.errors import TRANSIENT_ERRORS, JobCancelledError, JobFailedError
-from app.worker.handlers.profile import ProfilerSettings, read_source_table, source_path
+from app.worker.handlers.profile import ProfilerSettings, read_source_table, source_file
 from app.worker.registry import JobResult
 
 logger = structlog.get_logger("app.worker.handlers.standardise")
@@ -67,11 +67,11 @@ class StandardiseHandler:
                 "SOURCE_NOT_PROFILED", "Profile and map this source before standardising it."
             )
         plan = self._plan(ctx.project_id, source_id)
-        path = source_path(self._settings.upload_dir, ctx.project_id, source_id, source)
         self._check_cancel(ctx)
 
         ctx.report(5, "Reading the file")
-        table = read_source_table(path, source["format"], self._settings)
+        with source_file(self._settings, ctx.project_id, source_id, source) as path:
+            table = read_source_table(path, source["format"], self._settings)
         missing = plan.columns - set(table.columns)
         if missing:
             raise JobFailedError(

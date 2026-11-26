@@ -4,7 +4,7 @@ import type {
   AssistantAnswer,
   EnqueueJobInput,
 } from '../../src/ai-service.client.js';
-import { AiServiceError } from '../../src/ai-service.client.js';
+import { AI_SERVICE_WAKING, AiServiceError } from '../../src/ai-service.client.js';
 import type {
   JobEventBus,
   JobUpdate,
@@ -17,6 +17,8 @@ export class FakeAiService implements AiServiceClient {
   readonly cancelled: { jobId: string; requestId: string }[] = [];
   readonly asked: { input: AskAssistantInput; requestId: string }[] = [];
   down = false;
+  /** Makes enqueueJob fail as if the ai-service did not wake up in time. */
+  waking = false;
   /** The ai-service's error code to fail `askAssistant` with (e.g. `KNOWLEDGE_NOT_BUILT`). */
   askError: { status: number; code: string } | null = null;
   /** What `askAssistant` answers; by default a grounded answer citing one quality chunk. */
@@ -44,6 +46,7 @@ export class FakeAiService implements AiServiceClient {
   async enqueueJob(input: EnqueueJobInput, requestId: string): Promise<void> {
     await Promise.resolve();
     if (this.down) throw new AiServiceError('ai-service answered 503', 503);
+    if (this.waking) throw new AiServiceError('did not wake', 503, AI_SERVICE_WAKING);
     this.enqueued.push({ input, requestId });
   }
 
@@ -56,6 +59,7 @@ export class FakeAiService implements AiServiceClient {
   async askAssistant(input: AskAssistantInput, requestId: string): Promise<AssistantAnswer> {
     await Promise.resolve();
     if (this.down) throw new AiServiceError('ai-service unreachable');
+    if (this.waking) throw new AiServiceError('did not wake', 503, AI_SERVICE_WAKING);
     if (this.askError) {
       throw new AiServiceError('ai-service answered', this.askError.status, this.askError.code);
     }
@@ -96,6 +100,14 @@ export class MemoryJobEventBus implements JobEventBus {
     await Promise.resolve();
     this.published.push({ jobId, update });
     this.emit(jobId, update);
+  }
+
+  /** Makes ping() reject, like Redis being down. */
+  failPing = false;
+
+  async ping(): Promise<void> {
+    await Promise.resolve();
+    if (this.failPing) throw new Error('redis down');
   }
 
   async close(): Promise<void> {

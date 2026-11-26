@@ -5,6 +5,8 @@ import { rateLimit } from 'express-rate-limit';
 import helmet from 'helmet';
 
 import { createAiServiceClient, type AiServiceClient } from './ai-service.client.js';
+import { pingDb } from './db.js';
+import { runReadiness, type ReadinessChecks } from './readiness.js';
 import type { Config } from './config.js';
 import { AppError } from './errors.js';
 import type { Logger } from './logger.js';
@@ -63,6 +65,8 @@ export interface AppDeps {
   jobEvents: JobEventBus;
   /** Defaults to the HTTP client for AI_SERVICE_URL. Tests inject a fake. */
   aiService?: AiServiceClient;
+  /** Checks for GET /api/v1/ready; defaults to MongoDB (mongoose) and Redis (the event bus). */
+  readiness?: ReadinessChecks;
 }
 
 export function createApp({
@@ -73,6 +77,7 @@ export function createApp({
   storage,
   jobEvents,
   aiService,
+  readiness,
 }: AppDeps): Express {
   const files = storage ?? createStorage(config);
   const tokens = createTokenService(config);
@@ -109,6 +114,7 @@ export function createApp({
     aiService: aiClient,
     logger,
     staleAfterMs: config.JOB_STALE_AFTER_SECONDS * 1000,
+    queuedStaleAfterMs: config.JOB_QUEUED_STALE_AFTER_SECONDS * 1000,
   });
   const reviewService = createReviewService(repos, jobService, audit);
   const exportService = createExportService(repos, files, audit);
@@ -146,8 +152,25 @@ export function createApp({
   app.use(express.json({ limit: '1mb' }));
   app.use(cookieParser());
 
+  // Liveness: the process answers. Readiness: its dependencies answer too (ADR 0026).
   app.get('/api/v1/health', (_req, res) => {
     res.json({ data: { status: 'ok', service: 'api' }, error: null });
+  });
+  const checks = readiness ?? { mongodb: pingDb, redis: () => jobEvents.ping() };
+  app.get('/api/v1/ready', async (_req, res) => {
+    const results = await runReadiness(checks);
+    if (Object.values(results).every((result) => result === 'ok')) {
+      res.json({ data: { status: 'ready', checks: results }, error: null });
+      return;
+    }
+    res.status(503).json({
+      data: null,
+      error: {
+        code: 'NOT_READY',
+        message: 'A dependency is unavailable.',
+        details: { checks: results },
+      },
+    });
   });
 
   const authLimiter = rateLimit({

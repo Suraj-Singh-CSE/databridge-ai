@@ -83,7 +83,18 @@ export interface JobRepository {
    * Returns the updated job, or null when it had already ended (or does not exist).
    */
   finishIfActive(id: string, ending: JobEnding, at: Date): Promise<Job | null>;
-  /** Like finishIfActive, but only for a running job whose last heartbeat is before `cutoff`. */
-  failIfStale(id: string, cutoff: Date, error: JobError, at: Date): Promise<Job | null>;
+  /**
+   * Like finishIfActive (status failed), but only while the job still has `status` and its last
+   * sign of life (heartbeat, else queued time) is before `cutoff`.
+   */
+  failIfStale(
+    id: string,
+    status: 'queued' | 'running',
+    cutoff: Date,
+    error: JobError,
+    at: Date,
+  ): Promise<Job | null>;
+  /** Some job of any project is running with a heartbeat at or after `since` (a busy worker). */
+  anyRunningSince(since: Date): Promise<boolean>;
   deleteByProject(projectId: string): Promise<number>;
 }

@@ -77,7 +77,13 @@ const tick = () => new Date((clock += 1));
 /** A worker's direct write to a job (the Python worker writes MongoDB itself). */
 export type WorkerPatch = Partial<
   Pick<Job, 'status' | 'progress' | 'message' | 'result' | 'error' | 'attempts'>
-> & { startedAt?: Date | null; heartbeatAt?: Date | null; finishedAt?: Date | null };
+> & {
+  startedAt?: Date | null;
+  heartbeatAt?: Date | null;
+  finishedAt?: Date | null;
+  /** Tests age a queued job with this (the api sets it on create). */
+  queuedAt?: Date;
+};
 
 /** What the Python profiler writes: column profiles plus the source summary. */
 export interface ProfileWrite {
@@ -512,10 +518,11 @@ export function createMemoryRepositories(): MemoryRepositories {
         Object.assign(job, { status, message, error, finishedAt: at, updatedAt: tick() });
         return structuredClone(job);
       },
-      async failIfStale(id, cutoff, error, at) {
+      async failIfStale(id, status, cutoff, error, at) {
         await Promise.resolve();
         const job = jobs.get(id);
-        if (job?.status !== 'running') return null;
+        if (job?.status !== status) return null;
+        if (status === 'queued' && job.queuedAt >= cutoff) return null;
         if (job.heartbeatAt && job.heartbeatAt >= cutoff) return null;
         Object.assign(job, {
           status: 'failed',
@@ -525,6 +532,12 @@ export function createMemoryRepositories(): MemoryRepositories {
           updatedAt: tick(),
         });
         return structuredClone(job);
+      },
+      async anyRunningSince(since) {
+        await Promise.resolve();
+        return [...jobs.values()].some(
+          (j) => j.status === 'running' && j.heartbeatAt !== null && j.heartbeatAt >= since,
+        );
       },
       async deleteByProject(projectId) {
         await Promise.resolve();

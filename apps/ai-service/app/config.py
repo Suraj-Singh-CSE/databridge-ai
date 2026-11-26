@@ -3,7 +3,7 @@
 from functools import lru_cache
 from typing import Literal, Self
 
-from pydantic import BaseModel, Field, SecretStr, model_validator
+from pydantic import BaseModel, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 DEFAULT_GEMINI_MODEL = "gemini-3.5-flash-lite"
@@ -80,10 +80,52 @@ class Settings(BaseSettings):
     job_retry_backoff_seconds: float = Field(default=2.0, gt=0)
     job_retry_backoff_max_seconds: float = Field(default=60.0, gt=0)
 
-    # ---- column profiling (ADR 0011)
-    # Root of the storage volume shared with apps/api (same folder as the api's UPLOAD_DIR):
-    # uploads are only read here; the export job writes under projects/<id>/exports/.
+    # ---- process runtime (ADR 0026)
+    # Port uvicorn binds (Render injects PORT).
+    port: int = Field(default=8000, ge=1, le=65_535)
+    # true: ``python -m app.supervisor`` also runs the Celery worker in this container (free
+    # hosting has no background workers); false: a separate ai-worker process runs the jobs.
+    run_worker: bool = False
+    # Celery pool: "prefork" (child processes; time limits enforced, an out-of-memory kill only
+    # ends the child) or "solo" (jobs in the worker process itself: least memory, but the job
+    # time limits are not enforced).
+    worker_pool: Literal["prefork", "solo"] = "prefork"
+    # Jobs run at the same time (prefork children). The free demo uses 1.
+    worker_concurrency: int = Field(default=2, ge=1, le=16)
+    # A prefork child using more than this many MB after a job is replaced; 0 = never.
+    worker_max_memory_per_child_mb: int = Field(default=0, ge=0, le=16_384)
+    # Seconds the supervisor waits after SIGTERM before it kills a process still running.
+    shutdown_grace_seconds: float = Field(default=25.0, gt=0, le=600)
+    # While a job runs, the worker requests this public URL every SELF_PING_INTERVAL_SECONDS so
+    # a free web service that sleeps without inbound HTTP stays awake. "" = RENDER_EXTERNAL_URL
+    # + /internal/v1/health when Render sets it, else off.
+    self_ping_url: str = Field(default="", pattern=r"^(https?://\S+)?$")
+    self_ping_interval_seconds: float = Field(default=300.0, ge=10, le=3600)
+    render_external_url: str = Field(default="", pattern=r"^(https?://\S+)?$")
+
+    # ---- object storage (ADR 0009, ADR 0026): the same variables as apps/api.
+    # "local": the folder shared with apps/api (UPLOAD_DIR); "s3": an S3-compatible bucket
+    # (Cloudflare R2, MinIO, AWS S3). Uploads are only read; exports are written.
+    storage_driver: Literal["local", "s3"] = "local"
+    # Root of the storage folder for STORAGE_DRIVER=local (same folder as the api's UPLOAD_DIR).
     upload_dir: str = Field(default="./data/uploads", min_length=1)
+    # STORAGE_DRIVER=s3 only. Bucket and region are required (R2 uses region "auto").
+    s3_bucket: str | None = Field(default=None, min_length=3, max_length=63)
+    s3_region: str | None = Field(default=None, min_length=1, max_length=64)
+    # e.g. https://<account>.r2.cloudflarestorage.com or http://minio:9000; unset = AWS S3.
+    s3_endpoint: str | None = Field(default=None, pattern=r"^https?://\S+$")
+    # true for MinIO (bucket in the path instead of the host name).
+    s3_force_path_style: bool = False
+    # Both or neither; neither = boto3's default credential chain.
+    s3_access_key_id: SecretStr | None = None
+    s3_secret_access_key: SecretStr | None = None
+    # Folder for the temporary copies of downloaded uploads and of exports before upload;
+    # "" = the system temporary folder.
+    storage_temp_dir: str = ""
+    # Largest stored upload read (same variable and default as the api's upload limit).
+    max_upload_bytes: int = Field(default=50 * MIB, ge=1024)
+
+    # ---- column profiling (ADR 0011)
     # Most data rows profiled in one file; same variable and default as the api's upload limit.
     max_upload_rows: int = Field(default=200_000, ge=1)
     # Zip-bomb guard for XLSX files (also applied by the api's preview).
@@ -103,6 +145,10 @@ class Settings(BaseSettings):
     # ---- candidate pairs (ADR 0015)
     # Blocks with more records than this are skipped (and counted), not paired.
     blocking_max_block_size: int = Field(default=200, ge=2, le=5000)
+    # Memory caps (ADR 0026): most staged records read into memory for matching, and most
+    # candidate pairs kept (scoring and clustering load them all).
+    matching_max_records: int = Field(default=1_000_000, ge=2, le=10_000_000)
+    matching_max_pairs: int = Field(default=5_000_000, ge=1, le=50_000_000)
 
     # ---- pair scoring (ADR 0016)
     # Score at or above: "match"; at or above the maybe threshold: "maybe"; else "non_match".
@@ -195,6 +241,40 @@ class Settings(BaseSettings):
     def paced_requests_per_minute(self) -> int:
         """The pacing limit in force: 0 for the mock provider, which has no quota to respect."""
         return 0 if self.llm_provider == "mock" else self.llm_max_requests_per_minute
+
+    @field_validator(
+        "s3_bucket",
+        "s3_region",
+        "s3_endpoint",
+        "s3_access_key_id",
+        "s3_secret_access_key",
+        mode="before",
+    )
+    @classmethod
+    def _empty_is_unset(cls, value: object) -> object:
+        # Compose passes unset variables as "" (e.g. S3_ENDPOINT: ${S3_ENDPOINT:-}).
+        return None if isinstance(value, str) and value.strip() == "" else value
+
+    @property
+    def self_ping_target(self) -> str | None:
+        """The URL the worker requests while a job runs, or None (keep-alive off)."""
+        if self.self_ping_url:
+            return self.self_ping_url
+        if self.render_external_url:
+            return f"{self.render_external_url.rstrip('/')}/internal/v1/health"
+        return None
+
+    @model_validator(mode="after")
+    def _s3_settings_complete(self) -> Self:
+        if self.storage_driver != "s3":
+            return self
+        missing = [name for name in ("s3_bucket", "s3_region") if not getattr(self, name)]
+        if missing:
+            names = " and ".join(n.upper() for n in missing)
+            raise ValueError(f"{names} must be set when STORAGE_DRIVER=s3")
+        if (self.s3_access_key_id is None) != (self.s3_secret_access_key is None):
+            raise ValueError("set both S3_ACCESS_KEY_ID and S3_SECRET_ACCESS_KEY, or neither")
+        return self
 
     @model_validator(mode="after")
     def _hard_limit_after_soft_limit(self) -> Self:

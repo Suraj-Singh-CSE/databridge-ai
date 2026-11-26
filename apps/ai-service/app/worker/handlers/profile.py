@@ -10,7 +10,8 @@ Safe to run again: a retry or a second job replaces the earlier profile (see Pro
 
 import re
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -22,6 +23,13 @@ from app.profiling.profiler import profile_table
 from app.profiling.reader import SourceFormat, SourceReadError, Table, read_table
 from app.profiling.store import Document, ProfileStore
 from app.profiling.zip_guard import ZipLimits, ZipTooComplexError, ZipUnreadableError
+from app.storage import (
+    InvalidStorageKeyError,
+    ObjectStorage,
+    StorageNotFoundError,
+    StorageTooLargeError,
+    source_key,
+)
 from app.worker.context import JobContext
 from app.worker.errors import TRANSIENT_ERRORS, JobCancelledError, JobFailedError
 from app.worker.registry import JobResult
@@ -46,33 +54,55 @@ class ProfilePayload(BaseModel):
 
 @dataclass(frozen=True)
 class ProfilerSettings:
-    upload_dir: Path
+    storage: ObjectStorage
     max_rows: int
     zip_limits: ZipLimits
+    # Largest stored file read (the api's MAX_UPLOAD_BYTES): downloads stop past it.
+    max_bytes: int = 50 * 1024 * 1024
 
 
-def source_path(root: Path, project_id: str, source_id: str, source: Document) -> Path:
-    """The source's file on the uploads volume, refusing anything outside ``root``.
+def source_file_key(project_id: str, source_id: str, source: Document) -> str:
+    """The source's storage key, refusing anything but the one apps/api builds from the ids.
 
-    The key must be exactly the one apps/api builds from the ids (ADR 0009); it is never taken
-    on trust, and the resolved path (symlinks followed) must still be inside the root.
+    The stored ``fileKey`` is never taken on trust (ADR 0009): it must equal the key built from
+    the job's project, the source id and the source's format.
     """
     fmt = source.get("format")
     if fmt not in _FORMATS or not re.fullmatch(_OBJECT_ID, project_id):
         raise _invalid_source()
-    expected = f"projects/{project_id}/sources/{source_id}/original.{fmt}"
+    try:
+        expected = source_key(project_id, source_id, str(fmt))
+    except InvalidStorageKeyError as error:
+        raise _invalid_source() from error
     if source.get("fileKey") != expected:
         raise _invalid_source()
-    base = root.resolve()
-    path = (base / expected).resolve()
-    if not path.is_relative_to(base):
-        raise _invalid_source()
-    if not path.is_file():
+    return expected
+
+
+@contextmanager
+def source_file(
+    settings: ProfilerSettings, project_id: str, source_id: str, source: Document
+) -> Iterator[Path]:
+    """A local copy of the source's file (the stored file itself for local storage), removed
+    on exit; plain job errors when it is missing or larger than the upload limit."""
+    key = source_file_key(project_id, source_id, source)
+    try:
+        with settings.storage.download(key, max_bytes=settings.max_bytes) as path:
+            yield path
+    except StorageNotFoundError as error:
         raise JobFailedError(
             "FILE_MISSING",
             "The file for this source is missing. Delete the source and upload the file again.",
-        )
-    return path
+        ) from error
+    except StorageTooLargeError as error:
+        mib = max(1, settings.max_bytes // (1024 * 1024))
+        raise JobFailedError(
+            "FILE_TOO_LARGE",
+            f"This file is larger than the {mib} MB limit. Split it or remove columns you do "
+            "not need, then upload it again.",
+        ) from error
+    except InvalidStorageKeyError as error:
+        raise _invalid_source() from error
 
 
 class ProfileHandler:
@@ -98,9 +128,9 @@ class ProfileHandler:
         self._store.mark_profiling(source_id, run_id)
         started = time.monotonic()
         try:
-            path = source_path(self._settings.upload_dir, ctx.project_id, source_id, source)
             fmt: SourceFormat = source["format"]
-            table, profiles = self._profile(ctx, path, fmt)
+            with source_file(self._settings, ctx.project_id, source_id, source) as path:
+                table, profiles = self._profile(ctx, path, fmt)
             ctx.report(_COLUMNS_DONE + 2, "Saving the profile")
             self._store.save_profiles(
                 project_id=ctx.project_id,

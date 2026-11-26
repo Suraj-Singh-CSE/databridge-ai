@@ -62,17 +62,22 @@ export function createMongoJobRepository(): JobRepository {
       ).lean<StoredJob>();
       return doc ? toJob(doc) : null;
     },
-    async failIfStale(id, cutoff, error, at) {
+    async failIfStale(id, status, cutoff, error, at) {
       const doc = await JobModel.findOneAndUpdate(
         {
           _id: id,
-          status: 'running',
+          status,
+          // A queued job never heartbeats until claimed: its queued time is its last sign.
+          ...(status === 'queued' ? { queuedAt: { $lt: cutoff } } : {}),
           $or: [{ heartbeatAt: { $lt: cutoff } }, { heartbeatAt: null }],
         },
         { $set: { status: 'failed', message: error.message, error, finishedAt: at } },
         AFTER_UPDATE,
       ).lean<StoredJob>();
       return doc ? toJob(doc) : null;
+    },
+    async anyRunningSince(since) {
+      return (await JobModel.exists({ status: 'running', heartbeatAt: { $gte: since } })) !== null;
     },
     async deleteByProject(projectId) {
       const result = await JobModel.deleteMany({ projectId });

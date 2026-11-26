@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+
 import { describe, expect, it } from 'vitest';
 
 import { ConfigError, loadConfig } from '../src/config.js';
@@ -83,6 +85,17 @@ describe('loadConfig', () => {
     expect(config.JOB_STALE_AFTER_SECONDS).toBe(300);
     expect(config.JOB_EVENTS_KEEPALIVE_MS).toBe(15_000);
     expect(config.AI_SERVICE_TIMEOUT_MS).toBe(5000);
+    expect(config.AI_SERVICE_WAKE_TIMEOUT_MS).toBe(90_000);
+    expect(config.JOB_QUEUED_STALE_AFTER_SECONDS).toBe(600);
+    expect(
+      loadConfig({ NODE_ENV: 'test', AI_SERVICE_WAKE_TIMEOUT_MS: '0' }).AI_SERVICE_WAKE_TIMEOUT_MS,
+    ).toBe(0);
+    expect(() => loadConfig({ NODE_ENV: 'test', AI_SERVICE_WAKE_TIMEOUT_MS: '-1' })).toThrow(
+      /AI_SERVICE_WAKE_TIMEOUT_MS/,
+    );
+    expect(() => loadConfig({ NODE_ENV: 'test', JOB_QUEUED_STALE_AFTER_SECONDS: '0' })).toThrow(
+      /JOB_QUEUED_STALE_AFTER_SECONDS/,
+    );
     expect(() => loadConfig({ NODE_ENV: 'test', JOB_STALE_AFTER_SECONDS: '0' })).toThrow(
       /JOB_STALE_AFTER_SECONDS/,
     );
@@ -144,5 +157,31 @@ describe('loadConfig', () => {
     expect(run).toThrow(/S3_ENDPOINT: must be a valid URL/);
     expect(run).toThrow(/XLSX_MAX_UNCOMPRESSED_BYTES/);
     expect(run).toThrow(/XLSX_MAX_COMPRESSION_RATIO/);
+  });
+
+  it('accepts the free demo profile once its secrets are filled in', () => {
+    const file = readFileSync(new URL('../../../.env.free-tier.example', import.meta.url), 'utf8');
+    const env: Record<string, string> = {};
+    for (const line of file.split('\n')) {
+      if (!line.trim() || line.startsWith('#')) continue;
+      const at = line.indexOf('=');
+      env[line.slice(0, at)] = line.slice(at + 1);
+    }
+    env.JWT_ACCESS_SECRET = 'a'.repeat(48);
+    env.JWT_REFRESH_SECRET = 'b'.repeat(48);
+    env.AI_SERVICE_TOKEN = 'c'.repeat(48);
+
+    const config = loadConfig(env);
+
+    expect(config.STORAGE_DRIVER).toBe('s3');
+    expect(config.S3_REGION).toBe('auto');
+    expect(config.MAX_UPLOAD_ROWS).toBe(20_000);
+    expect(config.MAX_SOURCES_PER_PROJECT).toBe(4);
+    expect(config.MAX_UPLOAD_BYTES).toBe(10 * 1024 * 1024);
+    expect(config.AI_SERVICE_WAKE_TIMEOUT_MS).toBe(90_000);
+    // The placeholders themselves are refused in production.
+    expect(() => loadConfig({ ...env, AI_SERVICE_TOKEN: 'CHANGE-ME-service-token' })).toThrow(
+      /AI_SERVICE_TOKEN/,
+    );
   });
 });

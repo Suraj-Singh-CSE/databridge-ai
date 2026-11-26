@@ -13,6 +13,8 @@ export type ErrorCode =
   | 'QUEUE_UNAVAILABLE'
   | 'KNOWLEDGE_NOT_BUILT'
   | 'AI_SERVICE_UNAVAILABLE'
+  | 'AI_SERVICE_WAKING'
+  | 'NOT_READY'
   | 'INTERNAL_ERROR';
 
 /**

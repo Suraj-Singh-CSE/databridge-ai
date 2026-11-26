@@ -17,7 +17,6 @@ from app.export.model import (
     Layout,
     ProvenanceRow,
 )
-from app.export.storage import InvalidExportKeyError, LocalExportStorage, export_key
 from app.export.writers import write_csv, write_xlsx
 
 TRIGGERS = ["=", "+", "-", "@", "\t", "\r"]
@@ -244,33 +243,3 @@ def test_xlsx_bytes_have_no_formula_markup_for_any_trigger(tmp_path: Path) -> No
         data = archive.read("xl/worksheets/sheet1.xml")
     assert b"<f>" not in data
     assert b't="inlineStr"' in data
-
-
-# ---- storage
-
-
-def test_export_keys_are_built_from_ids_only(tmp_path: Path) -> None:
-    project, export = "a" * 24, "b" * 24
-    assert export_key(project, export, "csv") == f"projects/{project}/exports/{export}.csv"
-    for bad in [("../x", export, "csv"), (project, "b" * 23, "csv"), (project, export, "exe")]:
-        with pytest.raises(InvalidExportKeyError):
-            export_key(*bad)
-    storage = LocalExportStorage(tmp_path)
-    for key in ["../etc/passwd", "/abs", "a/./b", "a\\b", "projects/..", ""]:
-        with pytest.raises(InvalidExportKeyError):
-            storage.path_for(key)
-
-
-def test_storage_commits_atomically_and_deletes(tmp_path: Path) -> None:
-    storage = LocalExportStorage(tmp_path)
-    key = export_key("a" * 24, "b" * 24, "csv")
-    temp = storage.temp_path(key)
-    temp.write_bytes(b"x")
-    assert not storage.exists(key)
-    storage.commit(temp, key)
-    assert storage.exists(key)
-    assert not temp.exists()
-    assert (storage.path_for(key).stat().st_mode & 0o777) == 0o644
-    storage.delete(key)
-    storage.delete(key)  # missing is fine
-    assert not storage.exists(key)

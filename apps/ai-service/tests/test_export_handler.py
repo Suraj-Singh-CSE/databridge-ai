@@ -11,6 +11,7 @@ from pymongo.errors import AutoReconnect
 
 from app.config import Settings
 from app.export.store import ExportStore
+from app.storage import LocalDiskStorage, ObjectStorage
 from app.worker.context import JobContext
 from app.worker.handlers import build_registry
 from app.worker.handlers import export as module
@@ -39,12 +40,21 @@ SCHEMA_ORDER = [
 class Exporting:
     """Clusters of the three samples, plus a runner for the export job."""
 
-    def __init__(self, tmp_path: Path, max_rows: int = 200_000) -> None:
-        self.world = World(tmp_path)
+    def __init__(
+        self, tmp_path: Path, max_rows: int = 200_000, storage: ObjectStorage | None = None
+    ) -> None:
+        self.world = World(tmp_path, storage)
         self.clustering = Clustering(self.world)
         self.store = ExportStore(self.world.db)
         self.root = self.world.uploads
-        handler = ExportHandler(self.store, ExportSettings(root=self.root, max_rows=max_rows))
+        self.temp_dir = tmp_path / "tmp"
+        self.temp_dir.mkdir()
+        handler = ExportHandler(
+            self.store,
+            ExportSettings(
+                storage=self.world.storage, max_rows=max_rows, temp_dir=str(self.temp_dir)
+            ),
+        )
         self.runner = JobRunner(
             JobStore(self.world.db.jobs),
             JobSignals(self.world.redis),
@@ -93,8 +103,10 @@ class Exporting:
         return self.root / f"projects/{self.world.project_id}/exports/{job_id}.{ext}"
 
     def leftovers(self) -> list[Path]:
+        """Stored export files, plus anything left in the temporary folder."""
         folder = self.root / f"projects/{self.world.project_id}/exports"
-        return sorted(folder.iterdir()) if folder.exists() else []
+        stored = sorted(folder.iterdir()) if folder.exists() else []
+        return stored + sorted(self.temp_dir.iterdir())
 
 
 @pytest.fixture
@@ -311,5 +323,9 @@ def test_payload_is_validated_and_wired_from_settings(tmp_path: Path) -> None:
         mongodb_uri="mongodb://localhost:27017/db",
         upload_dir=str(tmp_path),
         export_max_rows=10,
+        storage_temp_dir=str(tmp_path),
     )
-    assert export_settings(settings) == ExportSettings(root=tmp_path, max_rows=10)
+    storage = LocalDiskStorage(tmp_path)
+    assert export_settings(settings, storage) == ExportSettings(
+        storage=storage, max_rows=10, temp_dir=str(tmp_path)
+    )

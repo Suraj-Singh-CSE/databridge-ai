@@ -1,4 +1,9 @@
-import { AiServiceError, type AiServiceClient } from '../../ai-service.client.js';
+import {
+  AI_SERVICE_WAKING,
+  AiServiceError,
+  type AiServiceClient,
+} from '../../ai-service.client.js';
+import { AI_SERVICE_WAKING_MESSAGE } from '../jobs/job.service.js';
 import { AppError } from '../../errors.js';
 import type { Logger } from '../../logger.js';
 import type { AuditService } from '../audit/audit.service.js';
@@ -103,6 +108,9 @@ export function createAssistantService({
       } catch (error) {
         if (error instanceof AiServiceError && error.code === 'KNOWLEDGE_NOT_BUILT') {
           throw new AppError(409, 'KNOWLEDGE_NOT_BUILT', KNOWLEDGE_NOT_BUILT_MESSAGE);
+        }
+        if (error instanceof AiServiceError && error.code === AI_SERVICE_WAKING) {
+          throw new AppError(503, 'AI_SERVICE_WAKING', AI_SERVICE_WAKING_MESSAGE);
         }
         logger.warn(
           {
