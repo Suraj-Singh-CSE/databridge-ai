@@ -17,7 +17,8 @@ const auditLogSchema = new Schema(
 
 auditLogSchema.index({ projectId: 1, createdAt: -1 });
 
-// Append-only: refuse every Mongoose write path that would change or remove an entry.
+// Append-only: refuse every Mongoose write path that would change or remove an entry. The
+// retention cap (modules/retention, ADR 0029) trims the oldest entries on the raw collection.
 const MUTATING_QUERIES: MongooseQueryMiddleware[] = [
   'updateOne',
   'updateMany',

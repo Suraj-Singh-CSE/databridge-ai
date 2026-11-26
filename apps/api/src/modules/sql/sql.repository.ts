@@ -1,5 +1,7 @@
 import { Types } from 'mongoose';
 
+import { isDuplicateKeyError } from '../../mongo-errors.js';
+
 import { SqlRunModel, SqlVersionModel, type SqlVersionDoc } from './sql.model.js';
 import type {
   SqlLastRun,
@@ -66,6 +68,21 @@ function toVersion(doc: StoredVersion): SqlVersion {
   };
 }
 
+/** Approve retries after losing the race to a simultaneous approval (G3-13). */
+const APPROVE_ATTEMPTS = 5;
+
+/** Undoes our own supersede; harmless when another version was approved since (E11000). */
+async function restoreApproved(id: Types.ObjectId, at: Date): Promise<void> {
+  try {
+    await SqlVersionModel.updateOne(
+      { _id: id, status: 'superseded', supersededAt: at },
+      { $set: { status: 'approved', supersededAt: null } },
+    );
+  } catch (error) {
+    if (!isDuplicateKeyError(error)) throw error;
+  }
+}
+
 export function createMongoSqlVersionRepository(): SqlVersionRepository {
   return {
     async listByProject(projectId, limit) {
@@ -92,22 +109,40 @@ export function createMongoSqlVersionRepository(): SqlVersionRepository {
     },
 
     async approve(projectId, versionId, by, at) {
-      const approved = await SqlVersionModel.findOneAndUpdate(
-        { _id: oid(versionId), projectId: oid(projectId), status: 'draft', testsPassed: true },
-        { $set: { status: 'approved', approvedBy: oid(by), approvedAt: at } },
-        { new: true },
-      ).lean<StoredVersion>();
-      if (!approved) return null;
-      const others = {
-        projectId: oid(projectId),
-        status: 'approved' as const,
-        _id: { $ne: approved._id },
+      const project = oid(projectId);
+      const draft = {
+        _id: oid(versionId),
+        projectId: project,
+        status: 'draft' as const,
+        testsPassed: true,
       };
-      const previous = await SqlVersionModel.find(others, { version: 1 }).lean<StoredVersion[]>();
-      await SqlVersionModel.updateMany(others, {
-        $set: { status: 'superseded', supersededAt: at },
-      });
-      return { version: toVersion(approved), superseded: previous.map((d) => d.version) };
+      const superseded: number[] = [];
+      for (let attempt = 1; ; attempt += 1) {
+        if (!(await SqlVersionModel.exists(draft))) return null;
+        // Supersede first: the partial unique index allows one approved version per project.
+        const current = await SqlVersionModel.findOneAndUpdate(
+          { projectId: project, status: 'approved' },
+          { $set: { status: 'superseded', supersededAt: at } },
+          { returnDocument: 'after', projection: { version: 1 } },
+        ).lean<StoredVersion>();
+        if (current) superseded.push(current.version);
+        try {
+          const approved = await SqlVersionModel.findOneAndUpdate(
+            draft,
+            { $set: { status: 'approved', approvedBy: oid(by), approvedAt: at } },
+            { returnDocument: 'after' },
+          ).lean<StoredVersion>();
+          if (approved) return { version: toVersion(approved), superseded };
+        } catch (error) {
+          // Another version was approved between the two writes: supersede it and try again.
+          if (isDuplicateKeyError(error) && attempt < APPROVE_ATTEMPTS) continue;
+          if (current) await restoreApproved(current._id, at);
+          throw error;
+        }
+        // The target was decided by someone else meanwhile: put the previous approval back.
+        if (current) await restoreApproved(current._id, at);
+        return null;
+      }
     },
 
     async reject(projectId, versionId, by, at, reason) {

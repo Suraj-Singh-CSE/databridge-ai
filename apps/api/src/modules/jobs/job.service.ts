@@ -4,6 +4,7 @@ import {
   type AiServiceClient,
 } from '../../ai-service.client.js';
 import { AppError } from '../../errors.js';
+import { isDuplicateKeyError } from '../../mongo-errors.js';
 import type { Logger } from '../../logger.js';
 import type { Repositories } from '../../repositories.js';
 import type { AuditService } from '../audit/audit.service.js';
@@ -159,6 +160,29 @@ const QUALITY = {
 
 const KNOWLEDGE_BUSY =
   'The knowledge index is already being rebuilt. Wait for that job to finish, or cancel it first.';
+
+/** Project-level job types of which one runs at a time (lockKey `project`, G3-12). */
+const PROJECT_LOCKED: Partial<Record<JobType, () => AppError>> = {
+  candidates: () => AppError.conflict(CANDIDATES.busy, { reason: 'CANDIDATES_RUNNING' }),
+  scoring: () => AppError.conflict(SCORING.busy, { reason: 'SCORING_RUNNING' }),
+  pair_review: () => AppError.conflict(PAIR_REVIEW.busy, { reason: 'PAIR_REVIEW_RUNNING' }),
+  clustering: () => AppError.conflict(CLUSTERING.busy, { reason: 'CLUSTERING_RUNNING' }),
+  sql_draft: () => AppError.conflict(SQL.busy, { reason: 'SQL_DRAFT_RUNNING' }),
+  quality: () => AppError.conflict(QUALITY.busy, { reason: 'QUALITY_RUNNING' }),
+  knowledge_index: () => AppError.conflict(KNOWLEDGE_BUSY, { reason: 'KNOWLEDGE_INDEX_RUNNING' }),
+};
+
+/** The lock an exclusive job holds while active: its source, or the project; none otherwise. */
+function lockKeyOf(type: JobType, payload: Record<string, unknown>): string | undefined {
+  if (isSourceJob(type)) return String(payload.sourceId);
+  return PROJECT_LOCKED[type] ? 'project' : undefined;
+}
+
+/** The same 409 the pre-check gives, for a start that lost the race to an identical one. */
+function busyError(type: JobType): AppError {
+  if (isSourceJob(type)) return AppError.conflict(BUSY[type]);
+  return PROJECT_LOCKED[type]?.() ?? AppError.conflict('This job is already running.');
+}
 
 function pendingMessage(count: number): string {
   const noun = count === 1 ? 'column still needs' : 'columns still need';
@@ -523,12 +547,21 @@ export function createJobService({
       if (type === 'knowledge_index' && (await isActive(project, 'knowledge_index'))) {
         throw AppError.conflict(KNOWLEDGE_BUSY, { reason: 'KNOWLEDGE_INDEX_RUNNING' });
       }
-      const job = await repos.jobs.create({
-        projectId: project.id,
-        type,
-        payload,
-        createdBy: actor.user.userId,
-      });
+      const lockKey = lockKeyOf(type, payload);
+      let job: Job;
+      try {
+        job = await repos.jobs.create({
+          projectId: project.id,
+          type,
+          payload,
+          createdBy: actor.user.userId,
+          ...(lockKey === undefined ? {} : { lockKey }),
+        });
+      } catch (error) {
+        // An identical job was started at the same instant (double click, two users).
+        if (isDuplicateKeyError(error)) throw busyError(type);
+        throw error;
+      }
       await record(actor, job, 'job.create', { type, payload });
       if (type === 'sql_run') {
         await audit.record({

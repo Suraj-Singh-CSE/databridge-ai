@@ -1,6 +1,11 @@
 import type { ErrorRequestHandler, RequestHandler } from 'express';
 
 import { AppError } from '../errors.js';
+import { isDuplicateKeyError } from '../mongo-errors.js';
+
+/** Shown when a unique index refused a write that raced another request (G3-14). */
+export const CONCURRENT_UPDATE_MESSAGE =
+  'Someone else just changed this at the same time — refresh and try again.';
 
 /** Errors raised by express.json() carry a `type` and an HTTP `status`. */
 function bodyParserError(err: unknown): AppError | null {
@@ -20,7 +25,16 @@ export const notFoundHandler: RequestHandler = (_req, _res, next) => {
 
 /** Turns every error into the standard envelope; unexpected ones are logged and hidden. */
 export const errorHandler: ErrorRequestHandler = (err: unknown, req, res, _next) => {
-  const appError = err instanceof AppError ? err : bodyParserError(err);
+  if (isDuplicateKeyError(err)) {
+    // A unique index refused a write that raced another request; the serializer drops keyValue.
+    req.log.warn({ err }, 'concurrent write conflict');
+  }
+  const appError =
+    err instanceof AppError
+      ? err
+      : isDuplicateKeyError(err)
+        ? AppError.conflict(CONCURRENT_UPDATE_MESSAGE)
+        : bodyParserError(err);
   if (appError) {
     res.status(appError.status).json({
       data: null,

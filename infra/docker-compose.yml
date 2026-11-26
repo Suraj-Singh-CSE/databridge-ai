@@ -216,6 +216,14 @@ services:
       JOB_STALE_AFTER_SECONDS: ${JOB_STALE_AFTER_SECONDS:-300}
       JOB_QUEUED_STALE_AFTER_SECONDS: ${JOB_QUEUED_STALE_AFTER_SECONDS:-600}
       JOB_EVENTS_KEEPALIVE_MS: ${JOB_EVENTS_KEEPALIVE_MS:-15000}
+      # Data retention for the free tier (docs/adr/0029-concurrency-and-retention.md).
+      JOB_RETENTION_DAYS: ${JOB_RETENTION_DAYS:-30}
+      LLM_CALL_RETENTION_DAYS: ${LLM_CALL_RETENTION_DAYS:-30}
+      ASSISTANT_RETENTION_DAYS: ${ASSISTANT_RETENTION_DAYS:-30}
+      EXPORT_RETENTION_DAYS: ${EXPORT_RETENTION_DAYS:-30}
+      QUALITY_RUN_RETENTION_DAYS: ${QUALITY_RUN_RETENTION_DAYS:-90}
+      AUDIT_MAX_ENTRIES_PER_PROJECT: ${AUDIT_MAX_ENTRIES_PER_PROJECT:-20000}
+      RETENTION_SWEEP_INTERVAL_MINUTES: ${RETENTION_SWEEP_INTERVAL_MINUTES:-60}
       # The browser origin is the nginx web container, not the Vite dev server.
       CORS_ORIGIN: ${WEB_ORIGIN:-http://localhost:8080}
       # Number of proxy hops to trust for the client IP (rate limiting). See .env.example.

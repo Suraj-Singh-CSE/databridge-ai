@@ -12,6 +12,8 @@ import type { Logger } from './logger.js';
 import { errorHandler, notFoundHandler } from './middleware/error-handler.js';
 import { requestLogger } from './middleware/request-id.js';
 import { createAuditService } from './modules/audit/audit.service.js';
+import { createAdminRouter } from './modules/retention/retention.routes.js';
+import { createRetentionService } from './modules/retention/retention.service.js';
 import { AUTH_BASE_PATH } from './modules/auth/auth.cookie.js';
 import { createAuthRouter } from './modules/auth/auth.routes.js';
 import { createAuthService } from './modules/auth/auth.service.js';
@@ -286,6 +288,13 @@ export function createApp({
         max: config.UPLOAD_RATE_LIMIT_MAX,
         windowMs: config.UPLOAD_RATE_LIMIT_WINDOW_MS,
       },
+    }),
+  );
+  app.use(
+    '/api/v1/admin',
+    createAdminRouter({
+      retention: createRetentionService(repos, files, config, logger),
+      tokens,
     }),
   );
   app.use('/api/v1/projects/:projectId/jobs', createProjectJobsRouter(jobDeps));

@@ -27,12 +27,28 @@ const jobSchema = new Schema(
     startedAt: { type: Date, default: null },
     finishedAt: { type: Date, default: null },
     heartbeatAt: { type: Date, default: null },
+    // What an exclusive job locks while active: its sourceId, or `project` (G3-12). Absent for
+    // job types that may run side by side (export, sql_run, demo).
+    lockKey: { type: String },
   },
   // minimize: false keeps an empty payload `{}` instead of dropping the field.
   { timestamps: true, collection: 'jobs', minimize: false },
 );
 
 jobSchema.index({ projectId: 1, createdAt: -1 });
+// One waiting job per lock (G3-12): two simultaneous starts both insert `queued`, so the second
+// insert fails here instead of creating a duplicate job. A job that is already running blocks a
+// new one through the service's check (it was queued, and alone, when that check last ran).
+// Equality filters only: every MongoDB version accepts them in a partial index. Jobs without a
+// lockKey (all jobs created before it existed) are outside the index, so it builds on old data.
+jobSchema.index(
+  { projectId: 1, type: 1, lockKey: 1 },
+  {
+    name: 'one_queued_job_per_lock',
+    unique: true,
+    partialFilterExpression: { status: 'queued', lockKey: { $exists: true } },
+  },
+);
 
 export type JobDoc = InferSchemaType<typeof jobSchema>;
 export const JobModel = model('Job', jobSchema);

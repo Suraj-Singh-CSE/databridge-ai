@@ -70,7 +70,7 @@ describe('error log serializer', () => {
     expect(serializeError(plain)).toEqual({ type: 'Error', message: 'boom' });
   });
 
-  it('an unhandled duplicate-key error never logs the email or the request body', async () => {
+  it('a racing duplicate-key error is a 409 that never logs the email or the request body', async () => {
     const { lines, stream } = capture();
     const logger = pino({ ...loggerOptions({ NODE_ENV: 'development' }) }, stream);
     const app = express();
@@ -83,9 +83,10 @@ describe('error log serializer', () => {
 
     const response = await request(app).post('/users').send({ email: EMAIL, name: 'Asha Rao' });
 
-    expect(response.status).toBe(500);
+    expect(response.status).toBe(409);
+    expect(response.body.error).toMatchObject({ code: 'CONFLICT' });
     const logged = lines.join('\n');
-    expect(logged).toContain('unhandled error');
+    expect(logged).toContain('concurrent write conflict');
     expect(logged).toContain('DuplicateKey');
     expect(logged).not.toContain(EMAIL);
     expect(logged).not.toContain('Asha Rao');

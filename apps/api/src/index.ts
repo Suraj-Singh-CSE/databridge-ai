@@ -1,9 +1,14 @@
 import { createApp } from './app.js';
 import { ConfigError, loadConfig } from './config.js';
 import { connectDb, disconnectDb } from './db.js';
+import { ensureIndexes } from './indexes.js';
 import { createLogger } from './logger.js';
 import { createRedisJobEventBus } from './modules/jobs/job.events.js';
 import { createMemoryCounters, createSharedCounters } from './rate-limit-store.js';
+import {
+  createRetentionService,
+  scheduleRetentionSweep,
+} from './modules/retention/retention.service.js';
 import { createMongoRepositories } from './repositories.js';
 import { createStorage, prepareStorage } from './storage/index.js';
 
@@ -22,6 +27,7 @@ async function main(): Promise<void> {
   const logger = createLogger(config);
   await connectDb(config.MONGODB_URI);
   logger.info('connected to mongodb');
+  await ensureIndexes(config, logger);
 
   const storage = createStorage(config);
   await prepareStorage(storage);
@@ -36,10 +42,19 @@ async function main(): Promise<void> {
       ? createSharedCounters(config.REDIS_URL, logger)
       : createMemoryCounters();
 
+  const repos = createMongoRepositories();
+  // Free-tier housekeeping (ADR 0029): expired exports, old quality reports, the audit cap and
+  // rows a crashed job left behind.
+  const stopSweep = scheduleRetentionSweep(
+    createRetentionService(repos, storage, config, logger),
+    config.RETENTION_SWEEP_INTERVAL_MINUTES,
+    logger,
+  );
+
   const app = createApp({
     config,
     logger,
-    repos: createMongoRepositories(),
+    repos,
     storage,
     jobEvents,
     counters,
@@ -50,6 +65,7 @@ async function main(): Promise<void> {
 
   const shutdown = (signal: string): void => {
     logger.info({ signal }, 'shutting down');
+    stopSweep();
     // Open event streams would keep server.close() waiting; end them.
     server.closeAllConnections();
     server.close(() => {

@@ -43,6 +43,17 @@ const sqlVersionSchema = new Schema(
 // Same index the worker creates.
 sqlVersionSchema.index({ projectId: 1, version: 1 }, { unique: true });
 
+/**
+ * At most one approved version per project (G3-13). Not declared on the schema: it is built by
+ * `ensureIndexes` (src/indexes.ts) after older duplicates are superseded, so an existing
+ * database cannot stop the api from starting.
+ */
+export const ONE_APPROVED_SQL_INDEX = {
+  name: 'one_approved_version_per_project',
+  key: { projectId: 1 },
+  partialFilterExpression: { status: 'approved' },
+} as const;
+
 export type SqlVersionDoc = InferSchemaType<typeof sqlVersionSchema>;
 export const SqlVersionModel = model('SqlVersion', sqlVersionSchema);
 

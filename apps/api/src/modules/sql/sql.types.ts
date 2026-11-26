@@ -87,12 +87,13 @@ export interface SqlVersionRepository {
   /** Newest version first. */
   listByProject(projectId: string, limit: number): Promise<SqlVersion[]>;
   findById(projectId: string, versionId: string): Promise<SqlVersion | null>;
-  /** The project's approved version (the newest one, should two be approved for an instant). */
+  /** The project's approved version (a partial unique index keeps at most one, G3-13). */
   findApproved(projectId: string): Promise<SqlVersion | null>;
   /**
-   * Draft -> approved, only while it is still a draft whose tests passed; then every other
-   * approved version of the project becomes `superseded`. Null when the condition no longer
-   * held (someone else decided first).
+   * Draft -> approved, only while it is still a draft whose tests passed; the approved version
+   * of the project becomes `superseded` first, so there is never more than one (G3-13), and a
+   * simultaneous approval is retried. Null when the condition no longer held (someone else
+   * decided first); the previous approval is then put back.
    */
   approve(
     projectId: string,
