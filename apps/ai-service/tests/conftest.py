@@ -37,6 +37,8 @@ def settings() -> Settings:
         ai_service_token=SecretStr(SERVICE_TOKEN),
         redis_url="redis://localhost:6379/1",
         mongodb_uri="mongodb://localhost:27017/databridge_test",
+        # The echo demo route drives the gateway and service-token tests.
+        enable_demo_routes=True,
     )
 
 

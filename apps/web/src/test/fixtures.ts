@@ -7,6 +7,7 @@ import type {
   JobUpdate,
   Page,
   Project,
+  RegistrationMode,
   Role,
   Source,
   User,
@@ -62,12 +63,13 @@ export function signedInHandlers(session: AuthSession = makeSession()) {
   return [http.post(`${API}/auth/refresh`, () => ok(session))];
 }
 
-/** Handlers for "no cookie": refresh answers 401. */
-export function signedOutHandlers() {
+/** Handlers for "no cookie": refresh answers 401; registration is open. */
+export function signedOutHandlers(registrationMode: RegistrationMode = 'open') {
   return [
     http.post(`${API}/auth/refresh`, () =>
       fail(401, 'UNAUTHORIZED', 'Your session has expired. Please sign in again.'),
     ),
+    http.get(`${API}/auth/config`, () => ok({ registrationMode })),
   ];
 }
 

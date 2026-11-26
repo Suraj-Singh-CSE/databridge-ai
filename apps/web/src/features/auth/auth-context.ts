@@ -10,6 +10,8 @@ export interface SignInInput {
 
 export interface RegisterInput extends SignInInput {
   name: string;
+  /** Sent only when registration is invite-only. */
+  inviteCode?: string;
 }
 
 export interface AuthContextValue {

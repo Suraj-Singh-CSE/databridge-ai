@@ -549,12 +549,27 @@ describe.skipIf(!available)('MongoDB', () => {
       );
     });
 
-    it('lets only one caller claim the first admin slot', async () => {
+    it('lets only one caller claim the bootstrap admin slot', async () => {
       await clearDb();
       const repos = createMongoRepositories();
-      const claims = await Promise.all([1, 2, 3].map(() => repos.users.claimFirstAdmin()));
+      const claims = await Promise.all([1, 2, 3].map(() => repos.users.claimBootstrapAdmin()));
 
       expect(claims.filter(Boolean)).toHaveLength(1);
+    });
+
+    it('changes a user role and returns the updated user', async () => {
+      await clearDb();
+      const repos = createMongoRepositories();
+      const user = await repos.users.create({
+        email: 'boss@example.com',
+        name: 'Boss',
+        passwordHash: 'x',
+        role: 'data_engineer',
+      });
+
+      expect((await repos.users.setRole(user.id, 'admin'))?.role).toBe('admin');
+      expect((await repos.users.findById(user.id))?.role).toBe('admin');
+      expect(await repos.users.setRole('64b000000000000000000999', 'admin')).toBeNull();
     });
   });
 });

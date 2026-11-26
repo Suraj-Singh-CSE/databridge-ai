@@ -29,10 +29,11 @@ export interface UserRepository {
   findById(id: string): Promise<User | null>;
   findByEmail(email: string): Promise<User | null>;
   findCredentialsByEmail(email: string): Promise<UserCredentials | null>;
-  count(): Promise<number>;
+  /** Changes a user's global role; returns the updated user, or null when it does not exist. */
+  setRole(id: string, role: Role): Promise<User | null>;
   /**
-   * Atomically claims the one-time "first admin" slot. Returns true for exactly one caller,
-   * so two simultaneous first registrations cannot both become admin.
+   * Atomically claims the one-time "bootstrap admin" slot (BOOTSTRAP_ADMIN_EMAIL). Returns true
+   * for exactly one caller, so two simultaneous requests cannot both promote a user.
    */
-  claimFirstAdmin(): Promise<boolean>;
+  claimBootstrapAdmin(): Promise<boolean>;
 }

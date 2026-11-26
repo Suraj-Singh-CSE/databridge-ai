@@ -9,13 +9,17 @@
 # on its own because this file lives in infra/). Each service receives only the variables it needs.
 # Secrets use ${VAR:?...} so compose refuses to start when one is missing.
 #
-# Published to the host: web (8080) and api (4000) only.
+# Published to the host: web (8080, nginx proxying /api) and api (4000). The api also serves the
+# built web app itself (SERVE_WEB=true): http://localhost:4000 is the single-origin layout used on
+# free hosting, with its CSP (docs/adr/0027-same-origin-and-access.md). Either URL works locally.
 # ai-service, ai-worker, mongo and redis are reachable only on the private compose network.
 name: databridge
 
 # Settings shared by ai-service (HTTP, enqueues jobs) and ai-worker (Celery, runs them).
 x-ai-environment: &ai-environment
   AI_SERVICE_TOKEN: ${AI_SERVICE_TOKEN:?set AI_SERVICE_TOKEN in your env file}
+  # "production" hides /internal/docs and refuses demo routes and tokens under 32 characters.
+  ENV: ${ENV:-development}
   MONGODB_URI: mongodb://mongo:27017/databridge
   REDIS_URL: redis://redis:6379/0
   LLM_PROVIDER: ${LLM_PROVIDER:-mock}
@@ -212,8 +216,16 @@ services:
       CORS_ORIGIN: ${WEB_ORIGIN:-http://localhost:8080}
       # Number of proxy hops to trust for the client IP (rate limiting). See .env.example.
       TRUST_PROXY: ${TRUST_PROXY:-false}
-      AUTH_RATE_LIMIT_MAX: ${AUTH_RATE_LIMIT_MAX:-20}
+      AUTH_RATE_LIMIT_MAX: ${AUTH_RATE_LIMIT_MAX:-10}
       AUTH_RATE_LIMIT_WINDOW_MS: ${AUTH_RATE_LIMIT_WINDOW_MS:-900000}
+      SESSION_RATE_LIMIT_MAX: ${SESSION_RATE_LIMIT_MAX:-120}
+      SESSION_RATE_LIMIT_WINDOW_MS: ${SESSION_RATE_LIMIT_WINDOW_MS:-900000}
+      # Access control (docs/adr/0027-same-origin-and-access.md).
+      BOOTSTRAP_ADMIN_EMAIL: ${BOOTSTRAP_ADMIN_EMAIL:-}
+      REGISTRATION_MODE: ${REGISTRATION_MODE:-open}
+      REGISTRATION_INVITE_CODES: ${REGISTRATION_INVITE_CODES:-}
+      # Same-origin web app: the image ships the build in WEB_DIST_DIR.
+      SERVE_WEB: ${SERVE_WEB:-true}
       # File uploads (ADR 0009). Local disk on the shared "uploads" volume by default.
       STORAGE_DRIVER: ${STORAGE_DRIVER:-local}
       UPLOAD_DIR: /data/uploads

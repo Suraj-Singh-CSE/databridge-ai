@@ -27,6 +27,6 @@ const userSchema = new Schema(
 export type UserDoc = InferSchemaType<typeof userSchema>;
 export const UserModel = model('User', userSchema);
 
-/** One-document-per-key collection used for atomic one-time claims (first admin). */
+/** One-document-per-key collection used for atomic one-time claims (bootstrap admin). */
 const appMetaSchema = new Schema({ _id: String, claimedAt: Date }, { versionKey: false });
 export const AppMetaModel = model('AppMeta', appMetaSchema, 'app_meta');

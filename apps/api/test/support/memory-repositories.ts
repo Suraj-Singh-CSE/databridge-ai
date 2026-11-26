@@ -209,7 +209,7 @@ export function createMemoryRepositories(): MemoryRepositories {
       .sort((a, b) => b.startedAt.getTime() - a.startedAt.getTime() || (a.id < b.id ? 1 : -1));
   const audit: AuditEntry[] = [];
   const llmCalls: LlmCall[] = [];
-  let firstAdminClaimed = false;
+  let bootstrapAdminClaimed = false;
 
   const publicUser = ({ passwordHash: _hash, ...user }: User & { passwordHash: string }): User =>
     structuredClone(user);
@@ -241,14 +241,18 @@ export function createMemoryRepositories(): MemoryRepositories {
         const user = byEmail(email);
         return user ? { user: publicUser(user), passwordHash: user.passwordHash } : null;
       },
-      async count() {
+      async setRole(id, role) {
         await Promise.resolve();
-        return users.size;
+        const user = users.get(id);
+        if (!user) return null;
+        const updated = { ...user, role, updatedAt: tick() };
+        users.set(id, updated);
+        return publicUser(updated);
       },
-      async claimFirstAdmin() {
+      async claimBootstrapAdmin() {
         await Promise.resolve();
-        if (firstAdminClaimed) return false;
-        firstAdminClaimed = true;
+        if (bootstrapAdminClaimed) return false;
+        bootstrapAdminClaimed = true;
         return true;
       },
     },

@@ -1,8 +1,7 @@
 import cookieParser from 'cookie-parser';
 import cors from 'cors';
 import express, { type Express } from 'express';
-import { rateLimit } from 'express-rate-limit';
-import helmet from 'helmet';
+import { ipKeyGenerator, rateLimit, type Options } from 'express-rate-limit';
 
 import { createAiServiceClient, type AiServiceClient } from './ai-service.client.js';
 import { pingDb } from './db.js';
@@ -51,7 +50,9 @@ import { createSourceService } from './modules/sources/source.service.js';
 import { createTargetSchemaRouter } from './modules/target-schema/target-schema.routes.js';
 import { createTargetSchemaService } from './modules/target-schema/target-schema.service.js';
 import type { Repositories } from './repositories.js';
+import { securityHeaders } from './security-headers.js';
 import { createStorage, type FileStorage } from './storage/index.js';
+import { createWebRouter } from './web-static.js';
 
 export interface AppDeps {
   config: Config;
@@ -88,7 +89,15 @@ export function createApp({
     passwords: passwords ?? createPasswordHasher(),
     audit,
     logger,
+    access: {
+      bootstrapAdminEmail: config.BOOTSTRAP_ADMIN_EMAIL,
+      registrationMode: config.REGISTRATION_MODE,
+      inviteCodes: config.REGISTRATION_INVITE_CODES,
+    },
   });
+  if (!config.BOOTSTRAP_ADMIN_EMAIL) {
+    logger.warn('BOOTSTRAP_ADMIN_EMAIL is not set: no user will become admin automatically');
+  }
   const projectService = createProjectService(repos, audit, files);
   const sourceService = createSourceService(repos, files, audit, {
     maxUploadBytes: config.MAX_UPLOAD_BYTES,
@@ -147,7 +156,7 @@ export function createApp({
   app.set('trust proxy', config.TRUST_PROXY);
 
   app.use(requestLogger(logger));
-  app.use(helmet());
+  app.use(securityHeaders(config.NODE_ENV === 'production'));
   app.use(cors({ origin: config.CORS_ORIGIN, credentials: true }));
   app.use(express.json({ limit: '1mb' }));
   app.use(cookieParser());
@@ -173,19 +182,36 @@ export function createApp({
     });
   });
 
-  const authLimiter = rateLimit({
-    windowMs: config.AUTH_RATE_LIMIT_WINDOW_MS,
-    limit: config.AUTH_RATE_LIMIT_MAX,
+  // In memory, per api process (one instance on the free plan). req.ip honours TRUST_PROXY.
+  const limiterOptions: Partial<Options> = {
     standardHeaders: 'draft-8',
     legacyHeaders: false,
     handler: (_req, _res, next) => {
       next(new AppError(429, 'RATE_LIMITED', 'Too many attempts. Please wait and try again.'));
     },
+  };
+  const credentialsLimiter = rateLimit({
+    ...limiterOptions,
+    windowMs: config.AUTH_RATE_LIMIT_WINDOW_MS,
+    limit: config.AUTH_RATE_LIMIT_MAX,
+    // Per IP + email: guessing one account's password is slowed down, while people sharing an
+    // IP (an office, or every client before TRUST_PROXY is set) do not lock each other out.
+    keyGenerator: (req) => `${ipKeyGenerator(req.ip ?? '')}|${emailOf(req.body)}`,
+  });
+  const sessionLimiter = rateLimit({
+    ...limiterOptions,
+    windowMs: config.SESSION_RATE_LIMIT_WINDOW_MS,
+    limit: config.SESSION_RATE_LIMIT_MAX,
   });
   app.use(
     AUTH_BASE_PATH,
-    authLimiter,
-    createAuthRouter({ auth, tokens, secureCookies: config.NODE_ENV === 'production' }),
+    createAuthRouter({
+      auth,
+      tokens,
+      secureCookies: config.NODE_ENV === 'production',
+      registrationMode: config.REGISTRATION_MODE,
+      limiters: { credentials: credentialsLimiter, session: sessionLimiter },
+    }),
   );
   // Before the project router so its '/:id' routes and auth do not run for source/job paths first.
   app.use(
@@ -255,8 +281,18 @@ export function createApp({
     createProjectRouter({ projectService, projects: repos.projects, tokens }),
   );
 
+  // Same-origin web app (ADR 0027). After every API route; /api/* never falls back to the SPA.
+  if (config.SERVE_WEB) app.use(createWebRouter(config.WEB_DIST_DIR));
+
   app.use(notFoundHandler);
   app.use(errorHandler);
 
   return app;
+}
+
+/** The normalised email of a login/register body, for the limiter key ('' when absent). */
+function emailOf(body: unknown): string {
+  if (typeof body !== 'object' || body === null || !('email' in body)) return '';
+  const { email } = body;
+  return typeof email === 'string' ? email.trim().toLowerCase().slice(0, 254) : '';
 }

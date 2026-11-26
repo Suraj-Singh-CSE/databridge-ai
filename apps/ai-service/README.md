@@ -21,10 +21,15 @@ Configuration comes from environment variables (see the ai-service section of `/
 | `GET /internal/v1/ready` | none | Readiness: Redis, MongoDB and the object storage answer within 2 s. 200, or 503 `NOT_READY` with per-check status. |
 | `POST /internal/v1/jobs` | `X-Service-Token` | Enqueue a job: `{ jobId, projectId, type, payload }`. The payload is validated for its type (unknown type or bad payload: 400). 202 `{ jobId, status: "queued" }`; 503 `QUEUE_UNAVAILABLE` when Redis is down. |
 | `POST /internal/v1/jobs/:jobId/cancel` | `X-Service-Token` | Set the cancel flag and revoke the task. 202 `{ jobId, cancelRequested: true }`. |
-| `POST /internal/v1/llm/echo` | `X-Service-Token` | Demo of the LLM gateway: `{ "text": "...", "project_id": "..." }` (text max 4,000 chars) returns `{ text, model, cache_hit, masked_input }`. Will be replaced by real feature routes. |
+| `POST /internal/v1/llm/echo` | `X-Service-Token` | Demo of the LLM gateway, only when `ENABLE_DEMO_ROUTES=true` (off by default, refused with `ENV=production`): `{ "text": "...", "project_id": "..." }` (text max 4,000 chars) returns `{ text, model, cache_hit, masked_input }`. |
 
 Every other route under `/internal/v1` requires `X-Service-Token` equal to `AI_SERVICE_TOKEN`
-(constant-time compare), else 401 `UNAUTHORIZED`.
+(constant-time compare), else 401 `UNAUTHORIZED`; a test walks every route to check this.
+
+With `ENV=production` (free hosting, where this service is public) the interactive docs
+(`/internal/docs`, `/internal/openapi.json`) are not served, the demo route cannot be turned on,
+and `AI_SERVICE_TOKEN` must be at least 32 characters
+([ADR 0027](../../docs/adr/0027-same-origin-and-access.md)).
 
 ## Conventions
 

@@ -82,17 +82,24 @@ export function defineApiSuite(label: string, harness: Harness): void {
     }
 
     describe('POST /auth/register', () => {
-      it('makes the first user admin and later users data_engineer', async () => {
+      it('makes only BOOTSTRAP_ADMIN_EMAIL admin, not the first registrant', async () => {
         const first = await request(app)
           .post('/api/v1/auth/register')
-          .send({ email: '  First@Example.com ', name: 'First', password: PASSWORD });
-        const second = await request(app)
+          .send({ email: 'first@example.com', name: 'First', password: PASSWORD });
+        const boss = await request(app)
           .post('/api/v1/auth/register')
-          .send({ email: 'second@example.com', name: 'Second', password: PASSWORD });
+          .send({ email: '  First-Admin@Example.com ', name: 'Boss', password: PASSWORD });
+        const third = await request(app)
+          .post('/api/v1/auth/register')
+          .send({ email: 'third@example.com', name: 'Third', password: PASSWORD });
 
         expect(first.status).toBe(201);
-        expect(first.body.data.user).toMatchObject({ email: 'first@example.com', role: 'admin' });
-        expect(second.body.data.user.role).toBe('data_engineer');
+        expect(first.body.data.user.role).toBe('data_engineer');
+        expect(boss.body.data.user).toMatchObject({
+          email: 'first-admin@example.com',
+          role: 'admin',
+        });
+        expect(third.body.data.user.role).toBe('data_engineer');
         expect(typeof first.body.data.accessToken).toBe('string');
         expect(JSON.stringify(first.body)).not.toMatch(/passwordHash|\$2[aby]\$/);
       });
@@ -288,7 +295,7 @@ export function defineApiSuite(label: string, harness: Harness): void {
       let bob: Session;
 
       beforeEach(async () => {
-        admin = await register('admin@example.com', 'Admin');
+        admin = await register('first-admin@example.com', 'Admin');
         alice = await register('alice@example.com', 'Alice');
         bob = await register('bob@example.com', 'Bob');
       });
