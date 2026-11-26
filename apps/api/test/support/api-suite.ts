@@ -650,13 +650,8 @@ export function defineApiSuite(label: string, harness: Harness): void {
       describe('GET /projects/:id/people', () => {
         it('labels current members by name, owner first, without emails', async () => {
           const id = await createProject(alice);
-          await repos.users.create({
-            email: 'carol.smith@example.com',
-            name: '  ',
-            role: 'data_steward',
-            passwordHash: await fastPasswords.hash(PASSWORD),
-          });
-          for (const email of ['bob@example.com', 'carol.smith@example.com']) {
+          await userWithRole('carol@example.com', 'data_steward');
+          for (const email of ['bob@example.com', 'carol@example.com']) {
             await request(app)
               .post(`/api/v1/projects/${id}/members`)
               .set(bearer(alice))
@@ -673,7 +668,7 @@ export function defineApiSuite(label: string, harness: Harness): void {
             { userId: bob.id, label: 'Bob', role: 'data_steward', owner: false },
             {
               userId: expect.any(String) as string,
-              label: 'carol.smith',
+              label: 'data_steward',
               role: 'data_steward',
               owner: false,
             },

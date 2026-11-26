@@ -206,6 +206,7 @@ describe('project pages', () => {
       http.get(`${API}/projects/:id`, () => ok({ project })),
       http.get(`${API}/projects/:id/sql/versions`, () => ok({ items: [] })),
       http.get(`${API}/projects/:id/exports`, () => ok({ items: [] })),
+      http.get(`${API}/projects/:id/people`, () => ok({ people: [] })),
     );
     renderApp(`/projects/${project.id}/pipeline`);
 
