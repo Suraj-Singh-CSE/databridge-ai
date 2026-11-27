@@ -69,12 +69,12 @@ services:
         value: '1'
       # The api's own public URL. Confirm it after the first deploy (docs/deploy-free-tier.md).
       - key: CORS_ORIGIN
-        value: https://databridge-api.onrender.com
+        value: https://databridge-api-3c2h.onrender.com
       # The ai-service's PUBLIC URL: free web services cannot receive private-network traffic,
       # so the internal host:port (fromService property hostport) would not answer. Confirm the
       # hostname after the first deploy.
       - key: AI_SERVICE_URL
-        value: https://databridge-ai.onrender.com
+        value: https://databridge-ai-gz6d.onrender.com
       - key: AI_SERVICE_TIMEOUT_MS
         value: '10000'
       # A sleeping free ai-service is woken first (up to 90 s).
