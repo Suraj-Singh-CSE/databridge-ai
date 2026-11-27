@@ -76,13 +76,13 @@ mistake stops the process at once with a message naming the variable (never its 
 `MONGODB_URI: must be a mongodb:// or mongodb+srv:// URI`. Check readiness yourself:
 
 ```bash
-curl -s https://databridge-api.onrender.com/api/v1/ready        # "status":"ready", mongodb and redis "ok"
-curl -s https://databridge-ai.onrender.com/internal/v1/ready    # mongodb, redis and storage "ok"
+curl -s https://databridge-api-3c2h.onrender.com/api/v1/ready        # "status":"ready", mongodb and redis "ok"
+curl -s https://databridge-ai-gz6d.onrender.com/internal/v1/ready    # mongodb, redis and storage "ok"
 ```
 
 ### 5. Sign up first, as the admin
 
-Before you share the URL: open `https://databridge-api.onrender.com`, choose **Create account**,
+Before you share the URL: open `https://databridge-api-3c2h.onrender.com`, choose **Create account**,
 use exactly `BOOTSTRAP_ADMIN_EMAIL` and one of your invite codes. That account becomes the admin
 (once, ever). Then share an invite code privately with each person you invite.
 
